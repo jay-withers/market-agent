@@ -1,10 +1,9 @@
 TF_DIR := terraform
-EXAMPLE_DIR := $(TF_DIR)/examples/basic
 ENV ?= dev
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install lint init fmt validate plan test
+.PHONY: help install lint init fmt validate plan
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -17,18 +16,18 @@ install: ## Install pre-commit hooks (run once after cloning)
 lint: ## Run all pre-commit hooks against every file
 	pre-commit run --all-files
 
-init: ## terraform init
-	terraform -chdir=$(TF_DIR) init
+# -backend=false: the azurerm backend is configured partially (see
+# terraform/backends/), so a plain init would prompt for the missing values.
+# Anything that doesn't touch state can skip the backend entirely.
+init: ## terraform init, without configuring the state backend
+	terraform -chdir=$(TF_DIR) init -backend=false
 
 fmt: ## terraform fmt -recursive
 	terraform -chdir=$(TF_DIR) fmt -recursive
 
-validate: init ## terraform init + validate
+validate: init ## terraform init + validate (no Azure credentials needed)
 	terraform -chdir=$(TF_DIR) validate
 
-plan: ## terraform init + plan against the basic example (set ENV=dev|stg|prd, default dev)
-	terraform -chdir=$(EXAMPLE_DIR) init
-	terraform -chdir=$(EXAMPLE_DIR) plan -var-file=../../environments/$(ENV).tfvars
-
-test: init ## terraform test (mocked azurerm provider — no Azure auth)
-	terraform -chdir=$(TF_DIR) test
+plan: ## terraform init + plan (set ENV=dev|stg|prd, default dev)
+	terraform -chdir=$(TF_DIR) init -reconfigure -backend-config=backends/$(ENV).hcl
+	terraform -chdir=$(TF_DIR) plan -var-file=environments/$(ENV).tfvars

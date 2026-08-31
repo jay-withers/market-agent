@@ -1,30 +1,34 @@
-# outputs.tf — values exported by this module.
-
-output "environment" {
-  description = "The deployment environment passed to the module."
-  value       = var.environment
-}
-
-output "resource_group_id" {
-  description = "ID of the created resource group."
-  value       = azurerm_resource_group.this.id
-}
-
 output "resource_group_name" {
   description = "Name of the created resource group."
   value       = azurerm_resource_group.this.name
 }
 
-output "resource_group_location" {
-  description = "Location of the created resource group."
-  value       = azurerm_resource_group.this.location
+output "key_vault_name" {
+  description = "Key Vault name, for populating secret values with `az keyvault secret set`."
+  value       = azurerm_key_vault.this.name
 }
 
-# Add further module outputs below.
-#
-# Example:
-#
-# output "id" {
-#   description = "Identifier of the created resource."
-#   value       = resource_type.this.id
-# }
+output "identity_name" {
+  description = "Name of the workload's managed identity — the principal named in the `CREATE USER ... FROM EXTERNAL PROVIDER` step that grants it database access."
+  value       = azurerm_user_assigned_identity.this.name
+}
+
+output "sql_server_fqdn" {
+  description = "Hostname of the Azure SQL server."
+  value       = azurerm_mssql_server.this.fully_qualified_domain_name
+}
+
+output "sql_database_name" {
+  description = "Name of the Azure SQL database."
+  value       = azurerm_mssql_database.this.name
+}
+
+output "api_fqdn" {
+  description = "Public hostname of the API container app."
+  value       = azurerm_container_app.api.ingress[0].fqdn
+}
+
+output "dashboard_fqdn" {
+  description = "Public hostname of the dashboard container app."
+  value       = azurerm_container_app.dashboard.ingress[0].fqdn
+}

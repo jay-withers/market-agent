@@ -29,9 +29,10 @@ jobs:
               - '.terraform-version'
               - '.github/workflows/ci-terraform.yml'
 
-  # Runs the module's terraform tests. The azurerm provider is mocked, so this
-  # needs no Azure credentials and is green on a fresh clone of the template.
-  test:
+  # Validates the configuration. Initialises without the state backend, so this
+  # needs no Azure credentials and stays green before Azure auth is wired up —
+  # unlike the plan job below, this always runs on a Terraform change.
+  validate:
     needs: changes
     if: needs.changes.outputs.terraform == 'true'
     runs-on: ubuntu-24.04
@@ -52,18 +53,22 @@ jobs:
           terraform_version: ${{ steps.tfversion.outputs.version }}
           terraform_wrapper: false
 
+      # The azurerm backend is configured partially (terraform/backends/), so a
+      # plain init would prompt for the missing values and fail under -input=false.
       - name: Terraform init
-        run: terraform init -input=false
+        run: terraform init -input=false -backend=false
 
-      - name: Terraform test
-        run: terraform test -no-color
+      - name: Terraform validate
+        run: terraform validate -no-color
 
-  # Plans the basic example against Azure using GitHub OIDC, once per
-  # environment. Skipped until the AZURE_CLIENT_ID repository variable is set
-  # (see README), so a fresh template does not fail this check before Azure
-  # auth is configured. All three environments currently share one Azure
-  # subscription (ARM_SUBSCRIPTION_ID) — split per-environment credentials
-  # here if that changes.
+  # Plans against Azure using GitHub OIDC, once per environment. Skipped until
+  # the AZURE_CLIENT_ID repository variable is set (see README), so the check
+  # does not fail before Azure auth is configured. All three environments
+  # currently share one Azure subscription (ARM_SUBSCRIPTION_ID) — split
+  # per-environment credentials here if that changes.
+  #
+  # Note stg and prd are planned but deliberately never applied — see
+  # "Environments" in the README.
   plan:
     needs: changes
     if: needs.changes.outputs.terraform == 'true' && vars.AZURE_CLIENT_ID != ''
@@ -77,7 +82,7 @@ jobs:
       contents: read
     defaults:
       run:
-        working-directory: terraform/examples/basic
+        working-directory: terraform
     env:
       ARM_USE_OIDC: "true"
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
@@ -98,30 +103,27 @@ jobs:
           terraform_wrapper: false
 
       - name: Terraform init
-        run: terraform init -input=false
-
-      - name: Terraform validate
-        run: terraform validate -no-color
+        run: terraform init -input=false -backend-config=backends/${{ matrix.environment }}.hcl
 
       - name: Terraform plan
-        run: terraform plan -input=false -no-color -var-file=../../environments/${{ matrix.environment }}.tfvars
+        run: terraform plan -input=false -no-color -var-file=environments/${{ matrix.environment }}.tfvars
 
   # Single required status check for branch protection. Always runs, and fails
-  # only if test or plan actually failed — skipped (no Terraform changes, or
+  # only if validate or plan actually failed — skipped (no Terraform changes, or
   # Azure auth not configured) counts as success, so non-Terraform PRs are not
   # blocked. Mark this check ("ci-terraform") required in the ruleset.
   ci-terraform:
-    needs: [test, plan]
+    needs: [validate, plan]
     if: always()
     runs-on: ubuntu-24.04
     steps:
       - name: Verify Terraform jobs
         env:
-          TEST_RESULT: ${{ needs.test.result }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
           PLAN_RESULT: ${{ needs.plan.result }}
         run: |
-          echo "test=$TEST_RESULT plan=$PLAN_RESULT"
-          if [ "$TEST_RESULT" = "failure" ] || [ "$PLAN_RESULT" = "failure" ]; then
+          echo "validate=$VALIDATE_RESULT plan=$PLAN_RESULT"
+          if [ "$VALIDATE_RESULT" = "failure" ] || [ "$PLAN_RESULT" = "failure" ]; then
             echo "::error::A Terraform job failed."
             exit 1
           fi

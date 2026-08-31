@@ -4,11 +4,11 @@
 # region-specific checks) are evaluated against what each environment
 # actually deploys, not just unresolved variables. Unlike checkov, tflint
 # doesn't recurse into subdirectories on its own, so every directory
-# containing .tf files (the module itself, terraform/examples/basic/, and
-# any future example) is linted individually with the same shared config.
-# Both directories and environments are discovered dynamically — add a new
-# example dir or drop a new tfvars file in terraform/environments/ and it's
-# covered automatically, no config changes needed here.
+# containing .tf files is linted individually with the same shared config —
+# today that's just the root configuration, but a future nested module or
+# example is picked up without changing anything here. Both directories and
+# environments are discovered dynamically: drop a new tfvars file in
+# terraform/environments/ and it's covered automatically.
 set -euo pipefail
 
 repo_root=$(git rev-parse --show-toplevel)
