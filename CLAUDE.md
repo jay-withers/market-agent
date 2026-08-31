@@ -106,13 +106,21 @@ favour of a single provider; revisit if the bill becomes annoying.
 
 ### Naming
 
-Names use the naming module's **`.name`, not `.name_unique`** — deterministic,
-with no random suffix, at the user's request. Verified names at
-`project_name = "investagent"`, `environment = "dev"`: `rg-investagent-dev`,
-`kv-investagent-dev` (18/24), `sql-investagent-dev`, `sqldb-investagent-dev`,
-`cae-investagent-dev`, `log-investagent-dev`, `appi-investagent-dev`,
-`uai-investagent-dev`, plus `ca-dev-api`, `ca-dev-dashboard`, `caj-dev-agent`,
-`caj-dev-daily-summary` (21/32).
+Two requirements from the user drive this: names use the naming module's
+**`.name`, not `.name_unique`** (deterministic, no random suffix), and
+**every resource name includes `project_name`**. Verified names at
+`project_name = "investagent"`, `environment = "dev"`:
+
+```
+rg-investagent-dev          cae-investagent-dev     ca-investagent-dev-api        (22/32)
+kv-investagent-dev  (18/24) log-investagent-dev     ca-investagent-dev-dashboard  (28/32)
+sql-investagent-dev         appi-investagent-dev    caj-investagent-dev-agent     (25/32)
+sqldb-investagent-dev       uai-investagent-dev     caj-investagent-dev-summary   (27/32)
+```
+
+The daily summary job is named `summary`, not `daily-summary`: the latter would be
+33 characters against the 32 container app jobs allow, and the naming module
+truncates silently. Its container is still `daily-summary`.
 
 Two consequences of dropping the suffix:
 
@@ -123,11 +131,13 @@ Two consequences of dropping the suffix:
   window can hold. `purge_soft_delete_on_destroy = true` in the provider
   `features` block is what keeps that from blocking recreation.
 
-`project_name` is length-validated to 17 characters: `kv-` + name + `-dev` must
-fit Key Vault's 24. The four container workloads use their own naming module
-instances **without** `project_name` (`suffix = [var.environment, "<workload>"]`)
-because container apps and jobs cap at 32. Check with `terraform console` before
-changing any of it — note `console` needs a real backend init, unlike `validate`.
+`project_name` is length-validated to 15 characters. The binding constraint is
+`ca-<project>-<env>-dashboard` against the 32 characters container apps allow —
+not, as you might expect, Key Vault's 24. The four container workloads have their
+own naming module instances only so each carries its workload name
+(`suffix = [var.project_name, var.environment, "<workload>"]`). Check with
+`terraform console` before changing any of it — note `console` needs a real
+backend init, unlike `validate`.
 
 Also: `module.naming.sql_database` doesn't exist; the token is `mssql_database`.
 The module doesn't lowercase its dashed names, and `mssql_server`,

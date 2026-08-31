@@ -1,11 +1,11 @@
 variable "project_name" {
-  description = "Project name used as a naming prefix. Lowercase only (several resource types reject uppercase), and no longer than 17 characters: beyond that the Key Vault name — 24 characters, the tightest limit here — gets truncated. Resource names carry no random suffix, so changing this is also the way to resolve a clash on the globally unique Key Vault or SQL server names."
+  description = "Project name included in every resource name. Lowercase only (several resource types reject uppercase), and no longer than 15 characters: beyond that `ca-<project>-<env>-dashboard` exceeds the 32 characters container apps allow and gets silently truncated. Resource names carry no random suffix, so changing this is also the way to resolve a clash on the globally unique Key Vault or SQL server names."
   type        = string
   default     = "investagent"
 
   validation {
-    condition     = can(regex("^[a-z][a-z0-9]{1,16}$", var.project_name))
-    error_message = "project_name must be 2-17 lowercase alphanumeric characters, starting with a letter."
+    condition     = can(regex("^[a-z][a-z0-9]{1,14}$", var.project_name))
+    error_message = "project_name must be 2-15 lowercase alphanumeric characters, starting with a letter."
   }
 }
 

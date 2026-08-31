@@ -1,21 +1,23 @@
 # Both run a public quickstart image for now, so both are publicly reachable
 # unauthenticated placeholder pages.
 #
-# Separate naming instances so each app gets its own workload name; project_name
-# is left out because container apps cap at 32 characters.
+# Separate naming instances so each app carries its own workload name.
+#
+# ca-investagent-dev-dashboard is 28 of the 32 characters container apps allow,
+# which makes it the binding constraint on var.project_name's length.
 
 module "naming_api" {
   # checkov:skip=CKV_TF_1: Terraform Registry module pinned by semver.
   source  = "Azure/naming/azurerm"
   version = "~> 0.4"
-  suffix  = [var.environment, "api"]
+  suffix  = [var.project_name, var.environment, "api"]
 }
 
 module "naming_dashboard" {
   # checkov:skip=CKV_TF_1: Terraform Registry module pinned by semver.
   source  = "Azure/naming/azurerm"
   version = "~> 0.4"
-  suffix  = [var.environment, "dashboard"]
+  suffix  = [var.project_name, var.environment, "dashboard"]
 }
 
 # No location argument: container apps inherit the environment's region. Jobs,
