@@ -1,0 +1,20 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["github>jay-withers/template-renovate"],
+  "autoApprove": true,
+  "regexManagers": [
+    {
+      "fileMatch": ["(^|/)\\.terraform-version$"],
+      "matchStrings": ["(?<currentValue>\\d+\\.\\d+\\.\\d+)"],
+      "depNameTemplate": "hashicorp/terraform",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "fileMatch": ["(^|/)\\.tflint\\.hcl$"],
+      "matchStrings": [
+        "plugin \"azurerm\" \\{[^}]*version\\s*=\\s*\"(?<currentValue>[^\"]+)\"[^}]*source\\s*=\\s*\"github\\.com/(?<depName>[^\"]+)\""
+      ],
+      "datasourceTemplate": "github-releases"
+    }
+  ]
+}

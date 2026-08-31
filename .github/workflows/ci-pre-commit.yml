@@ -1,0 +1,14 @@
+name: ci-pre-commit
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  pre-commit:
+    uses: jay-withers/workflows/.github/workflows/pre-commit.yml@52eb17e90b984aa4d0cc540a83faa102528f2593 # v0.2.7
+    with:
+      terraform: true

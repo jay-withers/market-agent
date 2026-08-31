@@ -1,0 +1,103 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # frozen: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+
+      - id: check-case-conflict
+
+      - id: check-merge-conflict
+
+      - id: check-symlinks
+
+      - id: check-yaml
+        args: ["--allow-multiple-documents"]
+
+      - id: end-of-file-fixer
+
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+
+      - id: check-shebang-scripts-are-executable
+
+      - id: no-commit-to-branch
+        args: [--branch, main]
+
+      - id: mixed-line-ending
+        args: [--fix=lf]
+
+      - id: forbid-new-submodules
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: 2ca41cc1372d1e939a6a879f18cdc19fc1cac1ce # frozen: v8.30.0
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: 914e7df21a07ef503a81201c76d2b11c789d3fca # frozen: v1.7.12
+    hooks:
+      - id: actionlint
+
+  - repo: https://github.com/alessandrojcm/commitlint-pre-commit-hook
+    rev: 1d7031e6d0bbfce76e5a625b0cec24fb22e517a0 # frozen: v9.25.0
+    hooks:
+      - id: commitlint
+        stages: [commit-msg]
+        additional_dependencies: ["@commitlint/config-conventional"]
+        args:
+          - --config
+          - commitlint.config.js
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: 745eface02aef23e168a8afb6b5737818efbea95 # frozen: v0.11.0.1
+    hooks:
+      - id: shellcheck
+        args: [--external-sources]
+
+  - repo: local
+    hooks:
+      - id: check-tf-standards
+        name: Check Terraform file layout standards
+        description: "Fails if a locals/variable/output/data block isn't in a matching locals*.tf/variables*.tf/outputs*.tf/data*.tf file, or a terraform{}/provider{} block isn't in versions.tf."
+        entry: scripts/check-tf-standards.sh
+        language: script
+        pass_filenames: false
+        files: \.tf$
+
+      # Replace TFLint/Checkov's upstream hooks entirely rather than adding a
+      # fixed entry per environment: these discover terraform/environments/*.tfvars
+      # at runtime, so a new environment's tfvars is covered automatically —
+      # no pre-commit config change needed — and rules that depend on concrete
+      # variable values (naming, tags, region-specific checks) are evaluated
+      # against what each environment actually deploys, not unresolved variables.
+      - id: tflint-per-env
+        name: TFLint (per environment)
+        description: Runs tflint against terraform/ once per terraform/environments/*.tfvars file.
+        entry: scripts/tflint-per-env.sh
+        language: script
+        pass_filenames: false
+        files: \.(tf|tfvars)$
+        exclude: \.terraform/.*$
+
+      - id: checkov-per-env
+        name: Checkov (per environment)
+        description: Runs checkov against terraform/ once per terraform/environments/*.tfvars file.
+        entry: scripts/checkov-per-env.sh
+        language: script
+        pass_filenames: false
+        files: \.(tf|tfvars)$
+        exclude: \.terraform/.*$
+
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: 05fd71a57a467ccf5598f7e836d3af4cf9225abb # frozen: v1.108.0
+    hooks:
+      - id: terraform_fmt
+
+      - id: terraform_validate
+
+      - id: terraform_docs
+        args:
+          - --hook-config=--path-to-file=README.md
+          - --hook-config=--add-to-existing-file=true
+          - --hook-config=--create-file-if-not-exist=true

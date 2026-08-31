@@ -1,0 +1,13 @@
+name: cd-tag
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  # Bump the semver tag from the conventional commits since the last release
+  # (and create a matching GitHub release) via the shared release template.
+  tag:
+    permissions:
+      contents: write
+    uses: jay-withers/workflows/.github/workflows/release.yml@52eb17e90b984aa4d0cc540a83faa102528f2593 # v0.2.7
