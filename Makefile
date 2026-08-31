@@ -3,7 +3,7 @@ ENV ?= dev
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install lint init fmt validate plan
+.PHONY: help install lint init fmt validate plan apply
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -31,3 +31,9 @@ validate: init ## terraform init + validate (no Azure credentials needed)
 plan: ## terraform init + plan (set ENV=dev|stg|prd, default dev)
 	terraform -chdir=$(TF_DIR) init -reconfigure -backend-config=backends/$(ENV).hcl
 	terraform -chdir=$(TF_DIR) plan -var-file=environments/$(ENV).tfvars
+
+# No -auto-approve: this creates resources that bill, so the plan is worth
+# reading. Only dev is expected to be applied — see "Environments" in the README.
+apply: ## terraform init + apply (set ENV=dev|stg|prd, default dev)
+	terraform -chdir=$(TF_DIR) init -reconfigure -backend-config=backends/$(ENV).hcl
+	terraform -chdir=$(TF_DIR) apply -var-file=environments/$(ENV).tfvars

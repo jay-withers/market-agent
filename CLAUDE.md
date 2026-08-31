@@ -175,6 +175,7 @@ make lint              # run all pre-commit hooks against every file
 make fmt               # terraform fmt -recursive
 make validate          # terraform init + validate (no Azure credentials)
 make plan              # terraform init + plan (set ENV=dev|stg|prd, default dev)
+make apply             # terraform init + apply (set ENV=dev|stg|prd, default dev)
 ```
 
 There is no `make test`: the tests were removed at the user's request.

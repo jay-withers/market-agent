@@ -71,10 +71,12 @@ make lint              # run all pre-commit hooks against every file
 make fmt               # terraform fmt -recursive
 make validate          # terraform init + validate (no Azure credentials needed)
 make plan              # terraform init + plan (set ENV=dev|stg|prd, default dev)
+make apply             # terraform init + apply (set ENV=dev|stg|prd, default dev)
 ```
 
 `validate` initialises with `-backend=false`, so it works with no Azure
-credentials and no state. `plan` needs both — see below.
+credentials and no state. `plan` and `apply` need both — see below. `apply` does
+not pass `-auto-approve`: it creates resources that bill.
 
 ## Terraform state
 
