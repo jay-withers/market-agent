@@ -104,19 +104,30 @@ that would make this genuinely free, but `azurerm` exposes no `useFreeLimit`
 property in any version — it needs `azapi_resource`. Considered and declined in
 favour of a single provider; revisit if the bill becomes annoying.
 
-### Naming length trap
+### Naming
 
-`Azure/naming/azurerm` truncates names from the right with **no room reserved for
-its own 4-character random suffix**, so a name at the limit silently loses its
-uniqueness. Verified headroom at `project_name = "investagent"` and a 3-letter
-environment: Key Vault has **1 character spare** (23 of 24), and
-`caj-dev-daily-summary-XXXX` has 6 (26 of 32). Everything else has 11+.
+Names use the naming module's **`.name`, not `.name_unique`** — deterministic,
+with no random suffix, at the user's request. Verified names at
+`project_name = "investagent"`, `environment = "dev"`: `rg-investagent-dev`,
+`kv-investagent-dev` (18/24), `sql-investagent-dev`, `sqldb-investagent-dev`,
+`cae-investagent-dev`, `log-investagent-dev`, `appi-investagent-dev`,
+`uai-investagent-dev`, plus `ca-dev-api`, `ca-dev-dashboard`, `caj-dev-agent`,
+`caj-dev-daily-summary` (21/32).
 
-That's why `project_name` is length-validated to 12 characters, and why the four
-container workloads use their own naming module instances **without**
-`project_name` (`suffix = [var.environment, "<workload>"]`). Check with
-`terraform console` before changing any of it — note `console` needs a real
-backend init, unlike `validate`.
+Two consequences of dropping the suffix:
+
+- **Key Vault and SQL server names are globally unique across Azure**, so an apply
+  can fail on a name someone else already holds. The fix is to change
+  `project_name`, not to reintroduce `.name_unique`.
+- A destroyed-and-recreated Key Vault reuses its name, which the soft-delete
+  window can hold. `purge_soft_delete_on_destroy = true` in the provider
+  `features` block is what keeps that from blocking recreation.
+
+`project_name` is length-validated to 17 characters: `kv-` + name + `-dev` must
+fit Key Vault's 24. The four container workloads use their own naming module
+instances **without** `project_name` (`suffix = [var.environment, "<workload>"]`)
+because container apps and jobs cap at 32. Check with `terraform console` before
+changing any of it — note `console` needs a real backend init, unlike `validate`.
 
 Also: `module.naming.sql_database` doesn't exist; the token is `mssql_database`.
 The module doesn't lowercase its dashed names, and `mssql_server`,

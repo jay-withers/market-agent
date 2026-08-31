@@ -18,7 +18,7 @@ module "naming_daily_summary" {
 
 # Market data and news in, analysis and risk rules applied, decisions recorded.
 resource "azurerm_container_app_job" "agent" {
-  name                         = module.naming_agent.container_app_job.name_unique
+  name                         = module.naming_agent.container_app_job.name
   container_app_environment_id = azurerm_container_app_environment.this.id
   resource_group_name          = azurerm_resource_group.this.name
   location                     = azurerm_resource_group.this.location
@@ -59,7 +59,7 @@ resource "azurerm_container_app_job" "agent" {
 
 # Performance, the day's trades, benchmark comparison, email.
 resource "azurerm_container_app_job" "daily_summary" {
-  name                         = module.naming_daily_summary.container_app_job.name_unique
+  name                         = module.naming_daily_summary.container_app_job.name
   container_app_environment_id = azurerm_container_app_environment.this.id
   resource_group_name          = azurerm_resource_group.this.name
   location                     = azurerm_resource_group.this.location

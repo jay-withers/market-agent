@@ -11,7 +11,7 @@ resource "azurerm_key_vault" "this" {
   #   private endpoint (standing monthly cost, and there's no VNet — the Container Apps
   #   environment is Consumption-only) or a static egress IP the apps don't have.
   # checkov:skip=CKV2_AZURE_32: no private endpoint, as above.
-  name                = module.naming.key_vault.name_unique
+  name                = module.naming.key_vault.name
   resource_group_name = azurerm_resource_group.this.name
   location            = azurerm_resource_group.this.location
   tenant_id           = data.azurerm_client_config.current.tenant_id

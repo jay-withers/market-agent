@@ -1,8 +1,8 @@
 # Both run a public quickstart image for now, so both are publicly reachable
 # unauthenticated placeholder pages.
 #
-# Separate naming instances without project_name: container apps cap at 32
-# characters and the naming module truncates from the right, suffix included.
+# Separate naming instances so each app gets its own workload name; project_name
+# is left out because container apps cap at 32 characters.
 
 module "naming_api" {
   # checkov:skip=CKV_TF_1: Terraform Registry module pinned by semver.
@@ -21,7 +21,7 @@ module "naming_dashboard" {
 # No location argument: container apps inherit the environment's region. Jobs,
 # confusingly, do require it.
 resource "azurerm_container_app" "api" {
-  name                         = module.naming_api.container_app.name_unique
+  name                         = module.naming_api.container_app.name
   container_app_environment_id = azurerm_container_app_environment.this.id
   resource_group_name          = azurerm_resource_group.this.name
   revision_mode                = "Single"
@@ -66,7 +66,7 @@ resource "azurerm_container_app" "api" {
 }
 
 resource "azurerm_container_app" "dashboard" {
-  name                         = module.naming_dashboard.container_app.name_unique
+  name                         = module.naming_dashboard.container_app.name
   container_app_environment_id = azurerm_container_app_environment.this.id
   resource_group_name          = azurerm_resource_group.this.name
   revision_mode                = "Single"

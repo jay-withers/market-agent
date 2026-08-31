@@ -16,7 +16,7 @@ resource "azurerm_mssql_server" "this" {
   #   is Consumption-only. Access is controlled by Entra-only auth plus the rule below.
   # checkov:skip=CKV2_AZURE_45: no private endpoint, as above.
   # checkov:skip=CKV2_AZURE_2: no Defender for SQL — a per-server monthly charge.
-  name                = module.naming.mssql_server.name_unique
+  name                = module.naming.mssql_server.name
   resource_group_name = azurerm_resource_group.this.name
   location            = azurerm_resource_group.this.location
   version             = "12.0"
@@ -46,7 +46,7 @@ resource "azurerm_mssql_database" "this" {
   #   overhead. Auditability comes from the ai_decisions table, not cryptographic proof.
   # checkov:skip=CKV_AZURE_229: zone redundancy raises the per-second compute rate to buy
   #   high availability this experiment doesn't need.
-  name      = module.naming.mssql_database.name_unique
+  name      = module.naming.mssql_database.name
   server_id = azurerm_mssql_server.this.id
 
   # min_capacity and auto_pause_delay_in_minutes are only valid on a GP_S_/HS_S_

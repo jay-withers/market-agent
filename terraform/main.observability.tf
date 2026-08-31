@@ -1,5 +1,5 @@
 resource "azurerm_log_analytics_workspace" "this" {
-  name                = module.naming.log_analytics_workspace.name_unique
+  name                = module.naming.log_analytics_workspace.name
   resource_group_name = azurerm_resource_group.this.name
   location            = azurerm_resource_group.this.location
   sku                 = "PerGB2018"
@@ -17,7 +17,7 @@ resource "azurerm_log_analytics_workspace" "this" {
 }
 
 resource "azurerm_application_insights" "this" {
-  name                = module.naming.application_insights.name_unique
+  name                = module.naming.application_insights.name
   resource_group_name = azurerm_resource_group.this.name
   location            = azurerm_resource_group.this.location
   application_type    = "web"
