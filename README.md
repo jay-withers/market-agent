@@ -25,19 +25,20 @@ is no application code yet — see [Out of scope](#out-of-scope-right-now).
 | Container app `dashboard` | React dashboard (placeholder image), scales to zero |
 | Container app job `agent` | Scheduled: news → analysis → risk engine → simulated trade |
 | Container app job `daily-summary` | Scheduled: performance, benchmarks, email |
-| Azure SQL server + database | Serverless, auto-pausing, Entra-only authentication |
+| PostgreSQL Flexible Server + database | Burstable B1ms, Entra-only authentication. The one resource that bills while idle |
 
-Two deliberate departures from the original design, both driven by the
-requirement that nothing bills meaningfully while idle:
+Two departures from the original design:
 
-- **No Azure Container Registry.** ACR Basic is a flat monthly charge with no
-  consumption tier. Images will live in ghcr.io instead. The placeholder images
-  are public, so nothing needs a registry yet.
-- **Azure SQL, not PostgreSQL.** PostgreSQL Flexible Server bills per hour for as
-  long as it exists, with no serverless or auto-pause tier. Azure SQL serverless
-  pauses when idle and bills compute per vCore-second. The consequence for
-  application code is an ODBC driver (`pyodbc`/`aioodbc`) rather than `psycopg`;
-  the relational schema is unaffected.
+- **No Azure Container Registry**, driven by the requirement that nothing bills
+  meaningfully while idle. ACR Basic is a flat monthly charge with no consumption
+  tier. Images will live in ghcr.io instead. The placeholder images are public, so
+  nothing needs a registry yet.
+- **PostgreSQL, not Azure SQL** — and this one was forced rather than chosen.
+  Azure SQL serverless auto-pauses to near zero and would have been the cheaper
+  design, but this subscription cannot provision Azure SQL in any region policy
+  allows. See [Cost model](#cost-model) below. The consequence for application code
+  is `psycopg` rather than an ODBC driver (`pyodbc`/`aioodbc`); the relational
+  schema is unaffected.
 
 ## Out of scope right now
 
@@ -105,7 +106,8 @@ for you).
 
 ## Cost model
 
-The whole configuration is built so that an idle month costs almost nothing:
+Everything except the database costs nothing while idle. The database does not,
+and that is not a configuration mistake — see below.
 
 | | Idle cost |
 | --- | --- |
@@ -114,31 +116,64 @@ The whole configuration is built so that an idle month costs almost nothing:
 | Key Vault | Effectively £0 — priced per operation |
 | Log Analytics / App Insights | £0 up to the 5 GB/month free grant, which `daily_quota_gb = 0.15` keeps ingestion inside |
 | Managed identity, resource group | Free |
-| Azure SQL | Storage only while paused (a couple of GB); compute per vCore-second while awake |
+| PostgreSQL Flexible Server | **~£13/month, always** — ~£9.71 B1ms compute plus ~£3 storage |
 
-Azure SQL is therefore the only meaningful line. Two things to know about it:
+### Why the database bills while idle
 
-- **Each wake bills a minimum idle window.** The database pauses only after
-  `auto_pause_delay_in_minutes` (15, Azure's minimum) with no sessions, so a job
-  run costs its own duration plus 15 minutes. At roughly 20 minutes online per
-  run, two runs a day is about 36,000 vCore-seconds a month — on the order of
-  £4–5.
-- **A connection pool defeats auto-pause entirely, and that is expensive.** Any
-  live replica holding an idle connection keeps sessions open, so the database
-  never pauses and bills its 0.5 vCore floor around the clock: roughly 1.3 million
-  vCore-seconds a month, on the order of **£150**. That is not a rounding error on
-  the £4–5 above — it is the single largest financial risk in this repository, and
-  it will be caused by application code, not by Terraform. When the real API
-  arrives, give it `pool_pre_ping` and a short `pool_recycle`, and use `NullPool`
-  in the jobs. Consider a budget alert on the subscription as a backstop.
+PostgreSQL Flexible Server has **no serverless or auto-pause tier**. It bills its
+SKU per hour for as long as it exists. That is a property of the service, not
+something the configuration can tune away — the only lever is stopping the server,
+and a stopped server auto-restarts after seven days.
 
-(Both figures are list-price estimates at £0.40–0.45 per vCore-hour; check the
-Azure pricing calculator for your region before relying on them.)
+Azure SQL serverless *does* auto-pause, and would have cost roughly £0. It was the
+original design. It is not used because **this subscription cannot provision Azure
+SQL in any region it is allowed to deploy to**:
 
-There is also an Azure SQL free offer (100,000 vCore-seconds and 32 GB a month,
-permanently) that would make this genuinely free, but `azurerm` doesn't expose
-the `useFreeLimit` property in any version — it would need an `azapi_resource`.
-Worth revisiting if the bill becomes irritating.
+- The Azure Policy assignment `allowed-locations-dev` has effect **Deny** and
+  permits only `westeurope` and `northeurope`.
+- The subscription is separately restricted from provisioning Azure SQL in both.
+
+That restriction is regional, not per-SKU: in both regions all 208 Azure SQL
+service objectives across all ten editions report `Visible` rather than
+`Available`, `Free` and `Basic` included. No smaller SKU gets around it.
+
+PostgreSQL is restricted in `westeurope` but open in `northeurope`, which is why
+`var.location` defaults there and why PostgreSQL is the engine.
+
+**To get back to a near-free database**, amend `allowed-locations-dev` to admit a
+SQL-capable region (`francecentral`, `swedencentral`, `germanywestcentral`,
+`switzerlandnorth`, `italynorth` and `spaincentral` are all verified available),
+then switch back to Azure SQL — ideally on its free offer, which grants 100,000
+vCore-seconds and 32 GB monthly, permanently. That needs `azapi_resource`, since
+`azurerm` exposes no `useFreeLimit`.
+
+One thing that did get simpler: the Azure SQL design carried a **£150/month**
+trap, where a long-lived connection pool prevented auto-pause and left the
+database billing around the clock. With an always-on server that risk does not
+exist. Connection pooling is now free to use.
+
+### Checking region availability
+
+The provider's advertised location list is not subscription-aware. The
+capabilities APIs are — query those rather than guessing:
+
+```bash
+SUB=$(az account show --query id -o tsv)
+
+# PostgreSQL: want restricted "Disabled"
+az rest --method get \
+  --url "https://management.azure.com/subscriptions/$SUB/providers/Microsoft.DBforPostgreSQL/locations/<region>/capabilities?api-version=2023-06-01-preview" \
+  --query "value[0].{restricted:restricted,reason:reason}"
+
+# Azure SQL: want status "Available", not "Visible"
+az rest --method get \
+  --url "https://management.azure.com/subscriptions/$SUB/providers/Microsoft.Sql/locations/<region>/capabilities?api-version=2023-08-01" \
+  --query "{status:status,reason:reason}"
+```
+
+Note also that `Microsoft.App` must be registered on the subscription
+(`az provider register --namespace Microsoft.App`), or the Container Apps
+environment fails with `MissingSubscriptionRegistration`.
 
 ## Environments
 
@@ -152,9 +187,9 @@ make plan ENV=prd
 ```
 
 All three are planned in CI, but **only `dev` is actually applied.** Unlike
-scale-to-zero compute, a SQL database costs something per environment that exists,
-and "production" here still means paper trading — so a second and third copy buys
-nothing yet. The plumbing is kept so that changing this later is a decision, not a
+scale-to-zero compute, each PostgreSQL server that exists costs ~£13/month whether
+used or not, and "production" here still means paper trading — so a second and
+third copy would triple the only bill this project has, for nothing. The plumbing is kept so that changing this later is a decision, not a
 rebuild.
 
 These files are **committed, not gitignored** — see `.gitignore`. Don't put
@@ -179,43 +214,52 @@ The workload identity holds only `Key Vault Secrets User` — read, not write.
 
 ## Database access
 
-The SQL server has **no password**: `password_auth_enabled` is off and Entra is
-the only way in. The administrator defaults to whoever runs `terraform apply`.
+The PostgreSQL server has **no password**: `password_auth_enabled` is off and
+Entra is the only way in. The administrator defaults to whoever runs
+`terraform apply`.
 
 Applied from CI, that means the OIDC service principal becomes the administrator
-and no human can connect. Set `sql_admin_object_id` — ideally to an Entra group
-containing both you and anything else that needs access — before letting CI apply.
+and no human can connect. Set `postgres_admin_object_id` — ideally to an Entra
+group containing both you and anything else that needs access — before letting CI
+apply. Unlike Azure SQL, the provider also needs the principal's *type*, so set
+`postgres_admin_principal_type` to match (`Group` for a group,
+`ServicePrincipal` from CI).
 
-Granting the managed identity access needs T-SQL, which Terraform cannot execute,
-so it is a one-off manual step per database. Nothing needs it until there's an
+Granting the managed identity access needs SQL that Terraform cannot execute, so
+it is a one-off manual step per database. Nothing needs it until there's an
 application:
 
 ```bash
 cd terraform
-FQDN=$(terraform output -raw sql_server_fqdn)
-DB=$(terraform output -raw sql_database_name)
+FQDN=$(terraform output -raw postgres_fqdn)
+DB=$(terraform output -raw postgres_database_name)
 IDENTITY=$(terraform output -raw identity_name)
 SERVER=${FQDN%%.*}
+RG=$(terraform output -raw resource_group_name)
 MY_IP=$(curl -s ifconfig.me)
 
 # The "allow Azure services" rule doesn't cover your machine.
-az sql server firewall-rule create -g "$(terraform output -raw resource_group_name)" \
-  -s "$SERVER" -n devbox --start-ip-address "$MY_IP" --end-ip-address "$MY_IP"
+az postgres flexible-server firewall-rule create -g "$RG" -n "$SERVER" \
+  -r devbox --start-ip-address "$MY_IP" --end-ip-address "$MY_IP"
 
-# The first attempt may fail with error 40613 while the database resumes; retry.
-sqlcmd -S "$FQDN" -d "$DB" -G -Q "
-IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = N'$IDENTITY')
-  CREATE USER [$IDENTITY] FROM EXTERNAL PROVIDER;
-ALTER ROLE db_datareader ADD MEMBER [$IDENTITY];
-ALTER ROLE db_datawriter ADD MEMBER [$IDENTITY];
-ALTER ROLE db_ddladmin  ADD MEMBER [$IDENTITY];"
+# Entra login: the username is your UPN, the password is an access token.
+export PGPASSWORD=$(az account get-access-token \
+  --resource-type oss-rdbms --query accessToken -o tsv)
 
-az sql server firewall-rule delete -g "$(terraform output -raw resource_group_name)" \
-  -s "$SERVER" -n devbox
+psql "host=$FQDN dbname=$DB user=$(az ad signed-in-user show --query userPrincipalName -o tsv) sslmode=require" -c "
+SELECT pgaadauth_create_principal('$IDENTITY', false, false);
+GRANT CONNECT ON DATABASE \"$DB\" TO \"$IDENTITY\";
+GRANT USAGE, CREATE ON SCHEMA public TO \"$IDENTITY\";
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO \"$IDENTITY\";"
+
+az postgres flexible-server firewall-rule delete -g "$RG" -n "$SERVER" \
+  -r devbox --yes
 ```
 
-Application code then connects with `Authentication=ActiveDirectoryMsi` and the
-`AZURE_CLIENT_ID` already passed into every container.
+`pgaadauth_create_principal` comes from the `pgaadauth` extension, which Azure
+installs on every Flexible Server with Entra auth enabled. Application code then
+connects with `psycopg`, using the managed identity's access token as the
+password and the `AZURE_CLIENT_ID` already passed into every container.
 
 ## Scheduling
 
@@ -295,7 +339,7 @@ terraform/
   data.tf                       # azurerm_client_config
   locals.tf                     # default tags
   locals.container-apps.tf      # placeholder images, container sizing, shared env
-  locals.database.tf            # SQL administrator defaults
+  locals.database.tf            # PostgreSQL administrator defaults
   main.tf                       # naming module + resource group
   main.identity.tf              # user-assigned managed identity
   main.observability.tf         # log analytics + application insights
@@ -303,7 +347,7 @@ terraform/
   main.container-apps-env.tf    # container apps environment
   main.container-apps.tf        # api + dashboard container apps
   main.container-apps-jobs.tf   # agent + daily-summary scheduled jobs
-  main.database.tf              # azure sql server, database, firewall rule
+  main.database.tf              # postgresql flexible server, database, firewall rule
   variables.required.tf         # inputs with no default
   variables.optional.tf         # inputs with defaults
   outputs.tf

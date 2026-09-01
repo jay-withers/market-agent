@@ -61,8 +61,8 @@ Two repo-specific conventions on top of that, both requested explicitly:
 Resource group, user-assigned managed identity, Log Analytics workspace,
 Application Insights (workspace-based), Key Vault (RBAC), Container Apps
 environment (Consumption-only), two container apps (`api`, `dashboard`), two
-scheduled container app jobs (`agent`, `daily-summary`), and an Azure SQL server
-plus serverless database. Names come from `Azure/naming/azurerm`.
+scheduled container app jobs (`agent`, `daily-summary`), and a PostgreSQL
+Flexible Server plus database. Names come from `Azure/naming/azurerm`.
 
 ### The cost constraint drives most of the design
 
@@ -72,11 +72,13 @@ why:
 - **There is no Azure Container Registry.** ACR Basic is a flat monthly charge
   with no consumption tier; images will live in ghcr.io. Don't add ACR back
   without raising the cost trade-off.
-- **The database is Azure SQL, not PostgreSQL.** PostgreSQL Flexible Server bills
-  hourly for as long as it exists and has no auto-pause tier. The consequence for
-  future application code is an ODBC driver (`pyodbc`/`aioodbc`), not `psycopg`;
-  the relational schema from the project spec is unaffected. If a document still
-  says PostgreSQL, it predates this decision.
+- **The database is PostgreSQL Flexible Server, and that was forced, not chosen.**
+  Azure SQL serverless is the better fit on cost — it auto-pauses to near zero —
+  but this subscription cannot provision Azure SQL in any region the
+  `allowed-locations-dev` policy permits. See "The database and the region trap"
+  below before assuming this is a preference that can be revisited. The
+  consequence for future application code is `psycopg`, not `pyodbc`/`aioodbc`;
+  the relational schema from the project spec is unaffected.
 - **Container apps use `min_replicas = 0`** and the environment has no
   `workload_profile` block. Adding a workload profile introduces a standing
   per-hour charge.
@@ -84,38 +86,107 @@ why:
   `daily_data_cap_in_gb = 0.1` on Application Insights. Log ingestion is
   otherwise the largest cost risk: Azure Monitor's free grant is 5 GB/month, and
   the default App Insights cap is 100 GB/day.
-- **`max_size_gb` is pinned small** on the database — General Purpose storage
-  bills the provisioned maximum, not bytes used, and the default is 32 GB.
+- **`storage_mb` sits at Azure's 32 GB minimum** with `auto_grow_enabled = false`.
+  Storage bills the provisioned figure rather than bytes used, and Flexible Server
+  storage **can never be reduced, only grown** — auto-grow left on would let a
+  runaway table permanently raise the floor.
 
-Traps worth knowing before touching the database: `long_term_retention_policy` and
-`azurerm_mssql_server_dns_alias` both **silently prevent auto-pause**, turning it
-into a 24/7 bill with no obvious change in the plan. `min_capacity` and
-`auto_pause_delay_in_minutes` are only valid on a `GP_S_`/`HS_S_` SKU, and
-`license_type` is rejected outright on serverless.
+The honest summary of the cost position: the "nothing bills while idle" rule now
+holds for everything *except* the database, which bills roughly **£13/month**
+(B1ms compute ~£9.71 plus ~£3 storage, North Europe list) for as long as it
+exists. Flexible Server has no serverless or auto-pause tier — that is not a
+configuration gap, the SKU does not exist. Only stopping the server avoids it, and
+a stopped server auto-restarts after 7 days.
 
-Separately, the largest cost risk in this repo isn't Terraform at all: a
-long-lived connection pool in the future API keeps sessions open, so the database
-never pauses and bills its 0.5 vCore floor around the clock — order of £150/month
-against £4–5 for two scheduled runs a day. Use `NullPool` in the jobs and
-`pool_pre_ping` with a short `pool_recycle` in the API.
+One upside worth noting: the old Azure SQL design carried a £150/month
+connection-pool trap, where a long-lived pool prevented auto-pause. With an
+always-on server that trap is simply gone. Pool freely.
 
-There is an Azure SQL free offer (100,000 vCore-seconds + 32 GB monthly, forever)
-that would make this genuinely free, but `azurerm` exposes no `useFreeLimit`
-property in any version — it needs `azapi_resource`. Considered and declined in
-favour of a single provider; revisit if the bill becomes annoying.
+### The database and the region trap
+
+This is the most surprising thing in the repo, and it is worth reading before
+touching either the database or `var.location`.
+
+**Azure SQL cannot be provisioned by this subscription in any permitted region.**
+Two independent constraints intersect:
+
+- An enforced Azure Policy assignment, `allowed-locations-dev`, with effect
+  **Deny** and `listOfAllowedLocations = ["westeurope", "northeurope"]`. No
+  `notScopes`, no exemptions.
+- The subscription is separately restricted from provisioning Azure SQL in both of
+  those regions.
+
+The restriction is **regional, not per-SKU** — worth stating because the obvious
+first instinct is to try a smaller SKU. In westeurope and northeurope, all 208
+service objectives across all ten editions report `status: Visible` rather than
+`Available`, `Free` and `Basic` included. For contrast, francecentral returns 129
+`Available` + 9 `Default` + 29 `Visible`, which shows `Visible` is a meaningful
+per-SKU signal when a region is actually open. There is no SKU that rescues it.
+
+PostgreSQL Flexible Server is restricted in westeurope but **open in northeurope**,
+which is the only reason a database can be deployed at all. Hence
+`var.location = "northeurope"`.
+
+Probe before changing any of this; the provider's advertised location list is not
+subscription-aware, but the capabilities APIs are:
+
+```bash
+SUB=$(az account show --query id -o tsv)
+# Azure SQL: want status "Available", not "Visible"
+az rest --method get --url "https://management.azure.com/subscriptions/$SUB/providers/Microsoft.Sql/locations/<region>/capabilities?api-version=2023-08-01" --query "{status:status,reason:reason}"
+# PostgreSQL: want restricted "Disabled"
+az rest --method get --url "https://management.azure.com/subscriptions/$SUB/providers/Microsoft.DBforPostgreSQL/locations/<region>/capabilities?api-version=2023-06-01-preview" --query "value[0].{restricted:restricted,reason:reason}"
+```
+
+**If the £13/month becomes annoying**, the fix is not a Terraform change — it is
+amending `allowed-locations-dev` to admit a SQL-capable region (francecentral,
+swedencentral, germanywestcentral, switzerlandnorth, italynorth and spaincentral
+were all verified `Available`), then moving back to Azure SQL. That policy looks
+like it belongs to the `azure-landingzone` repo, so the change belongs there
+rather than by hand in the portal. Azure SQL's free offer (100,000 vCore-seconds
+and 32 GB monthly, permanently) would then make the database genuinely free, but
+it needs `azapi_resource` — `azurerm` exposes no `useFreeLimit` in any version,
+re-verify with `terraform providers schema -json` before assuming otherwise. A
+working `azapi` implementation of exactly that was written and then reverted when
+the policy came to light; it is in the git history of this branch if it is ever
+needed again.
+
+Also worth knowing: `Microsoft.App` needed explicit registration on this
+subscription (`az provider register --namespace Microsoft.App`). A fresh
+subscription fails the container apps environment with
+`MissingSubscriptionRegistration` until that is done.
+
+### PostgreSQL specifics
+
+- The Entra administrator is a **separate resource**
+  (`azurerm_postgresql_flexible_server_active_directory_administrator`), not an
+  inline block as it was on Azure SQL, and it requires the principal's *type*
+  explicitly. `data.azurerm_client_config` cannot report that, hence
+  `var.postgres_admin_principal_type` — a CI apply running as the OIDC service
+  principal must set `ServicePrincipal`.
+- `authentication { password_auth_enabled = false }` keeps the passwordless
+  posture: `administrator_login`/`administrator_password` stay unset and no
+  database password exists in source, state or Key Vault.
+- `geo_redundant_backup_enabled` **cannot be changed after creation**, so it is set
+  explicitly rather than left to the provider default.
+- `zone` is under `ignore_changes`: Azure assigns one when omitted and then reports
+  a value that differs from an empty config on the next plan.
+- The naming module has no flexible-server token; `postgresql_server` (slug `psql`)
+  and `postgresql_database` (slug `psqldb`) are the right ones. There is no
+  `postgresql_flexible_server`.
 
 ### Naming
 
 Two requirements from the user drive this: names use the naming module's
 **`.name`, not `.name_unique`** (deterministic, no random suffix), and
 **every resource name includes `project_name`**. Verified names at
-`project_name = "investagent"`, `environment = "dev"`:
+`project_name = "marketagent"`, `environment = "dev"`:
 
 ```
-rg-investagent-dev          cae-investagent-dev     ca-investagent-dev-api        (22/32)
-kv-investagent-dev  (18/24) log-investagent-dev     ca-investagent-dev-dashboard  (28/32)
-sql-investagent-dev         appi-investagent-dev    caj-investagent-dev-agent     (25/32)
-sqldb-investagent-dev       uai-investagent-dev     caj-investagent-dev-summary   (27/32)
+rg-marketagent-dev              cae-marketagent-dev   ca-marketagent-dev-api        (22/32)
+kv-marketagent-dev      (18/24) log-marketagent-dev   ca-marketagent-dev-dashboard  (28/32)
+psql-marketagent-dev            appi-marketagent-dev  caj-marketagent-dev-agent     (25/32)
+psqldb-marketagent-dev          uai-marketagent-dev   caj-marketagent-dev-summary   (27/32)
 ```
 
 The daily summary job is named `summary`, not `daily-summary`: the latter would be
@@ -124,12 +195,21 @@ truncates silently. Its container is still `daily-summary`.
 
 Two consequences of dropping the suffix:
 
-- **Key Vault and SQL server names are globally unique across Azure**, so an apply
-  can fail on a name someone else already holds. The fix is to change
-  `project_name`, not to reintroduce `.name_unique`.
-- A destroyed-and-recreated Key Vault reuses its name, which the soft-delete
-  window can hold. `purge_soft_delete_on_destroy = true` in the provider
-  `features` block is what keeps that from blocking recreation.
+- **Key Vault and PostgreSQL server names are globally unique across Azure**, so an
+  apply can fail on a name someone else already holds — or on one *you* previously
+  soft-deleted. The fix is to change `project_name`, not to reintroduce
+  `.name_unique`. (`.name_unique` was tried and reverted: its suffix comes from
+  `module.naming.random_string.main` in state, so it is stable rather than random,
+  and it reproduced the exact name of an already soft-deleted vault. It also moves
+  the binding length constraint to Key Vault's 24, where a 15-character
+  `project_name` silently truncates the suffix to one character and defeats the
+  point.)
+- A destroyed-and-recreated Key Vault reuses its name, which the soft-delete window
+  can hold. `purge_soft_delete_on_destroy = true` in the provider `features` block
+  is what keeps that from blocking recreation. Note that
+  `recover_soft_deleted_key_vaults` is left at its default of **true**: a name
+  matching a soft-deleted vault is *recovered* rather than created, and it comes
+  back in its original region — which fails if `var.location` has changed since.
 
 `project_name` is length-validated to 15 characters. The binding constraint is
 `ca-<project>-<env>-dashboard` against the 32 characters container apps allow —
@@ -139,20 +219,22 @@ own naming module instances only so each carries its workload name
 `terraform console` before changing any of it — note `console` needs a real
 backend init, unlike `validate`.
 
-Also: `module.naming.sql_database` doesn't exist; the token is `mssql_database`.
-The module doesn't lowercase its dashed names, and `mssql_server`,
-`container_app` and `container_app_job` all reject uppercase; job names also
-reject underscores.
+Also: there is no `postgresql_flexible_server` token — the flexible server uses
+`postgresql_server` (slug `psql`) and its database `postgresql_database` (slug
+`psqldb`). The module doesn't lowercase its dashed names, and
+`postgresql_server`, `container_app` and `container_app_job` all reject
+uppercase; job names also reject underscores.
 
 ### Security posture
 
-Passwordless throughout. The SQL server sets `azuread_authentication_only = true`,
-which satisfies the provider's requirement for an administrator and lets
-`administrator_login`/`administrator_login_password` stay unset — no SQL password
-exists in source, state or Key Vault. The administrator defaults to whoever runs
-`terraform apply` (`locals.database.tf`); applied from CI that's the OIDC service
-principal, so set `sql_admin_object_id` — an Entra group is tidiest — before
-letting CI apply.
+Passwordless throughout. The PostgreSQL server sets
+`authentication { active_directory_auth_enabled = true, password_auth_enabled = false }`,
+which lets `administrator_login`/`administrator_password` stay unset — no database
+password exists in source, state or Key Vault. The administrator defaults to
+whoever runs `terraform apply` (`locals.database.tf`); applied from CI that's the
+OIDC service principal, so set `postgres_admin_object_id` — an Entra group is
+tidiest — **and** `postgres_admin_principal_type` to match, before letting CI
+apply.
 
 Terraform owns the Key Vault and its RBAC but creates **no**
 `azurerm_key_vault_secret`: values are set out of band with
@@ -161,30 +243,36 @@ the deploying principal automatically, plus `key_vault_administrator_object_ids`
 The workload identity gets read-only `Key Vault Secrets User`. Never add secret
 values to Terraform or tfvars.
 
-Granting the managed identity database access needs `CREATE USER ... FROM EXTERNAL
-PROVIDER`, T-SQL that the `azurerm` provider cannot execute — it's a documented
-one-off manual step in the README, deliberately deferred since no application
-needs it yet. The alternative, if it ever becomes annoying, is an Entra security
-group as server administrator with the identity as a member (adds the `azuread`
-provider and needs directory permissions).
+Granting the managed identity database access needs
+`SELECT pgaadauth_create_principal(...)`, SQL that the `azurerm` provider cannot
+execute — it's a documented one-off manual step in the README, deliberately
+deferred since no application needs it yet. The alternative, if it ever becomes
+annoying, is an Entra security group as server administrator with the identity as
+a member (adds the `azuread` provider and needs directory permissions).
 
 Deliberately destroyable: `purge_protection_enabled = false` on the Key Vault and
 `prevent_deletion_if_contains_resources = false` on the provider, both so
 `terraform destroy` actually works. That's also why `.tflint.hcl` excludes
-`azurerm_key_vault`, `azurerm_mssql_server` and `azurerm_mssql_database` from
+`azurerm_key_vault`, `azurerm_postgresql_flexible_server` and
+`azurerm_postgresql_flexible_server_database` from
 `azurerm_resources_missing_prevent_destroy` (verified: those exact three fire) —
 excluded rather than disabling the rule, so it stays armed for anything added
 later.
 
 ### Checkov skips
 
-18 checks fire and every one is suppressed inline with a reason; there are no
+13 checks fire and every one is suppressed inline with a reason; there are no
 global skips and no unnecessary ones (verified by stripping the comments and
-re-running). They fall into three groups: features that need standing cost
-(auditing, Defender for SQL, private endpoints, zone redundancy), the
-destroyability choices above, and `CKV_TF_1` on each `Azure/naming/azurerm`
-instance (a Registry module pinned by semver has no commit hash to pin). If you
-add a resource, run `checkov` and add skips for exactly what fires — no more.
+re-running — that check caught one skip, `CKV_AZURE_130`, that did not actually
+fire). They fall into three groups: features that need standing cost
+(private endpoints, geo-redundant backup), the destroyability choices above, and
+`CKV_TF_1` on each `Azure/naming/azurerm` instance (a Registry module pinned by
+semver has no commit hash to pin). If you add a resource, run `checkov` and add
+skips for exactly what fires — no more.
+
+Exactly three fire on the database: `CKV_AZURE_136` (geo-redundant backup) and
+`CKV2_AZURE_57` (private endpoint) on the server, `CKV2_AZURE_26` on the firewall
+rule.
 
 ## Commands
 

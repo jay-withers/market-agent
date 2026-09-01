@@ -23,7 +23,7 @@ rule "azurerm_resources_missing_prevent_destroy" {
   enabled = true
   exclude = [
     "azurerm_key_vault",
-    "azurerm_mssql_server",
-    "azurerm_mssql_database",
+    "azurerm_postgresql_flexible_server",
+    "azurerm_postgresql_flexible_server_database",
   ]
 }

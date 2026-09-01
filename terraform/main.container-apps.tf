@@ -3,7 +3,7 @@
 #
 # Separate naming instances so each app carries its own workload name.
 #
-# ca-investagent-dev-dashboard is 28 of the 32 characters container apps allow,
+# ca-marketagent-dev-dashboard is 28 of the 32 characters container apps allow,
 # which makes it the binding constraint on var.project_name's length.
 
 module "naming_api" {

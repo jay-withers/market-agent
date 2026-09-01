@@ -1,7 +1,7 @@
 variable "project_name" {
-  description = "Project name included in every resource name. Lowercase only (several resource types reject uppercase), and no longer than 15 characters: beyond that `ca-<project>-<env>-dashboard` exceeds the 32 characters container apps allow and gets silently truncated. Resource names carry no random suffix, so changing this is also the way to resolve a clash on the globally unique Key Vault or SQL server names."
+  description = "Project name included in every resource name. Lowercase only (several resource types reject uppercase), and no longer than 15 characters: beyond that `ca-<project>-<env>-dashboard` exceeds the 32 characters container apps allow and gets silently truncated. Changing this is the way to resolve a clash on the globally unique Key Vault or PostgreSQL server names, including a name still held by a soft-deleted vault."
   type        = string
-  default     = "investagent"
+  default     = "marketagent"
 
   validation {
     condition     = can(regex("^[a-z][a-z0-9]{1,14}$", var.project_name))
@@ -10,9 +10,14 @@ variable "project_name" {
 }
 
 variable "location" {
+  # Constrained from two directions: the `allowed-locations-dev` policy denies
+  # anything outside westeurope/northeurope, and this subscription is blocked
+  # from provisioning PostgreSQL in westeurope. northeurope is the only region
+  # satisfying both. Probe the capabilities API before changing it — see the
+  # README.
   description = "Azure region resources are created in."
   type        = string
-  default     = "westeurope"
+  default     = "northeurope"
 }
 
 variable "tags" {
@@ -27,34 +32,59 @@ variable "key_vault_administrator_object_ids" {
   default     = []
 }
 
-variable "sql_admin_object_id" {
-  description = "Entra object ID of the SQL server's administrator. Defaults to whoever runs `terraform apply`. Set it to name a different principal — an Entra group keeps administrator access working regardless of who applies."
+variable "postgres_admin_object_id" {
+  description = "Entra object ID of the PostgreSQL server's administrator. Defaults to whoever runs `terraform apply`. Set it to name a different principal — an Entra group keeps administrator access working regardless of who applies."
   type        = string
   default     = null
 }
 
-variable "sql_admin_login_username" {
-  description = "Display name shown for the SQL server's Entra administrator. Set it alongside `sql_admin_object_id`, conventionally to that principal's user principal name or group name."
+variable "postgres_admin_principal_name" {
+  description = "Display name of the PostgreSQL server's Entra administrator. Set it alongside `postgres_admin_object_id`, conventionally to that principal's user principal name or group name."
   type        = string
   default     = null
 }
 
-variable "sql_database_max_size_gb" {
-  description = "Provisioned maximum size of the database. General Purpose storage bills this figure rather than bytes used, so it is deliberately small."
-  type        = number
-  default     = 2
-}
-
-variable "sql_auto_pause_delay_in_minutes" {
-  description = "Idle time before the serverless database auto-pauses and stops accruing compute charges. 15 is Azure's minimum; -1 disables auto-pause, meaning compute is billed around the clock."
-  type        = number
-  default     = 15
+variable "postgres_admin_principal_type" {
+  description = "Entra principal type of the PostgreSQL administrator. Unlike Azure SQL, the provider requires this explicitly and cannot infer it — a CI apply running as the OIDC service principal must set `ServicePrincipal`."
+  type        = string
+  default     = "User"
 
   validation {
-    condition     = var.sql_auto_pause_delay_in_minutes == -1 || (var.sql_auto_pause_delay_in_minutes >= 15 && var.sql_auto_pause_delay_in_minutes <= 10080)
-    error_message = "sql_auto_pause_delay_in_minutes must be -1 (disabled) or between 15 and 10080."
+    condition     = contains(["User", "Group", "ServicePrincipal"], var.postgres_admin_principal_type)
+    error_message = "postgres_admin_principal_type must be one of User, Group or ServicePrincipal."
   }
 }
+
+variable "postgres_sku_name" {
+  description = "Compute SKU. Burstable B1ms is the smallest Flexible Server offers; there is no serverless or auto-pause tier, so this bills per hour for as long as the server exists."
+  type        = string
+  default     = "B_Standard_B1ms"
+}
+
+variable "postgres_version" {
+  description = "Major PostgreSQL version."
+  type        = string
+  default     = "17"
+}
+
+variable "postgres_storage_mb" {
+  description = "Provisioned storage. Billed on this figure rather than bytes used, and it can never be reduced — only grown — so it sits at Azure's 32 GB minimum."
+  type        = number
+  default     = 32768
+}
+
+variable "postgres_storage_tier" {
+  description = "Storage performance tier. P4 is the default for 32 GB; a higher tier raises the monthly bill for IOPS this workload does not need."
+  type        = string
+  default     = "P4"
+}
+
+variable "postgres_zone" {
+  description = "Availability zone the server is placed in. northeurope offers 1, 2 and 3 for B1ms."
+  type        = string
+  default     = "1"
+}
+
 
 variable "agent_cron_expression" {
   description = "Schedule for the AI trading agent job, as a 5-field cron expression evaluated in UTC."

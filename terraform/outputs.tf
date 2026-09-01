@@ -9,18 +9,18 @@ output "key_vault_name" {
 }
 
 output "identity_name" {
-  description = "Name of the workload's managed identity — the principal named in the `CREATE USER ... FROM EXTERNAL PROVIDER` step that grants it database access."
+  description = "Name of the workload's managed identity — the principal named in the `pgaadauth_create_principal` step that grants it database access."
   value       = azurerm_user_assigned_identity.this.name
 }
 
-output "sql_server_fqdn" {
-  description = "Hostname of the Azure SQL server."
-  value       = azurerm_mssql_server.this.fully_qualified_domain_name
+output "postgres_fqdn" {
+  description = "Hostname of the PostgreSQL Flexible Server."
+  value       = azurerm_postgresql_flexible_server.this.fqdn
 }
 
-output "sql_database_name" {
-  description = "Name of the Azure SQL database."
-  value       = azurerm_mssql_database.this.name
+output "postgres_database_name" {
+  description = "Name of the PostgreSQL database."
+  value       = azurerm_postgresql_flexible_server_database.this.name
 }
 
 output "api_fqdn" {

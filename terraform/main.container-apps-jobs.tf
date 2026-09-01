@@ -9,9 +9,9 @@ module "naming_agent" {
   suffix  = [var.project_name, var.environment, "agent"]
 }
 
-# "summary", not "daily-summary": caj-investagent-dev-daily-summary is 33
+# "summary", not "daily-summary": caj-marketagent-dev-daily-summary is 33
 # characters against the 32 that container app jobs allow, and the naming module
-# would silently truncate it to caj-investagent-dev-daily-summar. The job's own
+# would silently truncate it to caj-marketagent-dev-daily-summar. The job's own
 # container is still named daily-summary below.
 module "naming_daily_summary" {
   # checkov:skip=CKV_TF_1: Terraform Registry module pinned by semver.

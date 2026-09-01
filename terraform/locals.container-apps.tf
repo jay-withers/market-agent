@@ -16,8 +16,8 @@ locals {
   common_env = {
     AZURE_CLIENT_ID                       = azurerm_user_assigned_identity.this.client_id
     KEY_VAULT_URI                         = azurerm_key_vault.this.vault_uri
-    SQL_SERVER_FQDN                       = azurerm_mssql_server.this.fully_qualified_domain_name
-    SQL_DATABASE_NAME                     = azurerm_mssql_database.this.name
+    POSTGRES_HOST                         = azurerm_postgresql_flexible_server.this.fqdn
+    POSTGRES_DATABASE                     = azurerm_postgresql_flexible_server_database.this.name
     APPLICATIONINSIGHTS_CONNECTION_STRING = azurerm_application_insights.this.connection_string
     ENVIRONMENT                           = var.environment
   }
