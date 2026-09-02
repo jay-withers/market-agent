@@ -547,6 +547,19 @@ real fix is Container Apps EasyAuth with Entra, which `azurerm` does not expose.
 - Every `limit` is bounded. An unbounded one is how a read-only API becomes a
   denial of service.
 
+**The containerised agent gets its secrets from Key Vault, not a `.env`.** The
+image has no `az`, so `DefaultAzureCredential` has nothing to fall back to and
+a container cannot authenticate on its own. `make run-agent` therefore mints a
+short-lived, Key Vault-scoped token with the caller's `az login` and passes it
+in as `AZURE_KEYVAULT_TOKEN`, which `settings.credential()` wraps in
+`StaticTokenCredential`. It lasts about an hour and unlocks nothing but Key
+Vault — a far better thing to hand a container than four long-lived API keys in
+a file. That credential **refuses a scope it was not issued for**, because
+`credential()` also serves Postgres token auth and a Key Vault token used there
+fails as `password authentication failed`, which this file already records as
+one of the hardest errors here to read correctly. `.env` still works and
+`.env.example` documents it, for anyone with no Azure access.
+
 **`docker compose` here has no bind mounts, on purpose.** The Docker daemon runs
 on the *host* (docker-outside-of-docker), so a relative bind mount resolves
 against the host filesystem — `./sql` fails from inside the dev container with

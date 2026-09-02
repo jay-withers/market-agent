@@ -8,10 +8,12 @@
 # billed. What it will not do is place an order: DRY_RUN is true here, so the
 # dry-run broker records what it would have submitted.
 #
-# The agent also needs its keys in .env rather than from Key Vault: this image
-# has no `az`, so DefaultAzureCredential has nothing to fall back to. Running
-# the agent straight from the dev container instead (`uv run investagent
-# agent`) can use KEY_VAULT_URI and your own az login, with no secret on disk.
+# Secrets come from Key Vault, not from a file. The image has no `az`, so it
+# cannot authenticate on its own — instead `make run-agent` fetches a
+# short-lived, Key Vault-scoped token with your az login and passes it in as
+# AZURE_KEYVAULT_TOKEN. It expires in about an hour and unlocks nothing else,
+# which beats writing four long-lived API keys into a .env. A .env still works
+# if you prefer it, or if you have no Azure access at all.
 #
 # Deliberately free of bind mounts. The Docker daemon here runs on the host
 # (docker-outside-of-docker), so a relative bind mount means a *host* path and
@@ -64,6 +66,11 @@ services:
       POSTGRES_PASSWORD: local
       DRY_RUN: "true"
       LOG_LEVEL: INFO
+      # Empty unless the caller exports them; settings.secret() reads an
+      # environment variable first either way, so an empty vault URI simply
+      # means "expect the keys in the environment".
+      KEY_VAULT_URI: "${KEY_VAULT_URI:-}"
+      AZURE_KEYVAULT_TOKEN: "${AZURE_KEYVAULT_TOKEN:-}"
     env_file:
       # Optional: the API needs no API key, so this is only here so one file
       # serves every service.
@@ -90,6 +97,8 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: local
       DRY_RUN: "true"
+      KEY_VAULT_URI: "${KEY_VAULT_URI:-}"
+      AZURE_KEYVAULT_TOKEN: "${AZURE_KEYVAULT_TOKEN:-}"
     env_file:
       - path: .env
         required: false

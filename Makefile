@@ -2,6 +2,10 @@ TF_DIR := terraform
 APP_DIR := apps/investagent
 ENV ?= dev
 
+# Deterministic by convention — the naming module carries no random suffix — so
+# hardcoding the dev vault is safe, and overridable for anything else.
+KEY_VAULT_URI ?= https://kv-marketagent-dev.vault.azure.net/
+
 .DEFAULT_GOAL := help
 
 .PHONY: help install lint test secrets sql up down logs run-agent init fmt validate plan apply
@@ -45,9 +49,16 @@ logs: ## Follow the local stack's logs
 #
 # Local database, but *real* calls to Alpaca, Frankfurter and Anthropic — the
 # last of which is billed. It places no order, because DRY_RUN is true in the
-# compose environment. Needs the keys in .env: the image has no `az`, so
-# Key Vault is not reachable from inside it.
+# compose environment.
+#
+# Secrets come from Key Vault rather than a file. The image has no `az`, so the
+# token is minted here and passed in: it lasts about an hour and is scoped to
+# Key Vault alone, which is a far better thing to hand a container than four
+# long-lived API keys in a .env. Falls back to .env if there is no az login.
 run-agent: ## Run the agent once against the local stack (real APIs, no orders)
+	KEY_VAULT_URI=$(KEY_VAULT_URI) \
+	AZURE_KEYVAULT_TOKEN="$$(az account get-access-token \
+	  --resource https://vault.azure.net --query accessToken -o tsv 2>/dev/null)" \
 	docker compose run --rm agent
 
 lint: ## Run all pre-commit hooks against every file
