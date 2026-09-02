@@ -13,7 +13,17 @@
     (no random suffix), so hardcoding them is safe and keeps Terraform, its
     state backend and git out of the picture entirely.
 
+    The firewall rule is named after this machine's public IP and reused if it
+    already exists, and removal is confirmed rather than automatic: each
+    firewall change takes a while and the server rejects a second one while the
+    first is still processing, so keeping the rule makes a debug-and-retry loop
+    substantially quicker.
+
     Requires psql and az on PATH.
+
+.PARAMETER KeepFirewallRule
+    Leave the firewall rule in place without asking. Implied when input is
+    redirected, since there is nobody to answer the prompt.
 
 .EXAMPLE
     ./scripts/Invoke-DbSql.ps1
@@ -21,7 +31,7 @@
     Grants the managed identity database access — the default file.
 
 .EXAMPLE
-    ./scripts/Invoke-DbSql.ps1 -SqlFile ./sql/some-other-task.sql
+    ./scripts/Invoke-DbSql.ps1 -SqlFile ./sql/some-other-task.sql -KeepFirewallRule
 #>
 [CmdletBinding()]
 param(
@@ -31,7 +41,8 @@ param(
     [string]$ResourceGroupName = 'rg-marketagent-dev',
     [string]$ServerFqdn = 'psql-marketagent-dev.postgres.database.azure.com',
     [string]$DatabaseName = 'psqldb-marketagent-dev',
-    [string]$AdminUpn
+    [string]$AdminUpn,
+    [switch]$KeepFirewallRule
 )
 
 Set-StrictMode -Version Latest
@@ -59,16 +70,30 @@ if (-not $AdminUpn) {
 # does not cover this machine.
 $server = $ServerFqdn.Split('.')[0]
 $myIp = (Invoke-RestMethod -Uri 'https://api.ipify.org').ToString().Trim()
-$rule = "tmp-sql-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
 
-Write-Host "==> adding temporary firewall rule $rule for $myIp"
-az postgres flexible-server firewall-rule create `
-    --resource-group $ResourceGroupName --name $server --rule-name $rule `
-    --start-ip-address $myIp --end-ip-address $myIp | Out-Null
+# Named after the IP rather than the clock so a rule kept from an earlier run is
+# reused instead of leaving one rule behind per invocation.
+$rule = "devbox-$($myIp -replace '\.', '-')"
 
-# finally, not a trap: the rule is removed whatever happens, including Ctrl-C, so
-# a broken run doesn't leave the database reachable from an address nobody
-# remembers granting.
+$PSNativeCommandUseErrorActionPreference = $false
+az postgres flexible-server firewall-rule show `
+    --resource-group $ResourceGroupName --name $server --rule-name $rule 2>&1 | Out-Null
+$ruleExisted = $LASTEXITCODE -eq 0
+$PSNativeCommandUseErrorActionPreference = $true
+
+if ($ruleExisted) {
+    Write-Host "==> reusing firewall rule $rule for $myIp"
+}
+else {
+    Write-Host "==> adding firewall rule $rule for $myIp"
+    az postgres flexible-server firewall-rule create `
+        --resource-group $ResourceGroupName --name $server --rule-name $rule `
+        --start-ip-address $myIp --end-ip-address $myIp | Out-Null
+}
+
+# finally, not a trap: the prompt is reached whatever happens, including Ctrl-C,
+# so a broken run can't quietly leave the database reachable from an address
+# nobody remembers granting.
 try {
     # Token as password, not a secret: scoped to the Postgres resource and
     # expires in about an hour.
@@ -87,14 +112,27 @@ try {
 finally {
     Remove-Item Env:\PGPASSWORD -ErrorAction SilentlyContinue
 
-    Write-Host "==> removing temporary firewall rule $rule"
-    # Warned about rather than thrown: an exception raised here would replace
-    # whatever actually went wrong above, and the rule still needs removing.
-    $PSNativeCommandUseErrorActionPreference = $false
-    az postgres flexible-server firewall-rule delete `
-        --resource-group $ResourceGroupName --name $server `
-        --rule-name $rule --yes 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "could not remove firewall rule $rule — remove it by hand"
+    # Redirected input means nobody can answer, so keep the rule rather than
+    # blocking forever — the message below says how to remove it.
+    $keep = $KeepFirewallRule -or [Console]::IsInputRedirected
+    if (-not $keep) {
+        $keep = (Read-Host "remove firewall rule $rule for $myIp? [Y/n]").Trim() -match '^n'
+    }
+
+    if ($keep) {
+        Write-Host "==> keeping firewall rule $rule. Remove it with:"
+        Write-Host "    az postgres flexible-server firewall-rule delete --resource-group $ResourceGroupName --name $server --rule-name $rule --yes"
+    }
+    else {
+        Write-Host "==> removing firewall rule $rule"
+        # Warned about rather than thrown: an exception raised here would replace
+        # whatever actually went wrong above, and the rule still needs removing.
+        $PSNativeCommandUseErrorActionPreference = $false
+        az postgres flexible-server firewall-rule delete `
+            --resource-group $ResourceGroupName --name $server `
+            --rule-name $rule --yes 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "could not remove firewall rule $rule — remove it by hand"
+        }
     }
 }

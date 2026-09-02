@@ -1,16 +1,27 @@
 -- Grants the workload's managed identity access to the database.
 --
--- Self-contained: the identity and database are named literally, so this runs
--- as-is under plain `psql --file` with nothing to pass in. Both are quoted
--- because the names contain hyphens, which are otherwise an operator.
+-- Self-contained: it names the identity and database itself and switches
+-- databases where it has to, so `psql --file` needs nothing passed in. Both
+-- names are quoted because they contain hyphens, otherwise an operator.
+--
+-- The \connect dance is not optional. pgaadauth is installed only in the
+-- `postgres` maintenance database — the application database has plpgsql and
+-- nothing else — so pgaadauth_create_principal has to run there or it fails
+-- with "function does not exist". Roles are cluster-wide, so the principal is
+-- then visible to the GRANTs, which must themselves run against the
+-- application database.
 --
 -- These are the dev names. Another environment needs its own copy of this file.
 --
 -- Safe to re-run: the principal is created only if absent, and GRANTs are
 -- idempotent.
 
+\connect postgres
+
 SELECT pgaadauth_create_principal('uai-marketagent-dev', false, false)
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'uai-marketagent-dev');
+
+\connect psqldb-marketagent-dev
 
 GRANT CONNECT ON DATABASE "psqldb-marketagent-dev" TO "uai-marketagent-dev";
 GRANT USAGE, CREATE ON SCHEMA public TO "uai-marketagent-dev";
