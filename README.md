@@ -223,25 +223,40 @@ Changing the administrator is therefore a code edit rather than a tfvars change.
 An Entra group is worth considering if more than one person needs access: it
 takes `principal_type = "Group"` and a group created out of band.
 
-Granting the managed identity access needs SQL that Terraform cannot execute.
-That SQL lives in `sql/`, one self-contained file per task, run by
-`scripts/Invoke-DbSql.ps1`:
+Granting the managed identity access needs SQL that Terraform cannot execute, and
+so does the schema. That SQL lives in `sql/`, one self-contained file per task,
+run by `scripts/Invoke-DbSql.ps1`:
 
 ```powershell
-./scripts/Invoke-DbSql.ps1                              # sql/grant-uai-access.sql
-./scripts/Invoke-DbSql.ps1 -SqlFile ./sql/something.sql # anything else
+./scripts/Invoke-DbSql.ps1                             # all of sql/, in filename order
+./scripts/Invoke-DbSql.ps1 -Path ./sql/001-schema.sql  # one file
+./scripts/Invoke-DbSql.ps1 -Path ./sql/001-schema.sql,./sql/002-seed-watchlist.sql
 ```
 
 The script adds a temporary firewall rule for your public IP (the "allow Azure
 services" rule doesn't cover your machine), connects as the signed-in user with
-an Entra access token in place of the password, runs the file, then offers to
-remove the rule again — answer `n` to keep it while iterating, since firewall
-changes are slow and serialise on the server. It needs `psql` and `az` on PATH,
-and takes the dev resource names as parameter defaults.
+an Entra access token in place of the password, runs each file in turn, then
+offers to remove the rule again — answer `n` to keep it while iterating, since
+firewall changes are slow and serialise on the server. It needs `psql` and `az`
+on PATH, and takes the dev resource names as parameter defaults.
+
+It carries a `pwsh` shebang and is executable, so those commands work unchanged
+from bash — a comma-separated `-Path` is the one thing that needs a `pwsh` prompt,
+since `pwsh -File` passes arguments as plain strings and won't parse it as an
+array.
+
+Everything in one invocation shares that one firewall rule and one access token,
+which is the whole reason it takes more than one file: a rule per migration would
+spend most of the run waiting on the server.
+
+Migrations are numbered (`001-schema.sql`), written so re-running them is a no-op,
+and record themselves in a `schema_migrations` table. There are no
+down-migrations — reversing something is a new numbered file.
 
 **`sql/grant-uai-access.sql` has already been run** — the identity has `CONNECT`,
-`USAGE, CREATE ON SCHEMA public`, and default privileges on tables and sequences
-created later. It's safe to re-run.
+`USAGE, CREATE ON SCHEMA public`, privileges on the tables that exist, and default
+privileges covering any created later. It's safe to re-run, in any order relative
+to the migrations.
 
 Two traps worth knowing if you write another file:
 

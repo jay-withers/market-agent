@@ -275,6 +275,12 @@ a member (adds the `azuread` provider and needs directory permissions).
 own identities and databases literally, so it runs under plain `psql --file`, and
 the script is connection plumbing that knows nothing about what it runs.
 
+Schema changes are numbered migrations (`001-schema.sql`) written entirely as
+`CREATE ... IF NOT EXISTS`, and each inserts its own row into `schema_migrations`
+at the end — the runner stays ignorant of what it ran. Chosen over Alembic
+because the pattern already existed and the schema changes rarely; the honest
+cost is no down-migrations and no ordering guarantee beyond the filename.
+
 - **`pgaadauth` exists only in the `postgres` maintenance database.** The
   application database has `plpgsql` and nothing else, so
   `pgaadauth_create_principal` fails there with `function ... does not exist` —
@@ -282,6 +288,20 @@ the script is connection plumbing that knows nothing about what it runs.
   Roles are cluster-wide, so `grant-uai-access.sql` does the create after
   `\connect postgres`, then `\connect psqldb-marketagent-dev` for the GRANTs.
   `\connect` mid-file reuses the same token, so no re-authentication is needed.
+- **`-Path` takes files and/or directories**, and defaults to the whole of `sql/`
+  — a directory expands to its `*.sql` sorted by name, which is what the numeric
+  prefixes are for. Everything in one invocation runs under **one** firewall rule
+  and **one** access token; batching is what makes a migration run tolerable,
+  given the serialisation trap below. `-SqlFile` survives as an alias.
+- Each file gets **its own `psql` process** rather than all of them being
+  concatenated: files are allowed to `\connect` elsewhere (`grant-uai-access.sql`
+  has to), and `ON_ERROR_STOP` only aborts the process it is set on, so one
+  process would let a later file run against the wrong database or after a
+  failure.
+- `ALTER DEFAULT PRIVILEGES` only ever affects objects created *afterwards*, so it
+  cannot rescue a migration that ran before it. `grant-uai-access.sql` therefore
+  also carries `GRANT ... ON ALL TABLES/SEQUENCES IN SCHEMA public`, which makes
+  it safe to run at any point in the sequence rather than only first.
 - The script hardcodes the dev resource names as parameter defaults. That is safe
   precisely because the naming convention has no random suffix, and it keeps
   Terraform, the state backend and git out of the path entirely.

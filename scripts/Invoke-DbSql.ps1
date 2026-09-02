@@ -1,6 +1,7 @@
+#!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Runs a SQL file against the PostgreSQL server as its Entra administrator.
+    Runs SQL files against the PostgreSQL server as its Entra administrator.
 
 .DESCRIPTION
     Connection plumbing only: a temporary firewall rule for this machine, an
@@ -19,7 +20,18 @@
     first is still processing, so keeping the rule makes a debug-and-retry loop
     substantially quicker.
 
+    Everything given to -Path runs under one firewall rule and one access
+    token, which is the whole reason for accepting more than one file: a rule
+    per migration would spend most of the run waiting on the server, and a
+    second change while the first is still processing fails outright.
+
     Requires psql and az on PATH.
+
+.PARAMETER Path
+    Files and/or directories to run, in the order given. A directory expands to
+    its *.sql files sorted by name, which is what the numeric filename prefixes
+    in sql/ are for. Defaults to sql/ in its entirety — every file there is
+    idempotent, so that is "bring the database up to date".
 
 .PARAMETER KeepFirewallRule
     Leave the firewall rule in place without asking. Implied when input is
@@ -28,16 +40,19 @@
 .EXAMPLE
     ./scripts/Invoke-DbSql.ps1
 
-    Grants the managed identity database access — the default file.
+    Runs everything in sql/ in filename order.
 
 .EXAMPLE
-    ./scripts/Invoke-DbSql.ps1 -SqlFile ./sql/some-other-task.sql -KeepFirewallRule
+    ./scripts/Invoke-DbSql.ps1 -Path ./sql/001-schema.sql -KeepFirewallRule
+
+    Runs one file and keeps the rule for the next attempt.
 #>
 [CmdletBinding()]
 param(
     # $PSScriptRoot is scripts/, so the default climbs to the repository root
     # rather than depending on the working directory.
-    [string]$SqlFile = (Join-Path (Split-Path -Parent $PSScriptRoot) 'sql' 'grant-uai-access.sql'),
+    [Alias('SqlFile')]
+    [string[]]$Path = (Join-Path (Split-Path -Parent $PSScriptRoot) 'sql'),
     [string]$ResourceGroupName = 'rg-marketagent-dev',
     [string]$ServerFqdn = 'psql-marketagent-dev.postgres.database.azure.com',
     [string]$DatabaseName = 'psqldb-marketagent-dev',
@@ -58,9 +73,27 @@ $PSNativeCommandUseErrorActionPreference = $true
 if (-not (Get-Command psql -ErrorAction SilentlyContinue)) {
     throw "psql not found. Install the PostgreSQL client tools, e.g. 'winget install PostgreSQL.PostgreSQL', 'brew install libpq' or 'apt-get install postgresql-client'."
 }
-if (-not (Test-Path -LiteralPath $SqlFile)) {
-    throw "SQL file not found: $SqlFile"
-}
+# Resolved before the firewall rule is touched: a typo in a path should cost
+# nothing, and a partially-run batch is the expensive failure to avoid.
+$sqlFiles = @(foreach ($entry in $Path) {
+        if (-not (Test-Path -LiteralPath $entry)) {
+            throw "SQL path not found: $entry"
+        }
+        $item = Get-Item -LiteralPath $entry
+        if ($item.PSIsContainer) {
+            $found = @(Get-ChildItem -LiteralPath $item.FullName -Filter '*.sql' -File | Sort-Object Name)
+            if ($found.Count -eq 0) {
+                throw "No .sql files in $($item.FullName)"
+            }
+            $found.FullName
+        }
+        else {
+            $item.FullName
+        }
+    })
+
+Write-Host "==> $($sqlFiles.Count) file(s) to run, in order:"
+$sqlFiles | ForEach-Object { Write-Host "    $(Split-Path -Leaf $_)" }
 
 if (-not $AdminUpn) {
     $AdminUpn = az ad signed-in-user show --query userPrincipalName -o tsv
@@ -96,18 +129,26 @@ else {
 # nobody remembers granting.
 try {
     # Token as password, not a secret: scoped to the Postgres resource and
-    # expires in about an hour.
+    # expires in about an hour. Fetched once and reused by every file below —
+    # long enough for any batch this repo will have.
     $env:PGPASSWORD = az account get-access-token `
         --resource-type oss-rdbms --query accessToken -o tsv
 
-    Write-Host "==> running $(Split-Path -Leaf $SqlFile) against $DatabaseName"
+    # A psql process per file rather than one process for all of them: files
+    # are allowed to \connect elsewhere (grant-uai-access.sql has to), and
+    # ON_ERROR_STOP only aborts the process it is set on, so concatenating them
+    # would let a later file run against the wrong database or after a failure.
+    foreach ($file in $sqlFiles) {
+        Write-Host "==> running $(Split-Path -Leaf $file) against $DatabaseName"
 
-    # ON_ERROR_STOP makes a failed statement fail the run rather than scrolling
-    # past; psql then exits non-zero and the preference above throws.
-    psql --set=ON_ERROR_STOP=1 --file $SqlFile `
-        "host=$ServerFqdn dbname=$DatabaseName user=$AdminUpn sslmode=require"
+        # ON_ERROR_STOP makes a failed statement fail the run rather than
+        # scrolling past; psql then exits non-zero and the preference above
+        # throws, which skips the remaining files.
+        psql --set=ON_ERROR_STOP=1 --file $file `
+            "host=$ServerFqdn dbname=$DatabaseName user=$AdminUpn sslmode=require"
+    }
 
-    Write-Host '==> done'
+    Write-Host "==> done ($($sqlFiles.Count) file(s))"
 }
 finally {
     Remove-Item Env:\PGPASSWORD -ErrorAction SilentlyContinue

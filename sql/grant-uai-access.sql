@@ -36,5 +36,13 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO "uai-marketagent-dev";
 
+-- Default privileges only ever apply to objects created *after* they are set,
+-- so they cannot rescue a migration that ran first. These two cover whatever
+-- already exists, which makes this file safe to run at any point in the
+-- sequence rather than only before the first migration.
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public
+  TO "uai-marketagent-dev";
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO "uai-marketagent-dev";
+
 \echo '==> principal:'
 SELECT rolname FROM pg_roles WHERE rolname = 'uai-marketagent-dev';
