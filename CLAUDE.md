@@ -457,15 +457,22 @@ engine, paper trade, persist — all inside one `agent_runs` row opened before
 any work, so a crash leaves evidence. `llm` and `broker` are injectable, which
 is the only way to exercise the loop without spending money and placing orders.
 
-**The LLM is the largest running cost, and it is not small.** A measured run
-over the ten-name watchlist: 81 articles fetched, **110 filter calls** (one per
+**The LLM cost, measured on a real run rather than estimated.** One complete
+run over the ten-name watchlist: 82 articles fetched, ~110 filter calls (one per
 article/ticker pair — an article tagged with three watchlist names costs three),
-42 relevant, 9 analyses. That is **$0.43 per run**, roughly **£10/month** at one
-run a day — comparable to the £13/month database, in a repo whose entire design
-is "nothing bills meaningfully while idle". The filter is $0.13 of it and the
-analysis $0.30. The obvious lever is batching several articles into one filter
-call, which would cut 110 calls to about 6; it has not been done, and the
-per-article call is the honest baseline to measure against.
+46 relevant, 9 analyses, **85,643 input and 11,658 output tokens, $0.18, and
+4.1 minutes wall clock**. At one run a day that is about **£4/month**, against
+the database's £13.
+
+An earlier figure of $0.43 in this file was wrong: it came from a rehearsal with
+a stubbed LLM whose token counts were invented, and it overstated the real cost
+by more than double. Quote the measured figure, not that one.
+
+Two consequences. Batching several articles into one filter call would cut ~110
+calls to about 6, but at £4/month the saving is small — it is a latency argument
+now more than a cost one. And 4.1 minutes sits comfortably inside the job's
+`replica_timeout_in_seconds = 1800`, so the timeout is not the constraint it
+looked like it might be.
 
 **Cost must be accumulated per call, never derived from token totals.** The two
 stages use different models at different rates, so pricing a mixed token total
