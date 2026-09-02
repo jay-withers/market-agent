@@ -73,8 +73,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "agent":
         from .jobs import agent as agent_job
 
-        # The immutable image tag, so a run records which build produced it.
-        agent_job.run(trigger=args.trigger, image_tag=os.environ.get("IMAGE_TAG"))
+        try:
+            # The immutable image tag, so a run records which build produced it.
+            agent_job.run(trigger=args.trigger, image_tag=os.environ.get("IMAGE_TAG"))
+        except Exception as exc:
+            # The job has already logged the traceback and closed its
+            # `agent_runs` row with the error. Letting the exception escape
+            # would print the whole traceback a second time, which is what a
+            # scheduled job's logs looked like before this — twice the volume
+            # against a tight ingestion cap, and the operational one-liner
+            # buried between two copies of the same stack.
+            logging.getLogger("investagent").error("agent run failed: %s", exc)
+            return 1
         return 0
 
     if args.command == "summary":
