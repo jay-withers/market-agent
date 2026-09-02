@@ -217,7 +217,14 @@ def run(
         logger.info("run %d succeeded: %s", run_id, counts)
         return run_id
 
-    except Exception as exc:
+    # BaseException, not Exception: KeyboardInterrupt and SystemExit do not
+    # derive from Exception, so a Ctrl-C or a SIGTERM-driven exit used to skip
+    # this handler entirely and leave the row `running` for ever. That is not a
+    # local-only concern — Container Apps terminates a job that reaches
+    # `replica_timeout_in_seconds`, and the timeout case is exactly the one
+    # where a record of the failure matters most. Re-raised after closing the
+    # row, so the exit code is unchanged.
+    except BaseException as exc:
         # The run row is closed as failed with the message, so a failure is
         # visible in the dashboard rather than only in container logs that the
         # daily ingestion cap may have dropped.

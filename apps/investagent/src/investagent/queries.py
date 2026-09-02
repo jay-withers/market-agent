@@ -217,14 +217,31 @@ def trades(conn: Any, limit: int = 50) -> list[dict[str, Any]]:
     )
 
 
+# Matches `replica_timeout_in_seconds` on the container app jobs. A run still
+# `running` past it cannot be alive: Container Apps has already terminated the
+# replica.
+JOB_TIMEOUT_SECONDS = 1800
+
+
 def runs(conn: Any, limit: int = 30) -> list[dict[str, Any]]:
+    """Recent runs, with a computed `stale` flag.
+
+    The job closes its own row on failure, including on SIGTERM — but SIGKILL
+    cannot be caught, so a hard kill still leaves `running` behind for ever.
+    Rather than have the dashboard show a run in progress indefinitely, anything
+    older than the job timeout is reported as stale. Computed rather than
+    written back, because a read should not mutate and because the truth is
+    derivable from the timestamp.
+    """
     return _rows(
         conn,
         "SELECT id, started_at, finished_at, status, trigger, dry_run, image_tag,"
         "       tickers_considered, news_fetched, news_relevant, decisions_made,"
-        "       trades_executed, input_tokens, output_tokens, cost_usd, error"
+        "       trades_executed, input_tokens, output_tokens, cost_usd, error,"
+        "       (status = 'running'"
+        "        AND started_at < now() - make_interval(secs => %s)) AS stale"
         " FROM agent_runs ORDER BY started_at DESC LIMIT %s",
-        (limit,),
+        (JOB_TIMEOUT_SECONDS, limit),
     )
 
 

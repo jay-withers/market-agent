@@ -63,3 +63,26 @@ class _FakeJob:
         if self._error:
             raise self._error
         return 1
+
+
+def test_sigterm_becomes_an_exception_so_the_run_row_gets_closed():
+    """Container Apps sends SIGTERM when a job hits replica_timeout_in_seconds.
+
+    Left to the default disposition it kills the process outright and the
+    agent_runs row says `running` for ever — the timeout being exactly the case
+    worth recording.
+    """
+    with pytest.raises(SystemExit, match="terminated by signal 15"):
+        cli._terminate(15, None)
+
+
+def test_a_terminated_agent_run_still_exits_non_zero(monkeypatch, caplog):
+    monkeypatch.setattr(cli, "_configure_logging", lambda: None)
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "investagent.jobs.agent",
+        _FakeJob({}, error=SystemExit("terminated by signal 15")),
+    )
+
+    assert cli.main(["agent"]) == 1
+    assert "terminated by signal 15" in caplog.text
