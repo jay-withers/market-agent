@@ -4,7 +4,7 @@ ENV ?= dev
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install lint test secrets sql init fmt validate plan apply
+.PHONY: help install lint test secrets sql up down logs run-agent init fmt validate plan apply
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -27,6 +27,24 @@ secrets: ## Prompt for the application secrets and store them in Key Vault
 
 sql: ## Run every SQL file in sql/ against the database, in filename order
 	./scripts/Invoke-DbSql.ps1
+
+# The offline loop: Postgres with the schema baked in, plus the API. No Azure,
+# no credentials beyond whatever is in .env. Note the published ports land on
+# the Docker *host* — from inside the dev container, reach a service at its
+# bridge IP or via host.docker.internal.
+up: ## Start the local stack (Postgres + API) with docker compose
+	docker compose up -d --build
+
+down: ## Stop the local stack and delete its data volume
+	docker compose down -v
+
+logs: ## Follow the local stack's logs
+	docker compose logs -f
+
+# `run --rm`, not a long-running service: the agent is a scheduled job, and a
+# container that restarted would trade again each time.
+run-agent: ## Run the agent once against the local stack
+	docker compose run --rm agent
 
 lint: ## Run all pre-commit hooks against every file
 	pre-commit run --all-files

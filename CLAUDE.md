@@ -523,6 +523,60 @@ rather than falling through to a real call, and it clears both `settings()` and
 `tests/helpers.py`. Note `tests/` is a package, so helpers import as
 `tests.helpers` — a bare `from conftest import ...` does not resolve.
 
+### The API and the local stack
+
+`api/` is **read-only**. Every mutation belongs to the agent and summary jobs,
+so this process cannot place a trade or alter a decision however it is called —
+which is most of why it is comfortable being publicly reachable. `/api/*` is
+guarded by an optional shared bearer (`API_REQUIRE_TOKEN`, off by default); the
+real fix is Container Apps EasyAuth with Entra, which `azurerm` does not expose.
+
+- **`/healthz` must not touch the database and `/readyz` must.** Container Apps
+  restarts a container on a failed liveness probe, so a database blip that
+  failed `/healthz` would restart every replica and turn an outage into a crash
+  loop. The health endpoints are also deliberately **outside** the bearer gate —
+  a probe cannot present a token.
+- **`queries.py` returns money as `float`**, the one place the Decimal rule is
+  relaxed. It is the display boundary: a browser charts the values and throws
+  them away, nothing computes with them, and no result goes back to the
+  database. A `Decimal` would serialise as a JSON string and make every chart
+  awkward for no gain.
+- The overview's position valuation uses the **most recently recorded** FX rate,
+  not `max()`. The first version used `max()`, which is wrong in a way that
+  worsens: it locks onto the highest rate ever seen and never moves.
+- Every `limit` is bounded. An unbounded one is how a read-only API becomes a
+  denial of service.
+
+**`docker compose` here has no bind mounts, on purpose.** The Docker daemon runs
+on the *host* (docker-outside-of-docker), so a relative bind mount resolves
+against the host filesystem — `./sql` fails from inside the dev container with
+"path is not shared from the host", because `/workspaces/market-agent` does not
+exist there. Build contexts are sent by the *client* and work from either side,
+so `docker/Dockerfile.db` bakes the schema in instead. Two consequences worth
+keeping: published ports land on the **host**, so from inside the dev container
+reach a service at its bridge IP or `host.docker.internal`; and the db image
+copies `sql/0*.sql` only, because `grant-uai-access.sql` calls
+`pgaadauth_create_principal` and `\connect`s to a database named after the
+Azure server — as an initdb script it would fail the whole initialisation.
+
+**`uv sync` installs the project editable by default**, which produces a `.pth`
+pointing at `/app/src`. The runtime stage copies only the virtualenv, so the
+image failed with a bare `No module named 'investagent'` from a venv that looked
+complete. `--no-editable` on both syncs is the fix.
+
+The image runs as **uid 10001, numerically** — `USER investagent` trips
+hadolint's DL3066, and a runtime enforcing `runAsNonRoot` has to resolve the
+user before the container starts without being able to read the image's
+`/etc/passwd`.
+
+Dockerfiles are linted by the local `scripts/hadolint.sh`, **not** the upstream
+`hadolint-docker` hook. That hook calls `docker system info`, which fails
+whenever `DOCKER_HOST` is unset — and pre-commit invoked from `git commit`
+inherits a non-login shell, where `/etc/profile.d/10-docker-host.sh` has not
+run. It blocked a commit with a wall of JSON on nothing more than how the shell
+was started. The wrapper resolves the socket the same way that profile snippet
+does, then fails loudly if the daemon is still unreachable.
+
 **`ruff-format`'s upstream hook includes `markdown` in its `types_or`**, so it
 reformats Python code blocks inside `.md` files — it rewrote the aligned
 comments in `docs/deployment-plan.md` on its first run. The hook is pinned to

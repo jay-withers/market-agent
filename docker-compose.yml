@@ -1,0 +1,88 @@
+# The offline loop: Postgres, the schema, and the API, with no Azure at all.
+#
+# Deliberately free of bind mounts. The Docker daemon here runs on the host
+# (docker-outside-of-docker), so a relative bind mount means a *host* path and
+# fails from inside the dev container; build contexts are sent by the client and
+# work from either side.
+#
+# Works because settings.secret() reads an environment variable before falling
+# back to Key Vault, and db.py uses password authentication when
+# POSTGRES_PASSWORD is set instead of an Entra token. Put the API keys in a
+# local .env — see .env.example.
+#
+# Built for the host's native architecture on purpose. The deployable image
+# must be linux/amd64 (see the Dockerfile), but forcing that here would run
+# every local container under emulation for no benefit.
+
+name: investagent
+
+services:
+  db:
+    # Built rather than pulled so the migrations can be baked in. A bind mount
+    # of ./sql would be resolved by the daemon on the host, where the dev
+    # container's /workspaces path does not exist — see docker/Dockerfile.db.
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.db
+    environment:
+      POSTGRES_PASSWORD: local
+      POSTGRES_DB: investagent
+    ports:
+      # Published on the *host*. From inside the dev container reach it at the
+      # container's bridge IP, or at host.docker.internal:5432.
+      - "5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d investagent"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ./apps/investagent
+    command: ["api"]
+    environment:
+      ENVIRONMENT: local
+      POSTGRES_HOST: db
+      POSTGRES_DATABASE: investagent
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: local
+      DRY_RUN: "true"
+      LOG_LEVEL: INFO
+    env_file:
+      # Optional: the API needs no API key, so this is only here so one file
+      # serves every service.
+      - path: .env
+        required: false
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Not started by default: `docker compose run --rm agent` runs it once. It is
+  # a scheduled job rather than a service, and a restarting container would
+  # trade repeatedly.
+  agent:
+    build:
+      context: ./apps/investagent
+    command: ["agent", "--trigger", "manual"]
+    profiles: ["jobs"]
+    environment:
+      ENVIRONMENT: local
+      POSTGRES_HOST: db
+      POSTGRES_DATABASE: investagent
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: local
+      DRY_RUN: "true"
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db-data:

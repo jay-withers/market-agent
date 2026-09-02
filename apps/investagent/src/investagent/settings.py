@@ -58,6 +58,11 @@ class Settings(BaseSettings):
     dry_run: bool = True
 
     api_require_token: bool = False
+    # The dashboard's origin, for CORS. Terraform passes the dashboard app's
+    # ingress FQDN; empty falls back to allowing any origin, which is right for
+    # a local `docker compose` run and harmless for a read-only API that
+    # returns no secret and sets no cookie.
+    dashboard_origin: str = ""
 
     # The model cascade: something cheap screens a large batch of news, and
     # something capable reasons about what survives. One env var each.
