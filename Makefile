@@ -28,10 +28,9 @@ secrets: ## Prompt for the application secrets and store them in Key Vault
 sql: ## Run every SQL file in sql/ against the database, in filename order
 	./scripts/Invoke-DbSql.ps1
 
-# The offline loop: Postgres with the schema baked in, plus the API. No Azure,
-# no credentials beyond whatever is in .env. Note the published ports land on
-# the Docker *host* — from inside the dev container, reach a service at its
-# bridge IP or via host.docker.internal.
+# The local loop: Postgres with the schema baked in, plus the API. No Azure.
+# Note the published ports land on the Docker *host* — from inside the dev
+# container, reach a service at its bridge IP or via host.docker.internal.
 up: ## Start the local stack (Postgres + API) with docker compose
 	docker compose up -d --build
 
@@ -43,7 +42,12 @@ logs: ## Follow the local stack's logs
 
 # `run --rm`, not a long-running service: the agent is a scheduled job, and a
 # container that restarted would trade again each time.
-run-agent: ## Run the agent once against the local stack
+#
+# Local database, but *real* calls to Alpaca, Frankfurter and Anthropic — the
+# last of which is billed. It places no order, because DRY_RUN is true in the
+# compose environment. Needs the keys in .env: the image has no `az`, so
+# Key Vault is not reachable from inside it.
+run-agent: ## Run the agent once against the local stack (real APIs, no orders)
 	docker compose run --rm agent
 
 lint: ## Run all pre-commit hooks against every file

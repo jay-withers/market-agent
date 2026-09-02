@@ -1,4 +1,17 @@
-# The offline loop: Postgres, the schema, and the API, with no Azure at all.
+# The local loop: Postgres with the schema baked in, plus the API, needing no
+# Azure at all.
+#
+# "Local" is not "offline", and the distinction matters for the agent service.
+# The API only reads Postgres, so it genuinely runs in isolation. The agent
+# still calls Alpaca for prices and news, Frankfurter for the rate, and
+# Anthropic for both model stages — real requests, and the Anthropic ones are
+# billed. What it will not do is place an order: DRY_RUN is true here, so the
+# dry-run broker records what it would have submitted.
+#
+# The agent also needs its keys in .env rather than from Key Vault: this image
+# has no `az`, so DefaultAzureCredential has nothing to fall back to. Running
+# the agent straight from the dev container instead (`uv run investagent
+# agent`) can use KEY_VAULT_URI and your own az login, with no secret on disk.
 #
 # Deliberately free of bind mounts. The Docker daemon here runs on the host
 # (docker-outside-of-docker), so a relative bind mount means a *host* path and
