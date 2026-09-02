@@ -4,7 +4,7 @@ ENV ?= dev
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install lint test init fmt validate plan apply
+.PHONY: help install lint test secrets init fmt validate plan apply
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -21,6 +21,9 @@ install: ## Install pre-commit hooks and Python dependencies
 
 test: ## Run the Python test suite
 	uv run --directory $(APP_DIR) pytest
+
+secrets: ## Prompt for the application secrets and store them in Key Vault
+	./scripts/Set-KeyVaultSecrets.ps1
 
 lint: ## Run all pre-commit hooks against every file
 	pre-commit run --all-files

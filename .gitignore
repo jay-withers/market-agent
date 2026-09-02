@@ -48,3 +48,6 @@ dist/
 # apps/investagent/src/investagent/settings.py), so these hold real values.
 .env
 .env.*
+# ...but a committed template holds none, and `.env.*` would otherwise swallow
+# it silently.
+!.env.example
