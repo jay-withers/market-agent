@@ -45,7 +45,7 @@ resource "azurerm_postgresql_flexible_server" "this" {
   # No high_availability block: a standby replica doubles the compute bill to
   # buy availability this experiment doesn't need.
 
-  public_network_access_enabled = false
+  public_network_access_enabled = true
 
   # Entra-only, matching the passwordless posture everywhere else: with
   # password_auth_enabled false, administrator_login and administrator_password
@@ -77,7 +77,7 @@ resource "azurerm_postgresql_flexible_server_active_directory_administrator" "th
   resource_group_name = azurerm_resource_group.this.name
   tenant_id           = data.azurerm_client_config.current.tenant_id
   object_id           = "b168eef0-d213-406e-a7f9-7b9198d580da"
-  principal_name      = "Jay Withers"
+  principal_name      = "jay.withers@appvia.io"
   principal_type      = "User"
 }
 
