@@ -55,6 +55,23 @@ repos:
       - id: shellcheck
         args: [--external-sources]
 
+  # ruff replaces both a linter and a formatter (black/isort/flake8). The
+  # config, including the rule selection, lives in
+  # apps/investagent/pyproject.toml — ruff walks up from each file to find it,
+  # so nothing needs pointing at it from here.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: 1f1e8bf348ff38fc88619a38d3ca4d9c56abea49 # frozen: v0.16.5
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+
+      # Python only. The upstream hook's types_or includes `markdown`, so left
+      # alone it reformats Python code blocks inside .md files — it rewrote the
+      # aligned comments in docs/deployment-plan.md on its first run. Prose is
+      # not ruff's business.
+      - id: ruff-format
+        types_or: [python, pyi]
+
   - repo: local
     hooks:
       - id: check-tf-standards

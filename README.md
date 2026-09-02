@@ -8,8 +8,10 @@ money is ever connected. The point of the experiment is to find out, over three
 to six months, whether the AI beats simply putting £500 into a passive index or
 leaving it in a savings account.
 
-This repository currently contains **only the Terraform infrastructure**. There
-is no application code yet — see [Out of scope](#out-of-scope-right-now).
+This repository contains the Terraform infrastructure and a **part-written
+application** — see [The application](#the-application) and
+[Out of scope](#out-of-scope-right-now). `docs/deployment-plan.md` is the plan
+for the rest.
 
 ## What gets deployed
 
@@ -40,15 +42,50 @@ Two departures from the original design:
   is `psycopg` rather than an ODBC driver (`pyodbc`/`aioodbc`); the relational
   schema is unaffected.
 
+## The application
+
+`apps/investagent/` is one Python package with three entrypoints (`api`, `agent`,
+`summary`) sharing one image: they have the risk engine, the database layer, the
+broker client and the LLM client in common, so three images would mean three
+builds of near-identical layers. The dashboard is genuinely separate and gets
+its own.
+
+| Module | What it does |
+| --- | --- |
+| `settings.py` | Configuration, and secrets from an env var first then Key Vault |
+| `db.py` | `psycopg` pool authenticated with an Entra token instead of a password |
+| `models.py` | Domain models, risk configuration, and the LLM's output types |
+| `risk.py` | The deterministic risk engine — a pure function |
+
+```bash
+make install   # pre-commit hooks and Python dependencies (needs re-running after a rebuild)
+make test      # pytest
+```
+
+Money is `Decimal` throughout, matching the `NUMERIC(18,4)` columns in `sql/`,
+and quantized **towards zero** so a rounding step can never approve a trade over
+a limit.
+
+**The risk engine is the part that matters.** The LLM recommends; the engine
+decides. It runs gates first — a HOLD, a ticker off the allowlist, confidence
+under the floor, the daily trade budget spent, a sell with nothing held — and
+then applies a cap per limit, of which the smallest wins. It can only refuse or
+approve less, never invent a trade, and nothing the model writes in its
+reasoning can raise a limit. Every verdict records each cap it considered and
+the single constraint that decided the outcome, which is what gets written to
+`ai_decisions.risk_verdict`.
+
 ## Out of scope right now
 
-No application code, no Dockerfiles, no image build pipeline. Both container apps
-and both jobs run public Microsoft quickstart images, which means the two apps are
-currently **publicly reachable, unauthenticated placeholder pages**. Authentication
-belongs with the real API.
+No LLM client, no broker client, no jobs, no API, no dashboard, no Dockerfiles
+and no image build pipeline. Both container apps and both jobs still run public
+Microsoft quickstart images, which means the two apps are currently **publicly
+reachable, unauthenticated placeholder pages**. Authentication belongs with the
+real API.
 
-Replacing a placeholder with a real image means adding a `registry` block and a
-Key Vault-backed `secret` for the pull token — see `locals.container-apps.tf`.
+Replacing a placeholder with a real image is an image-reference change; the
+images will be public on ghcr.io, so no `registry` block or pull-token `secret`
+is needed — see `locals.container-apps.tf`.
 
 ## Getting started
 

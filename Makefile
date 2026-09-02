@@ -1,17 +1,26 @@
 TF_DIR := terraform
+APP_DIR := apps/investagent
 ENV ?= dev
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install lint init fmt validate plan apply
+.PHONY: help install lint test init fmt validate plan apply
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
-		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
+		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-install: ## Install pre-commit hooks (run once after cloning)
+# Expected to be re-run after a dev container rebuild, not just after a clone:
+# uv installs into ~/.local/bin, which is the container's writable layer and
+# does not survive one.
+install: ## Install pre-commit hooks and Python dependencies
 	pre-commit install
 	pre-commit install --hook-type commit-msg
+	command -v uv >/dev/null || curl -fsSL https://astral.sh/uv/install.sh | sh
+	uv sync --directory $(APP_DIR) --extra dev
+
+test: ## Run the Python test suite
+	uv run --directory $(APP_DIR) pytest
 
 lint: ## Run all pre-commit hooks against every file
 	pre-commit run --all-files

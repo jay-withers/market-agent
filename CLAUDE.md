@@ -11,11 +11,14 @@ run against a paper-trading broker. No real money, ever — the experiment is
 whether the AI beats a passive index or a savings account over 3–6 months with a
 notional £500.
 
-**Only the Terraform infrastructure exists so far.** There is no application code,
-no Dockerfile and no image build pipeline. Both container apps and both jobs run
-public Microsoft quickstart images as placeholders, which also means the two apps
-are publicly reachable unauthenticated pages — authentication belongs with the
-real API. Don't invent application code to fill that gap unless asked.
+**The application is part-written.** `apps/investagent/` holds the settings, the
+database layer, the domain models and the risk engine with its tests; there is
+still no LLM client, no broker client, no jobs, no API, no dashboard, no
+Dockerfile and no image build pipeline. Both container apps and both jobs still
+run public Microsoft quickstart images as placeholders, which also means the two
+apps are publicly reachable unauthenticated pages — authentication belongs with
+the real API. `docs/deployment-plan.md` is the agreed plan for the rest and is
+worth reading before adding to it.
 
 This repo began as a generic Azure Terraform module template and was converted;
 if something looks like leftover template scaffolding, it probably is.
@@ -343,12 +346,79 @@ Exactly three fire on the database: `CKV_AZURE_136` (geo-redundant backup) and
 `CKV2_AZURE_57` (private endpoint) on the server, `CKV2_AZURE_26` on the firewall
 rule.
 
+## The application package
+
+`apps/investagent/` is one Python package, one image, three entrypoints
+(`api`, `agent`, `summary`). They share the risk engine, the database layer, the
+broker client and the LLM client, so splitting them into three images would mean
+three builds of near-identical layers. Deviates from the brief's suggested
+`apps/{api,agent,dashboard}` deliberately; the dashboard is genuinely separate
+and gets its own image.
+
+Written so far: `settings.py`, `db.py`, `models.py`, `risk.py`, and tests for
+the last two. Dependencies in `pyproject.toml` are added as the modules needing
+them land rather than declared up front.
+
+- **Money is `Decimal`, never `float`**, matching the `NUMERIC(18,4)` columns.
+  `models.money()` quantizes to four places and always rounds **towards zero**,
+  because every caller is a limit or headroom against one and rounding up could
+  approve a trade a hair over a cap. `pytest` runs with
+  `filterwarnings = ["error"]` so a float sneaking into Decimal arithmetic fails
+  rather than warns.
+- **The one place a float is allowed is the LLM's own output.** A
+  `Recommendation.suggested_amount_gbp` arrives as a JSON number and is coerced
+  through a float, which is fine because it is an opinion, not an accounting
+  figure — the risk engine quantizes it before using it, and every exact amount
+  in the system originates from the engine or the database instead.
+- **`risk.py` is pure** — no I/O, no clock, no randomness. `trades_today` is
+  passed in because the engine cannot count the `trades` table itself. That
+  purity is what makes an `ai_decisions` row replayable months later.
+- **Gates before caps.** Gates are conditions no trade size can satisfy and they
+  short-circuit; caps each yield a maximum and the smallest wins. Caps are
+  evaluated in a fixed order and the *first* minimum wins, so ties are
+  deterministic — `recommended_amount` is first, so an unclamped approval is
+  reported as bound by the recommendation rather than by a limit that tied.
+- **`available_cash` is dominated whenever `max_total_exposure_pct < 100`**:
+  exposure headroom is `pct x total - invested` while cash is
+  `total - invested`, so the former is always smaller. It is kept as a backstop
+  for a 100% ceiling and for a self-inconsistent state, not because it is
+  expected to bind. A test asserts the domination so nobody "fixes" the
+  apparent redundancy.
+- **Headroom is clamped at zero.** A price rise alone can push a position past
+  its cap without any trade, and a negative cap would otherwise read as the
+  tightest one and be reported as an approved amount.
+- **A refusal never repeats a constraint in `reasons`.** The refusal path must
+  not append a fresh entry for a cap already recorded, or
+  `ai_decisions.risk_verdict` ends up holding the cap with its value and the
+  same name again with none. There is a regression test.
+- `settings.secret("ANTHROPIC-API-KEY")` reads `$ANTHROPIC_API_KEY` first and
+  only then Key Vault. Env-first is what makes `docker compose` work with no
+  Azure at all, and it is why Terraform owns no Key Vault references — a
+  revision carrying one hard-fails when the secret is absent, which all four
+  currently are. The Azure SDKs are imported *inside* the functions that need
+  them so the models, the engine and the tests need neither the SDK nor a
+  credential.
+- `db.py` authenticates with an Entra token as the password. A
+  `psycopg.Connection` subclass fetches one inside `connect()` so each new
+  connection gets a fresh token, and `max_lifetime=1800` retires connections
+  well inside a token's ~60 minutes. The pool is built lazily, so importing the
+  module doesn't demand a credential.
+
+**`ruff-format`'s upstream hook includes `markdown` in its `types_or`**, so it
+reformats Python code blocks inside `.md` files — it rewrote the aligned
+comments in `docs/deployment-plan.md` on its first run. The hook is pinned to
+`types_or: [python, pyi]` in `.pre-commit-config.yaml` for that reason; don't
+drop the override. Ruff's own config lives in `apps/investagent/pyproject.toml`
+and is found by walking up from each file, so nothing points at it from the
+pre-commit config.
+
 ## Commands
 
 `make` with no target prints the self-documenting help (the default goal).
 
 ```bash
-make install           # install pre-commit hooks (run once after cloning)
+make install           # install pre-commit hooks and Python dependencies
+make test              # run the Python test suite (pytest)
 make lint              # run all pre-commit hooks against every file
 make fmt               # terraform fmt -recursive
 make validate          # terraform init + validate (no Azure credentials)
@@ -356,8 +426,15 @@ make plan              # terraform init + plan (set ENV=dev|stg|prd, default dev
 make apply             # terraform init + apply (set ENV=dev|stg|prd, default dev)
 ```
 
-There is no `make test`: the tests were removed at the user's request.
-`make validate` is the credential-free check.
+`make test` runs the Python suite. There are no *Terraform* tests — those were
+removed at the user's request — and `make validate` is the credential-free
+Terraform check.
+
+`make install` is expected to be re-run after a dev container rebuild, not only
+after a clone: `uv` installs into `~/.local/bin`, which is the container's
+writable layer and does not survive one. `az login` and `gh auth login` go the
+same way, and so does anything `apt-get install`ed by hand — `psql` was missing
+after the last rebuild despite the deployment plan recording it as present.
 
 ## Terraform state and the partial backend
 

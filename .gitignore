@@ -31,3 +31,20 @@ override.tf.json
 # macOS finder metadata
 .DS_Store
 **/.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+dist/
+
+# Local environment files. Every secret is read from an env var first (see
+# apps/investagent/src/investagent/settings.py), so these hold real values.
+.env
+.env.*
