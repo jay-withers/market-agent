@@ -168,7 +168,7 @@ subscription fails the container apps environment with
   An object ID is an identifier rather than a credential, so it is safe in this
   public repo.
 - `principal_name` holds the administrator's Entra *display name*, while
-  `scripts/Grant-DbAccess.ps1` connects with `user=<UPN>`. Whether ARM turns
+  `scripts/Invoke-DbSql.ps1` connects with `user=<UPN>`. Whether ARM turns
   `principalName` into the PostgreSQL role name — which would make the UPN the
   wrong login — is unverified; check it on the first real connection.
 - `authentication { password_auth_enabled = false }` keeps the passwordless
