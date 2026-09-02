@@ -32,29 +32,6 @@ variable "key_vault_administrator_object_ids" {
   default     = []
 }
 
-variable "postgres_admin_object_id" {
-  description = "Entra object ID of the PostgreSQL server's administrator. Defaults to whoever runs `terraform apply`. Set it to name a different principal — an Entra group keeps administrator access working regardless of who applies."
-  type        = string
-  default     = null
-}
-
-variable "postgres_admin_principal_name" {
-  description = "Display name of the PostgreSQL server's Entra administrator. Set it alongside `postgres_admin_object_id`, conventionally to that principal's user principal name or group name."
-  type        = string
-  default     = null
-}
-
-variable "postgres_admin_principal_type" {
-  description = "Entra principal type of the PostgreSQL administrator. Unlike Azure SQL, the provider requires this explicitly and cannot infer it — a CI apply running as the OIDC service principal must set `ServicePrincipal`."
-  type        = string
-  default     = "User"
-
-  validation {
-    condition     = contains(["User", "Group", "ServicePrincipal"], var.postgres_admin_principal_type)
-    error_message = "postgres_admin_principal_type must be one of User, Group or ServicePrincipal."
-  }
-}
-
 variable "postgres_sku_name" {
   description = "Compute SKU. Burstable B1ms is the smallest Flexible Server offers; there is no serverless or auto-pause tier, so this bills per hour for as long as the server exists."
   type        = string

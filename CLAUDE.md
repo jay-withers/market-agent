@@ -23,7 +23,7 @@ if something looks like leftover template scaffolding, it probably is.
 ## Dev container
 
 The repo is built around the dev container at `.devcontainer/devcontainer.json`,
-which uses the image `ghcr.io/jay-withers/dev-container/terraform`. It provides
+which uses the image `ghcr.io/jay-withers/dev-containers/terraform`. It provides
 Terraform, TFLint, terraform-docs, and Checkov, and runs `make install` on
 creation. Prefer working inside the container so tool versions match CI.
 
@@ -161,9 +161,16 @@ subscription fails the container apps environment with
 - The Entra administrator is a **separate resource**
   (`azurerm_postgresql_flexible_server_active_directory_administrator`), not an
   inline block as it was on Azure SQL, and it requires the principal's *type*
-  explicitly. `data.azurerm_client_config` cannot report that, hence
-  `var.postgres_admin_principal_type` — a CI apply running as the OIDC service
-  principal must set `ServicePrincipal`.
+  explicitly — `data.azurerm_client_config` cannot report it. `object_id`,
+  `principal_name` and `principal_type` are **hardcoded to a named human** in
+  `main.database.tf`, not variables: the administrator is then the same principal
+  whoever or whatever applies. Changing it is a code edit, not a tfvars change.
+  An object ID is an identifier rather than a credential, so it is safe in this
+  public repo.
+- `principal_name` holds the administrator's Entra *display name*, while
+  `scripts/Grant-DbAccess.ps1` connects with `user=<UPN>`. Whether ARM turns
+  `principalName` into the PostgreSQL role name — which would make the UPN the
+  wrong login — is unverified; check it on the first real connection.
 - `authentication { password_auth_enabled = false }` keeps the passwordless
   posture: `administrator_login`/`administrator_password` stay unset and no
   database password exists in source, state or Key Vault.
@@ -230,11 +237,12 @@ uppercase; job names also reject underscores.
 Passwordless throughout. The PostgreSQL server sets
 `authentication { active_directory_auth_enabled = true, password_auth_enabled = false }`,
 which lets `administrator_login`/`administrator_password` stay unset — no database
-password exists in source, state or Key Vault. The administrator defaults to
-whoever runs `terraform apply` (`locals.database.tf`); applied from CI that's the
-OIDC service principal, so set `postgres_admin_object_id` — an Entra group is
-tidiest — **and** `postgres_admin_principal_type` to match, before letting CI
-apply.
+password exists in source, state or Key Vault. The administrator is a named human
+hardcoded in `main.database.tf` (object ID, principal name and type), so a CI
+apply no longer silently makes the OIDC service principal the only way in — the
+trap that an earlier "default to whoever applies" version carried. An Entra group
+would survive personnel change, at the cost of `principal_type = "Group"` and a
+group created out of band.
 
 Terraform owns the Key Vault and its RBAC but creates **no**
 `azurerm_key_vault_secret`: values are set out of band with

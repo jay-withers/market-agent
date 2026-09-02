@@ -69,15 +69,16 @@ resource "azurerm_postgresql_flexible_server" "this" {
 
 # Unlike Azure SQL's inline azuread_administrator block, the Entra admin is a
 # separate resource here — and it needs the principal's *type*, which
-# data.azurerm_client_config cannot report. Hence var.postgres_admin_principal_type:
-# a CI apply running as the OIDC service principal must set "ServicePrincipal".
+# data.azurerm_client_config cannot report. Hardcoded rather than derived from the
+# deploying principal, so a CI apply doesn't make the OIDC service principal the
+# administrator and lock every human out.
 resource "azurerm_postgresql_flexible_server_active_directory_administrator" "this" {
   server_name         = azurerm_postgresql_flexible_server.this.name
   resource_group_name = azurerm_resource_group.this.name
   tenant_id           = data.azurerm_client_config.current.tenant_id
-  object_id           = local.postgres_admin_object_id
-  principal_name      = local.postgres_admin_principal_name
-  principal_type      = var.postgres_admin_principal_type
+  object_id           = "b168eef0-d213-406e-a7f9-7b9198d580da"
+  principal_name      = "Jay Withers"
+  principal_type      = "User"
 }
 
 resource "azurerm_postgresql_flexible_server_database" "this" {

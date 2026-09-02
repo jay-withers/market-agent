@@ -215,15 +215,13 @@ The workload identity holds only `Key Vault Secrets User` — read, not write.
 ## Database access
 
 The PostgreSQL server has **no password**: `password_auth_enabled` is off and
-Entra is the only way in. The administrator defaults to whoever runs
-`terraform apply`.
+Entra is the only way in. The administrator is a named user hardcoded in
+`terraform/main.database.tf` — object ID, principal name and type — so it stays
+the same principal no matter who or what applies, including from CI.
 
-Applied from CI, that means the OIDC service principal becomes the administrator
-and no human can connect. Set `postgres_admin_object_id` — ideally to an Entra
-group containing both you and anything else that needs access — before letting CI
-apply. Unlike Azure SQL, the provider also needs the principal's *type*, so set
-`postgres_admin_principal_type` to match (`Group` for a group,
-`ServicePrincipal` from CI).
+Changing the administrator is therefore a code edit rather than a tfvars change.
+An Entra group is worth considering if more than one person needs access: it
+takes `principal_type = "Group"` and a group created out of band.
 
 Granting the managed identity access needs SQL that Terraform cannot execute, so
 it is a one-off manual step per database. Nothing needs it until there's an
