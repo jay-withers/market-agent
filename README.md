@@ -223,41 +223,39 @@ Changing the administrator is therefore a code edit rather than a tfvars change.
 An Entra group is worth considering if more than one person needs access: it
 takes `principal_type = "Group"` and a group created out of band.
 
-Granting the managed identity access needs SQL that Terraform cannot execute, so
-it is a one-off manual step per database. Nothing needs it until there's an
-application:
+Granting the managed identity access needs SQL that Terraform cannot execute.
+That SQL lives in `sql/`, one self-contained file per task, run by
+`scripts/Invoke-DbSql.ps1`:
 
-```bash
-cd terraform
-FQDN=$(terraform output -raw postgres_fqdn)
-DB=$(terraform output -raw postgres_database_name)
-IDENTITY=$(terraform output -raw identity_name)
-SERVER=${FQDN%%.*}
-RG=$(terraform output -raw resource_group_name)
-MY_IP=$(curl -s ifconfig.me)
-
-# The "allow Azure services" rule doesn't cover your machine.
-az postgres flexible-server firewall-rule create -g "$RG" -n "$SERVER" \
-  -r devbox --start-ip-address "$MY_IP" --end-ip-address "$MY_IP"
-
-# Entra login: the username is your UPN, the password is an access token.
-export PGPASSWORD=$(az account get-access-token \
-  --resource-type oss-rdbms --query accessToken -o tsv)
-
-psql "host=$FQDN dbname=$DB user=$(az ad signed-in-user show --query userPrincipalName -o tsv) sslmode=require" -c "
-SELECT pgaadauth_create_principal('$IDENTITY', false, false);
-GRANT CONNECT ON DATABASE \"$DB\" TO \"$IDENTITY\";
-GRANT USAGE, CREATE ON SCHEMA public TO \"$IDENTITY\";
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO \"$IDENTITY\";"
-
-az postgres flexible-server firewall-rule delete -g "$RG" -n "$SERVER" \
-  -r devbox --yes
+```powershell
+./scripts/Invoke-DbSql.ps1                              # sql/grant-uai-access.sql
+./scripts/Invoke-DbSql.ps1 -SqlFile ./sql/something.sql # anything else
 ```
 
-`pgaadauth_create_principal` comes from the `pgaadauth` extension, which Azure
-installs on every Flexible Server with Entra auth enabled. Application code then
-connects with `psycopg`, using the managed identity's access token as the
-password and the `AZURE_CLIENT_ID` already passed into every container.
+The script adds a temporary firewall rule for your public IP (the "allow Azure
+services" rule doesn't cover your machine), connects as the signed-in user with
+an Entra access token in place of the password, runs the file, then offers to
+remove the rule again — answer `n` to keep it while iterating, since firewall
+changes are slow and serialise on the server. It needs `psql` and `az` on PATH,
+and takes the dev resource names as parameter defaults.
+
+**`sql/grant-uai-access.sql` has already been run** — the identity has `CONNECT`,
+`USAGE, CREATE ON SCHEMA public`, and default privileges on tables and sequences
+created later. It's safe to re-run.
+
+Two traps worth knowing if you write another file:
+
+- **`pgaadauth` is installed only in the `postgres` maintenance database**, not in
+  the application database, so `pgaadauth_create_principal` has to run there or it
+  fails with `function ... does not exist`. Roles are cluster-wide, so the file
+  does the create after `\connect postgres` and then switches back for the GRANTs.
+- **The Entra administrator's registered `principal_name` is the role name**, so it
+  has to be the UPN. A display name there means `psql user=<UPN>` fails with
+  `password authentication failed`, which looks like a token problem and isn't.
+
+Application code connects with `psycopg`, using the managed identity's access
+token as the password and the `AZURE_CLIENT_ID` already passed into every
+container.
 
 ## Scheduling
 

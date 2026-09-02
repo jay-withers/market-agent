@@ -167,10 +167,19 @@ subscription fails the container apps environment with
   whoever or whatever applies. Changing it is a code edit, not a tfvars change.
   An object ID is an identifier rather than a credential, so it is safe in this
   public repo.
-- `principal_name` holds the administrator's Entra *display name*, while
-  `scripts/Invoke-DbSql.ps1` connects with `user=<UPN>`. Whether ARM turns
-  `principalName` into the PostgreSQL role name — which would make the UPN the
-  wrong login — is unverified; check it on the first real connection.
+- **`principal_name` must be the UPN, not the display name** — ARM makes it the
+  PostgreSQL role name verbatim. Registered as `Jay Withers`, the role really is
+  called `Jay Withers`, and connecting as `jay.withers@appvia.io` fails with
+  `password authentication failed`, which points at the token rather than the
+  missing role and makes this hard to diagnose. Confirmed both ways: the display
+  name broke the login, the UPN fixed it. Note the `az` flag for this is called
+  `--display-name`, which is how the trap gets set. Read what is actually
+  registered with:
+
+  ```bash
+  SUB=$(az account show --query id -o tsv)
+  az rest --method get --url "https://management.azure.com/subscriptions/$SUB/resourceGroups/rg-marketagent-dev/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-marketagent-dev/administrators?api-version=2023-06-01-preview" --query "value[].properties.principalName"
+  ```
 - `authentication { password_auth_enabled = false }` keeps the passwordless
   posture: `administrator_login`/`administrator_password` stay unset and no
   database password exists in source, state or Key Vault.
@@ -253,10 +262,42 @@ values to Terraform or tfvars.
 
 Granting the managed identity database access needs
 `SELECT pgaadauth_create_principal(...)`, SQL that the `azurerm` provider cannot
-execute — it's a documented one-off manual step in the README, deliberately
-deferred since no application needs it yet. The alternative, if it ever becomes
+execute. **It has been run** — `uai-marketagent-dev` exists as a role with
+`CONNECT`, `USAGE, CREATE ON SCHEMA public` and default privileges on future
+tables and sequences. Re-running is harmless. The alternative, if it ever becomes
 annoying, is an Entra security group as server administrator with the identity as
 a member (adds the `azuread` provider and needs directory permissions).
+
+### Running SQL by hand
+
+`sql/` at the repository root holds one self-contained file per task, executed by
+`scripts/Invoke-DbSql.ps1`. The split is deliberate: each `.sql` file names its
+own identities and databases literally, so it runs under plain `psql --file`, and
+the script is connection plumbing that knows nothing about what it runs.
+
+- **`pgaadauth` exists only in the `postgres` maintenance database.** The
+  application database has `plpgsql` and nothing else, so
+  `pgaadauth_create_principal` fails there with `function ... does not exist` —
+  which reads like a syntax or type problem rather than a wrong-database one.
+  Roles are cluster-wide, so `grant-uai-access.sql` does the create after
+  `\connect postgres`, then `\connect psqldb-marketagent-dev` for the GRANTs.
+  `\connect` mid-file reuses the same token, so no re-authentication is needed.
+- The script hardcodes the dev resource names as parameter defaults. That is safe
+  precisely because the naming convention has no random suffix, and it keeps
+  Terraform, the state backend and git out of the path entirely.
+- **Firewall rules require public access.** With
+  `public_network_access_enabled = false` the API refuses every firewall
+  operation, `list` included, and with no VNet or private endpoint the server is
+  then unreachable by anything — the container apps included, since the
+  "allow Azure services" sentinel is itself a firewall rule.
+- The rule is named after the caller's public IP and reused if present; removal
+  is prompted rather than automatic (`-KeepFirewallRule`, assumed when stdin is
+  redirected). Firewall changes serialise on the server, so a second one while
+  the first is still processing fails with `ServerIsBusy` — which is why a kept
+  rule makes a retry loop much quicker.
+- `$PSNativeCommandUseErrorActionPreference` is **off by default even in
+  PowerShell 7.6**, so the script opts in explicitly; without it a failing `az`
+  or `psql` is silently ignored.
 
 Deliberately destroyable: `purge_protection_enabled = false` on the Key Vault and
 `prevent_deletion_if_contains_resources = false` on the provider, both so
