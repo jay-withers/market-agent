@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     postgres_port: int = 5432
     postgres_database: str = "investagent"
     postgres_user: str = "postgres"
+    # Empty against Azure, which has no password at all — that is the signal to
+    # authenticate with an Entra token instead. Set only for a local Postgres,
+    # which `docker compose` runs with ordinary password auth.
+    postgres_password: str = ""
 
     key_vault_uri: str = ""
     # The managed identity's client id. Empty locally, which is the signal to
@@ -62,6 +66,19 @@ class Settings(BaseSettings):
     # low | medium | high | xhigh | max. Only meaningful for the analysis
     # model — `effort` errors on the pre-4.6 filter model.
     analysis_effort: str = "high"
+
+    # Alpaca. The paper host by default and nowhere else: the live host takes
+    # the same credentials and the same request shapes, so a wrong base URL
+    # would place real orders with no other symptom.
+    alpaca_trading_base_url: str = "https://paper-api.alpaca.markets"
+    alpaca_data_base_url: str = "https://data.alpaca.markets"
+    # `sip` is the consolidated tape and the right source for a closing price;
+    # this account has it. Verified against the alternative: `iex` reports one
+    # exchange only, which on NVDA meant 4.9M shares against SIP's 157M and a
+    # close of 224.435 against 224.41. Set explicitly rather than left to the
+    # account default so that losing the subscription fails the run visibly
+    # instead of silently downgrading which prices the experiment ran against.
+    alpaca_data_feed: str = "sip"
 
     log_level: str = Field(default="INFO")
 

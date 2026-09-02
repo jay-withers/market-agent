@@ -26,6 +26,7 @@ from __future__ import annotations
 from typing import Any
 
 import psycopg
+from psycopg import Connection
 from psycopg_pool import ConnectionPool
 
 from .settings import credential, settings
@@ -52,16 +53,35 @@ class EntraConnection(psycopg.Connection):
         return super().connect(conninfo, **kwargs)  # type: ignore[return-value]
 
 
+def uses_password() -> bool:
+    """Whether to authenticate with a password rather than an Entra token.
+
+    The Azure server has no password — `password_auth_enabled` is off — so an
+    empty setting means "use a token". A local Postgres, which `docker compose`
+    runs for the offline loop, has nothing else to offer.
+    """
+    return bool(settings().postgres_password)
+
+
 def conninfo() -> str:
     cfg = settings()
-    return (
-        f"host={cfg.postgres_host} port={cfg.postgres_port} "
-        f"dbname={cfg.postgres_database} user={cfg.postgres_user} "
+    parts = [
+        f"host={cfg.postgres_host}",
+        f"port={cfg.postgres_port}",
+        f"dbname={cfg.postgres_database}",
+        f"user={cfg.postgres_user}",
+    ]
+    if uses_password():
+        parts.append(f"password={cfg.postgres_password}")
+        # A local container has no certificate worth verifying, and requiring
+        # TLS there just fails the connection.
+        parts.append("sslmode=prefer")
+    else:
         # require, not verify-full: Azure terminates TLS with a public CA, but
         # the container image carries no CA bundle pinning and a certificate
         # change would take the agent down silently at 06:00 UTC.
-        f"sslmode=require"
-    )
+        parts.append("sslmode=require")
+    return " ".join(parts)
 
 
 _pool: ConnectionPool | None = None
@@ -78,7 +98,10 @@ def pool() -> ConnectionPool:
     if _pool is None:
         _pool = ConnectionPool(
             conninfo(),
-            connection_class=EntraConnection,
+            # Only wrap the connection when there is a token to inject; with a
+            # password configured the subclass would replace it with an Entra
+            # token the local server knows nothing about.
+            connection_class=Connection if uses_password() else EntraConnection,
             min_size=0,
             max_size=4,
             max_lifetime=MAX_CONNECTION_LIFETIME_SECONDS,

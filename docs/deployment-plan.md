@@ -207,8 +207,12 @@ documented, and the brief's worked example is a test: recommend BUY £50 NVDA wi
 an £80 existing position against a £100 max position, approve £20.
 
 Currency: Alpaca is USD, the experiment is GBP. A daily GBP/USD rate from
-`frankfurter.app` (free, no key, ECB rates) is cached, stored on every trade and
+Frankfurter (free, no key, ECB rates) is cached, stored on every trade and
 every `daily_performance` row, so the £500 figure is always reconstructible.
+The endpoint is `https://api.frankfurter.dev/v1/latest?base=GBP&symbols=USD` —
+the `frankfurter.app` host an earlier draft named now 301s, and the path has
+gained a `/v1` prefix, so the obvious URL returns a 404 JSON body rather than
+an HTTP error.
 Our Postgres tables are the source of truth for the portfolio; Alpaca is the
 executor and the data feed. A `DRY_RUN` flag runs the whole loop and persists
 decisions without submitting an order — the safe first deploy.
@@ -263,7 +267,7 @@ adding it later is a code change only.
   repo's only change is moving the pinned digest to the version that carries it.
   `uv` gets installed by the Makefile bootstrap rather than baked in, unless your
   image ships it too.
-- `Makefile`: new `build`, `push`, `migrate`, `deploy`, `run-agent`, `logs`, `up`
+- `Makefile`: new `build`, `push`, `sql`, `deploy`, `run-agent`, `logs`, `up`
   targets. Widen the help `printf` from `%-10s` — the current width truncates the
   new names.
 
@@ -306,7 +310,9 @@ These block a working deploy and I can't do them for you:
 - `pytest apps/investagent` — risk engine first, including the brief's £50→£20 case.
 - `docker compose up` — full stack against local Postgres, no Azure. Load the
   dashboard, confirm every panel renders from real API responses.
-- `make migrate` then `psql` the server and check the tables and `schema_migrations`.
+- `make sql` then `psql` the server and check the tables and `schema_migrations`.
+  Named `sql`, not `migrate`: it reapplies every file in `sql/` rather than
+  tracking which are outstanding.
 - `make deploy`, then `az containerapp job start` the agent and read its logs;
   confirm one `agent_runs` row, decisions in `ai_decisions`, and a trade in
   `trades`. Run it in `DRY_RUN` first.

@@ -4,7 +4,7 @@ ENV ?= dev
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install lint test secrets init fmt validate plan apply
+.PHONY: help install lint test secrets sql init fmt validate plan apply
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -24,6 +24,9 @@ test: ## Run the Python test suite
 
 secrets: ## Prompt for the application secrets and store them in Key Vault
 	./scripts/Set-KeyVaultSecrets.ps1
+
+sql: ## Run every SQL file in sql/ against the database, in filename order
+	./scripts/Invoke-DbSql.ps1
 
 lint: ## Run all pre-commit hooks against every file
 	pre-commit run --all-files

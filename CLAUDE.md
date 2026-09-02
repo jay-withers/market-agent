@@ -450,6 +450,79 @@ second layer is what caught both schema problems above, so keep it — and note
 it is `httpx2`, not `httpx`: the 1.x SDK moved, and passing an `httpx.Client`
 raises a `TypeError`.
 
+### The agent job, and what the live APIs actually do
+
+`jobs/agent.py` is the loop: state, prices, news, cheap filter, analysis, risk
+engine, paper trade, persist — all inside one `agent_runs` row opened before
+any work, so a crash leaves evidence. `llm` and `broker` are injectable, which
+is the only way to exercise the loop without spending money and placing orders.
+
+**The LLM is the largest running cost, and it is not small.** A measured run
+over the ten-name watchlist: 81 articles fetched, **110 filter calls** (one per
+article/ticker pair — an article tagged with three watchlist names costs three),
+42 relevant, 9 analyses. That is **$0.43 per run**, roughly **£10/month** at one
+run a day — comparable to the £13/month database, in a repo whose entire design
+is "nothing bills meaningfully while idle". The filter is $0.13 of it and the
+analysis $0.30. The obvious lever is batching several articles into one filter
+call, which would cut 110 calls to about 6; it has not been done, and the
+per-article call is the honest baseline to measure against.
+
+**Cost must be accumulated per call, never derived from token totals.** The two
+stages use different models at different rates, so pricing a mixed token total
+at either rate is simply wrong — it read 30% high when the filter's Haiku
+tokens were priced as Sonnet ($0.566 against a true $0.434). The token columns
+still hold the mixed totals, which is fine because they are counts.
+
+**"Submitted, no fill" is the normal outcome of a scheduled run.** The agent
+runs at 06:00 UTC and the US market opens at 14:30, so a market order sits
+`accepted` for eight hours. Consequences: `trades.quantity` had to become
+nullable (a notional order never names a quantity — Alpaca derives it), a
+`client_order_id` column was added so a fill can be reconciled later, and cash
+and positions move **only** on an actual fill. `002-trade-submission-fields.sql`
+is that correction.
+
+**An order POST is never retried.** `fetch.post_json` deliberately does not
+share `get_json`'s retry: a 503 that executed before failing to answer is
+indistinguishable from one that did not, and a retried order is a duplicated
+trade. `client_order_id` is deterministic per decision so a *manual* retry is
+idempotent at the broker and updates the existing `trades` row.
+
+Live API facts, all verified rather than assumed:
+
+- **The Alpaca paper account holds $100,000 with $400,000 buying power**, against
+  a notional £500. It will happily execute orders 800x too large, so its balance
+  is not a safety net — the risk engine and our own `portfolio` table are the
+  only things bounding size, and `positions`/`portfolio` are the ledger.
+- **`feed=sip`, not `iex`.** This account has SIP, the consolidated tape. On
+  NVDA, `iex` reported 4.9M shares against SIP's 157M and a close of 224.435
+  against 224.41. Set explicitly so losing the subscription fails the run
+  instead of silently changing which prices the experiment ran against.
+- **The FX endpoint is `https://api.frankfurter.dev/v1/latest`.** The
+  `frankfurter.app` host 301s and the path needs the `/v1`; without it you get a
+  **404 body with an HTTP 200 shape**, which arrives as a missing dict key
+  rather than an HTTP error. `fx.py` reports that case explicitly.
+- **News is tagged with every symbol an article mentions** — one live article
+  listed ten. `news.py` narrows to the watchlist before storing, which is what
+  keeps `news.tickers` meaningful.
+
+`db.py` picks its authentication from whether `POSTGRES_PASSWORD` is set: empty
+means an Entra token (Azure has no password at all), set means ordinary password
+auth for the local Postgres that `docker compose` runs. Without that split the
+local loop could not connect.
+
+`repository.py` is a deviation from the plan's file layout, which lists no such
+module. The alternative is the same SQL in `jobs/agent.py` and again in the
+API's routers. Every function takes a connection rather than reaching for the
+pool, so the agent can put a decision and its trade in one transaction — a
+trade with no decision behind it would be unauditable.
+
+Tests never touch Azure or the network: `tests/conftest.py` sets every secret as
+an environment variable and **deletes `KEY_VAULT_URI`**, so a missing one fails
+rather than falling through to a real call, and it clears both `settings()` and
+`secret()` caches around each test. HTTP is faked with `httpx.MockTransport` via
+`tests/helpers.py`. Note `tests/` is a package, so helpers import as
+`tests.helpers` — a bare `from conftest import ...` does not resolve.
+
 **`ruff-format`'s upstream hook includes `markdown` in its `types_or`**, so it
 reformats Python code blocks inside `.md` files — it rewrote the aligned
 comments in `docs/deployment-plan.md` on its first run. The hook is pinned to
