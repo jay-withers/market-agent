@@ -2,7 +2,8 @@
   "name": "terraform",
   "image": "ghcr.io/jay-withers/dev-containers/terraform:latest@sha256:aa9938733fc78d0abe0a5c26b60b306007cefc8c11cd990116197de524c009b8",
   "mounts": [
-    "source=${localEnv:HOME}/Git,target=/Users/jay/Git,type=bind"
+    "source=${localEnv:HOME}/Git,target=/Users/jay/Git,type=bind",
+    "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
   ],
   "customizations": {
     "vscode": {
@@ -28,5 +29,6 @@
     }
   },
   "remoteUser": "vscode",
-  "postCreateCommand": "make install"
+  "postCreateCommand": "make install",
+  "postStartCommand": "sudo /usr/local/bin/docker-socket-setup"
 }
