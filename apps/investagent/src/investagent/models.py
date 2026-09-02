@@ -44,14 +44,17 @@ Constraint = Literal[
 ]
 
 
-def money(value: Decimal | int | str) -> Decimal:
+def money(value: Decimal | int | str | float) -> Decimal:
     """Quantize to the money scale, always downwards.
 
     Rounding towards zero rather than to nearest is deliberate: every caller is
     either a limit or headroom against a limit, so rounding up could approve a
     trade a hair over a cap.
+
+    `float` is accepted for exactly one caller: the LLM's suggested amount,
+    which arrives as a JSON number. Nothing else should be passing one.
     """
-    return Decimal(value).quantize(MONEY, rounding=ROUND_DOWN)
+    return Decimal(str(value)).quantize(MONEY, rounding=ROUND_DOWN)
 
 
 # ---------------------------------------------------------------------------
@@ -59,34 +62,50 @@ def money(value: Decimal | int | str) -> Decimal:
 # ---------------------------------------------------------------------------
 
 
+# Docstrings and Field descriptions on the two classes below are sent to the
+# model: `messages.parse()` builds its JSON schema from the Pydantic model, and
+# the class docstring becomes the schema's `description`. So they are written
+# for the model as instructions, and anything that is really a note to a future
+# maintainer goes in a comment like this one instead.
 class NewsRelevance(BaseModel):
-    """The cheap filter's verdict on one article/ticker pair."""
+    """Whether one news article is worth analysing for one ticker."""
 
-    relevant: bool
-    sentiment: Sentiment
-    sentiment_score: float = Field(ge=-1.0, le=1.0)
-    rationale: str
+    relevant: bool = Field(
+        description="True only if this could plausibly move the price or change the "
+        "investment case."
+    )
+    sentiment: Sentiment = Field(description="Sentiment of the article towards the ticker.")
+    sentiment_score: float = Field(
+        ge=-1.0, le=1.0, description="-1.0 most negative, 0.0 neutral, 1.0 most positive."
+    )
+    rationale: str = Field(description="One sentence explaining the relevance decision.")
 
 
+# `suggested_amount_gbp` is a `float`, the one place in this system money is
+# not a Decimal. A recommendation is an *opinion*, not an accounting figure:
+# the risk engine quantizes it before using it and nothing downstream treats it
+# as authoritative, so the imprecision cannot reach a stored figure. Declaring
+# it Decimal instead produced a three-branch `anyOf` in the schema — number,
+# string with a Decimal regex, or null — which is a worse thing to hand a model
+# than a plain number.
 class Recommendation(BaseModel):
-    """The analysis model's assessment of one ticker.
+    """A BUY, SELL or HOLD assessment of one ticker."""
 
-    A recommendation is an *opinion*, not an accounting figure — which is why
-    `suggested_amount_gbp` is allowed to arrive as a JSON number and be coerced
-    to `Decimal` through a float. The imprecision is irrelevant because the risk
-    engine quantizes it before doing anything with it, and because nothing
-    downstream treats the suggestion as authoritative. Every exact amount in
-    this system originates from the risk engine or the database, not from here.
-    """
-
-    ticker: str
-    action: Action
-    confidence: float = Field(ge=0.0, le=1.0)
-    # None for HOLD. The engine rejects a BUY or SELL without an amount rather
-    # than inventing one.
-    suggested_amount_gbp: Decimal | None = None
-    reasoning: str
-    risks: str
+    ticker: str = Field(description="The ticker this assessment is about.")
+    action: Action = Field(
+        description="HOLD is a real answer and usually the right one; do not "
+        "manufacture conviction."
+    )
+    confidence: float = Field(
+        ge=0.0, le=1.0, description="0.0 no confidence, 1.0 complete confidence."
+    )
+    suggested_amount_gbp: float | None = Field(
+        default=None,
+        description="Size of the trade in GBP. Omit for HOLD. A deterministic risk "
+        "engine may reduce or refuse this.",
+    )
+    reasoning: str = Field(description="What in the evidence drove this call. Be specific.")
+    risks: str = Field(description="The strongest argument against this recommendation.")
 
 
 # ---------------------------------------------------------------------------

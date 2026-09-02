@@ -82,3 +82,23 @@ def test_an_unknown_action_is_rejected():
         Recommendation(ticker="NVDA", action="buy", confidence=0.9, reasoning="r", risks="x")
 
     assert caught.value.errors()[0]["type"] == "literal_error"
+
+
+def test_the_llm_suggested_amount_is_a_float_and_quantizes_cleanly():
+    """The one float in the system, and money() must not import its artefacts."""
+    rec = Recommendation(
+        ticker="NVDA",
+        action="BUY",
+        confidence=0.8,
+        suggested_amount_gbp=0.1,
+        reasoning="r",
+        risks="x",
+    )
+
+    assert isinstance(rec.suggested_amount_gbp, float)
+    # Decimal(0.1) is 0.1000000000000000055511151231257827; via str it is 0.1.
+    assert money(rec.suggested_amount_gbp) == D("0.1000")
+
+
+def test_money_of_a_float_matches_money_of_the_same_decimal():
+    assert money(33.3339) == money(D("33.3339"))

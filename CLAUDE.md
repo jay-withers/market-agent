@@ -404,6 +404,52 @@ them land rather than declared up front.
   well inside a token's ~60 minutes. The pool is built lazily, so importing the
   module doesn't demand a credential.
 
+### The LLM cascade
+
+Two stages, two models, **two different request shapes** — and the shapes are
+the trap, because getting one wrong is a 400 from the API at 06:00 UTC in a
+container, not a wrong answer here.
+
+- `claude-haiku-4-5` (`FILTER_MODEL`) screens news for relevance. It predates
+  the 4.6 family, so `output_config={"effort": ...}` **errors** and adaptive
+  thinking does not exist for it. The filter stage therefore sends neither.
+- `claude-sonnet-5` (`ANALYSIS_MODEL`, $2/$10 per MTok) produces the
+  assessment, with `thinking={"type": "adaptive"}` and
+  `output_config={"effort": "high"}`. It rejects `budget_tokens`,
+  `temperature`, `top_p` and `top_k` with a 400. **Sonnet is the user's
+  explicit choice** — an earlier draft defaulted to `claude-opus-5` and was
+  overruled; don't "upgrade" it back.
+- Neither model accepts an assistant prefill.
+- `_reasoning_params()` in `llm/anthropic_provider.py` is what keeps the two
+  apart, by prefix match against `LEGACY_MODEL_PREFIXES` rather than an exact
+  list, so a dated snapshot id can't silently take the wrong branch.
+
+**`messages.parse()` sends your Pydantic model to the model.** It builds the
+JSON schema from the class, and the **class docstring becomes the schema's
+`description`** while `Field(description=...)` becomes each property's. So
+those strings are prompt text, not internal documentation — notes for a future
+maintainer go in a `#` comment instead. The original `Recommendation` docstring
+explained Python `Decimal` coercion and was being sent to the model verbatim.
+
+For the same reason `Recommendation.suggested_amount_gbp` is a **`float`**, the
+only place in the system money is not a `Decimal`: declared as `Decimal` it
+rendered as a three-branch `anyOf` — number, string with a Decimal regex, or
+null — which is a worse thing to hand a model than a plain number. `money()`
+converts via `str()` so a float's binary artefacts never reach a stored figure,
+and it accepts `float` for that one caller only.
+
+Note that `output_format=` on the `messages.parse()` helper is current, while
+the `output_format` *parameter* on `messages.create()` is deprecated in favour
+of `output_config={"format": ...}`. They are different things, and `parse()`
+merges its own `format` into `output_config` alongside the `effort` we set.
+
+`tests/test_llm.py` passes a fake client and asserts what this code calls;
+`tests/test_llm_wire.py` drives the **real** SDK through an `httpx2`
+`MockTransport` and asserts the request body that would go on the wire. The
+second layer is what caught both schema problems above, so keep it — and note
+it is `httpx2`, not `httpx`: the 1.x SDK moved, and passing an `httpx.Client`
+raises a `TypeError`.
+
 **`ruff-format`'s upstream hook includes `markdown` in its `types_or`**, so it
 reformats Python code blocks inside `.md` files — it rewrote the aligned
 comments in `docs/deployment-plan.md` on its first run. The hook is pinned to

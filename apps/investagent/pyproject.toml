@@ -9,9 +9,10 @@ requires-python = ">=3.12"
 # splitting them would mean three builds of near-identical layers.
 #
 # Dependencies are added as the modules that need them land, rather than
-# declared up front — anthropic, fastapi and httpx arrive with the agent job,
-# the API and the market data client respectively.
+# declared up front — fastapi and httpx arrive with the API and the market data
+# client respectively.
 dependencies = [
+  "anthropic>=1.3",
   "pydantic>=2.9",
   "pydantic-settings>=2.5",
   "psycopg[binary,pool]>=3.2",

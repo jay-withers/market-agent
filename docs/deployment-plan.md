@@ -168,19 +168,28 @@ usage and outcome.
 
 Model cascade, one env var each:
 
-- `claude-haiku-4-5` filters the news batch for relevance (cheap, high volume).
-- `claude-opus-5` produces the investment assessment, with
+- `claude-haiku-4-5` (`FILTER_MODEL`) filters the news batch for relevance —
+  cheap, high volume, $1/$5 per MTok.
+- `claude-sonnet-5` (`ANALYSIS_MODEL`) produces the investment assessment, with
   `thinking={"type": "adaptive"}` and `output_config={"effort": "high"}`.
+  $2/$10 per MTok. **Decided by the user**; an earlier draft of this plan
+  defaulted to `claude-opus-5` and was overruled.
 
 Structured output via `client.messages.parse(..., output_format=Recommendation)`
 reading `response.parsed_output` — a Pydantic model of action, ticker, confidence,
-suggested amount, reasoning and risks. No `budget_tokens`, no assistant prefill,
-no `temperature`: all three are rejected by these models.
+suggested amount, reasoning and risks. The `output_format` *parameter* on
+`messages.create()` is deprecated in favour of `output_config={"format": ...}`,
+but the `output_format=` keyword on the `messages.parse()` helper is current;
+they are different things.
 
-> Worth flagging: the option you picked named `claude-sonnet-5`. I've defaulted
-> the analysis stage to `claude-opus-5` because Anthropic's current guidance is
-> to default there and at one run a day over ~10 tickers the difference is pennies.
-> It's a single env var (`ANALYSIS_MODEL`) if you'd rather have Sonnet.
+**The two stages need different request shapes, and this is the trap.**
+`claude-sonnet-5` rejects `budget_tokens`, `temperature`, `top_p` and `top_k`
+with a 400, and takes `thinking={"type": "adaptive"}` plus
+`output_config={"effort": ...}`. `claude-haiku-4-5` is a pre-4.6 model, so it is
+the mirror image: `effort` **errors**, adaptive thinking is unavailable (it would
+need `{"type": "enabled", "budget_tokens": N}`), and sampling parameters are
+allowed. Neither model accepts an assistant prefill. So the filter stage sends
+neither thinking nor effort, and only the analysis stage sends both.
 
 **The risk engine is the piece that matters most.** A pure function, no I/O, fully
 unit-tested:

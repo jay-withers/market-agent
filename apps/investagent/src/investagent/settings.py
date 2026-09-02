@@ -55,6 +55,14 @@ class Settings(BaseSettings):
 
     api_require_token: bool = False
 
+    # The model cascade: something cheap screens a large batch of news, and
+    # something capable reasons about what survives. One env var each.
+    filter_model: str = "claude-haiku-4-5"
+    analysis_model: str = "claude-sonnet-5"
+    # low | medium | high | xhigh | max. Only meaningful for the analysis
+    # model — `effort` errors on the pre-4.6 filter model.
+    analysis_effort: str = "high"
+
     log_level: str = Field(default="INFO")
 
 
