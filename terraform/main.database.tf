@@ -45,7 +45,7 @@ resource "azurerm_postgresql_flexible_server" "this" {
   # No high_availability block: a standby replica doubles the compute bill to
   # buy availability this experiment doesn't need.
 
-  public_network_access_enabled = true
+  public_network_access_enabled = false
 
   # Entra-only, matching the passwordless posture everywhere else: with
   # password_auth_enabled false, administrator_login and administrator_password
