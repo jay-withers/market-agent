@@ -35,6 +35,8 @@ def fake_secrets(monkeypatch):
 
     settings_module.settings.cache_clear()
     settings_module.secret.cache_clear()
+    settings_module.optional_secret.cache_clear()
     yield
     settings_module.settings.cache_clear()
     settings_module.secret.cache_clear()
+    settings_module.optional_secret.cache_clear()

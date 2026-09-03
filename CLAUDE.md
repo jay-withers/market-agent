@@ -616,9 +616,21 @@ regression.
   step function would be nonsense.
 - **A mail failure never loses the summary.** `mailer.send` returns a status
   rather than raising; the row is stored either way and the dashboard renders
-  from it. `SUMMARY_EMAIL_TO` is empty by default, so sending is opt-in — a job
-  that emails on every development run is worse than one switched on
-  deliberately.
+  from it.
+- **The recipient lives in Key Vault, not in `common_env`.** This repository is
+  public and so are `terraform/environments/*.tfvars`, so an address in either
+  is committed permanently. It resolves through
+  `optional_secret("SUMMARY-EMAIL-TO")`, which reads the environment first and
+  then the vault — so a local `.env` still works, and changing the recipient in
+  a deployed environment is `az keyvault secret set` plus the next run, with no
+  redeploy. Absent means store the summary and send nothing, so sending is
+  opt-in: a job that emails on every development run is worse than one switched
+  on deliberately.
+- **`optional_secret` treats absence and failure differently.** A missing
+  variable, no vault, or a secret not in the vault all return `None`; an
+  authentication or network error propagates, because "the credential is
+  broken" must never look like "no email configured". `secret()` raising stays
+  right for an API key the job cannot run without.
 - Reconciliation commits per trade: one order the broker cannot answer for must
   not roll back the fills already applied.
 

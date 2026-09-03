@@ -15,14 +15,24 @@ from tests.helpers import json_client, sequence_client
 
 
 def _configure(monkeypatch, to: str = "me@example.com") -> None:
-    monkeypatch.setenv("SUMMARY_EMAIL_TO", to)
+    # The recipient resolves through optional_secret, which reads the
+    # environment before Key Vault — so the same variable name still works.
+    if to:
+        monkeypatch.setenv("SUMMARY_EMAIL_TO", to)
+    else:
+        monkeypatch.delenv("SUMMARY_EMAIL_TO", raising=False)
     monkeypatch.setenv("SUMMARY_EMAIL_FROM", "InvestAgent <bot@example.com>")
     settings_module.settings.cache_clear()
     settings_module.secret.cache_clear()
+    settings_module.optional_secret.cache_clear()
 
 
 def test_no_recipient_means_skipped_not_failed(monkeypatch):
-    """The default: a job that emails on every development run is worse."""
+    """The default: a job that emails on every development run is worse.
+
+    Absence must be `skipped`, not a failure — the recipient is an opt-in
+    switch, not something the job cannot run without.
+    """
     _configure(monkeypatch, to="")
 
     result = send("subject", "<p>html</p>", "text")

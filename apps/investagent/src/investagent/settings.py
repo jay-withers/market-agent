@@ -92,14 +92,19 @@ class Settings(BaseSettings):
     # instead of silently downgrading which prices the experiment ran against.
     alpaca_data_feed: str = "sip"
 
-    # The daily summary email. Resend refuses a `from` on an unverified domain,
-    # so the default is their shared testing sender — which only delivers to the
-    # address that owns the Resend account. A real domain replaces it later.
+    # Resend refuses a `from` on an unverified domain, so the default is their
+    # shared testing sender — which only delivers to the address that owns the
+    # Resend account. A real domain replaces it later.
     summary_email_from: str = "InvestAgent <onboarding@resend.dev>"
-    # Empty means compose and store the summary but send nothing, which is the
-    # right default: a job that emails on every run during development is worse
-    # than one that has to be switched on.
-    summary_email_to: str = ""
+
+    # The *recipient* is deliberately not here. It lives in Key Vault, read via
+    # optional_secret("SUMMARY-EMAIL-TO"), for two reasons: this repository is
+    # public and so are terraform/environments/*.tfvars, so a personal address
+    # in either would be committed permanently; and a value read at runtime can
+    # be changed with `az keyvault secret set` and picked up by the next run,
+    # with no new revision. Absent means compose and store the summary but send
+    # nothing, which is the right default — a job that emails on every
+    # development run is worse than one switched on deliberately.
 
     # Honest proxies, since Alpaca only covers US-listed instruments: SPY for
     # the S&P 500, VT for a global index, and EWU as a UK proxy — *not* the
@@ -144,6 +149,38 @@ def secret(name: str) -> str:
 
     client = SecretClient(vault_url=uri, credential=credential())
     return client.get_secret(name).value or ""
+
+
+@cache
+def optional_secret(name: str) -> str | None:
+    """Resolve a secret that is allowed not to exist, returning None if it does not.
+
+    For values that switch a behaviour on rather than being required to run —
+    the summary email's recipient is the case this exists for. `secret()`
+    raising is right for an API key the job cannot work without, and wrong for
+    a setting whose absence means "don't do that bit".
+
+    **Absence is not the same as failure.** A missing env var, no vault
+    configured, or a secret that is not in the vault all return None; an
+    authentication or network error propagates, because "the credential is
+    broken" must not look like "no email configured".
+    """
+    from_env = os.environ.get(name.replace("-", "_").upper())
+    if from_env:
+        return from_env
+
+    uri = settings().key_vault_uri
+    if not uri:
+        return None
+
+    from azure.core.exceptions import ResourceNotFoundError
+    from azure.keyvault.secrets import SecretClient
+
+    client = SecretClient(vault_url=uri, credential=credential())
+    try:
+        return client.get_secret(name).value or None
+    except ResourceNotFoundError:
+        return None
 
 
 # The scope a Key Vault data-plane token is issued for. `az` calls the same

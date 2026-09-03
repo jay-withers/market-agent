@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .fetch import FetchError, post_json
-from .settings import secret, settings
+from .settings import optional_secret, secret, settings
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +38,12 @@ def send(subject: str, html: str, text: str, client: Any = None) -> MailResult:
     switched on deliberately.
     """
     cfg = settings()
-    if not cfg.summary_email_to:
-        logger.info("no SUMMARY_EMAIL_TO configured, not sending")
+    # From Key Vault rather than the environment Terraform injects: a personal
+    # address in a public repository is permanent, and a runtime lookup means
+    # changing the recipient needs no redeploy.
+    recipient = optional_secret("SUMMARY-EMAIL-TO")
+    if not recipient:
+        logger.info("no SUMMARY-EMAIL-TO configured, not sending")
         return MailResult(status="skipped")
 
     try:
@@ -48,7 +52,7 @@ def send(subject: str, html: str, text: str, client: Any = None) -> MailResult:
             body={
                 "from": cfg.summary_email_from,
                 # Resend takes a list even for one recipient.
-                "to": [address.strip() for address in cfg.summary_email_to.split(",")],
+                "to": [address.strip() for address in recipient.split(",") if address.strip()],
                 "subject": subject,
                 "html": html,
                 "text": text,
