@@ -8,7 +8,7 @@ KEY_VAULT_URI ?= https://kv-marketagent-dev.vault.azure.net/
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install lint test secrets sql up down logs run-agent init fmt validate plan apply
+.PHONY: help install lint test secrets sql up down logs run-agent build push deploy logs-azure init fmt validate plan apply
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -63,6 +63,46 @@ run-agent: ## Run the agent once against the local stack (real APIs, no orders)
 
 lint: ## Run all pre-commit hooks against every file
 	pre-commit run --all-files
+
+# --platform linux/amd64 is not optional. Container Apps runs amd64 only, and
+# this dev host is arm64 (Docker Desktop on Apple Silicon): a native build
+# deploys an image that crash-loops with an exec format error and no other
+# clue. buildx emulates, so it is slower than a native build.
+#
+# The tag is the short git SHA, and it must be immutable — Container Apps only
+# creates a revision when the template changes, so a re-pushed moving tag
+# deploys nothing and reports success.
+IMAGE_TAG ?= $(shell git rev-parse --short HEAD)
+IMAGE_REGISTRY ?= ghcr.io/jay-withers/market-agent
+
+build: ## Build both images for linux/amd64 (set IMAGE_TAG, default: git sha)
+	docker buildx build --platform linux/amd64 \
+	  -t $(IMAGE_REGISTRY)/investagent:$(IMAGE_TAG) \
+	  --load ./apps/investagent
+	docker buildx build --platform linux/amd64 \
+	  -t $(IMAGE_REGISTRY)/dashboard:$(IMAGE_TAG) \
+	  --load ./apps/dashboard
+
+# Needs a token with write:packages — `gh auth refresh --scopes write:packages,read:packages`.
+# ghcr defaults a new package to private regardless of repository visibility, so
+# both need flipping to public once after the first push or Container Apps
+# cannot pull them.
+push: ## Push both images to ghcr.io (needs write:packages)
+	gh auth token | docker login ghcr.io -u $$(gh api user --jq .login) --password-stdin
+	docker push $(IMAGE_REGISTRY)/investagent:$(IMAGE_TAG)
+	docker push $(IMAGE_REGISTRY)/dashboard:$(IMAGE_TAG)
+
+deploy: ## terraform apply with the built image tag (set ENV, default dev)
+	terraform -chdir=$(TF_DIR) init -reconfigure -backend-config=backends/$(ENV).hcl
+	terraform -chdir=$(TF_DIR) apply \
+	  -var-file=environments/$(ENV).tfvars \
+	  -var image_tag=$(IMAGE_TAG)
+
+logs-azure: ## Tail the agent job's logs in Azure
+	az containerapp job logs show \
+	  --name $$(terraform -chdir=$(TF_DIR) output -raw agent_job_name) \
+	  --resource-group $$(terraform -chdir=$(TF_DIR) output -raw resource_group_name) \
+	  --follow
 
 # -backend=false: the azurerm backend is configured partially (see
 # terraform/backends/), so a plain init would prompt for the missing values.
