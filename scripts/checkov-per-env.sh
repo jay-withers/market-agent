@@ -26,7 +26,9 @@ fi
 # resources of its own to scan, so the trade was pure cost for zero benefit
 # here. Revisit if the module tree grows to include modules with real
 # resources; checkov will keep logging a "Failed to download module" warning
-# in the meantime, which is expected and harmless.
+# in the meantime, which is expected and harmless. (The naming module is still
+# the only external module here — every resource this configuration creates is
+# declared locally, so there's nothing external worth scanning.)
 
 status=0
 for tfvars in "${tfvars_files[@]}"; do

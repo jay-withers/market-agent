@@ -1,0 +1,123 @@
+# The local loop: Postgres with the schema baked in, plus the API, needing no
+# Azure at all.
+#
+# "Local" is not "offline", and the distinction matters for the agent service.
+# The API only reads Postgres, so it genuinely runs in isolation. The agent
+# still calls Alpaca for prices and news, Frankfurter for the rate, and
+# Anthropic for both model stages — real requests, and the Anthropic ones are
+# billed. What it will not do is place an order: DRY_RUN is true here, so the
+# dry-run broker records what it would have submitted.
+#
+# Secrets come from Key Vault, not from a file. The image has no `az`, so it
+# cannot authenticate on its own — instead `make run-agent` fetches a
+# short-lived, Key Vault-scoped token with your az login and passes it in as
+# AZURE_KEYVAULT_TOKEN. It expires in about an hour and unlocks nothing else,
+# which beats writing four long-lived API keys into a .env. A .env still works
+# if you prefer it, or if you have no Azure access at all.
+#
+# Deliberately free of bind mounts. The Docker daemon here runs on the host
+# (docker-outside-of-docker), so a relative bind mount means a *host* path and
+# fails from inside the dev container; build contexts are sent by the client and
+# work from either side.
+#
+# Works because settings.secret() reads an environment variable before falling
+# back to Key Vault, and db.py uses password authentication when
+# POSTGRES_PASSWORD is set instead of an Entra token. Put the API keys in a
+# local .env — see .env.example.
+#
+# Built for the host's native architecture on purpose. The deployable image
+# must be linux/amd64 (see the Dockerfile), but forcing that here would run
+# every local container under emulation for no benefit.
+
+name: investagent
+
+services:
+  db:
+    # Built rather than pulled so the migrations can be baked in. A bind mount
+    # of ./sql would be resolved by the daemon on the host, where the dev
+    # container's /workspaces path does not exist — see docker/Dockerfile.db.
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.db
+    environment:
+      POSTGRES_PASSWORD: local
+      POSTGRES_DB: investagent
+    ports:
+      # Published on the *host*. From inside the dev container reach it at the
+      # container's bridge IP, or at host.docker.internal:5432.
+      - "5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d investagent"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ./apps/investagent
+    command: ["api"]
+    environment:
+      ENVIRONMENT: local
+      POSTGRES_HOST: db
+      POSTGRES_DATABASE: investagent
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: local
+      DRY_RUN: "true"
+      LOG_LEVEL: INFO
+      # Empty unless the caller exports them; settings.secret() reads an
+      # environment variable first either way, so an empty vault URI simply
+      # means "expect the keys in the environment".
+      KEY_VAULT_URI: "${KEY_VAULT_URI:-}"
+      AZURE_KEYVAULT_TOKEN: "${AZURE_KEYVAULT_TOKEN:-}"
+    env_file:
+      # Optional: the API needs no API key, so this is only here so one file
+      # serves every service.
+      - path: .env
+        required: false
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  dashboard:
+    build:
+      context: ./apps/dashboard
+    environment:
+      # The browser talks to the API directly, so this must be an address the
+      # *browser* can reach — not the compose service name. Published ports land
+      # on the Docker host, which is where a browser on that host looks.
+      API_ORIGIN: "${API_ORIGIN:-http://localhost:8000}"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - api
+
+  # Not started by default: `docker compose run --rm agent` runs it once. It is
+  # a scheduled job rather than a service, and a restarting container would
+  # trade repeatedly.
+  agent:
+    build:
+      context: ./apps/investagent
+    command: ["agent", "--trigger", "manual"]
+    profiles: ["jobs"]
+    environment:
+      ENVIRONMENT: local
+      POSTGRES_HOST: db
+      POSTGRES_DATABASE: investagent
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: local
+      DRY_RUN: "true"
+      KEY_VAULT_URI: "${KEY_VAULT_URI:-}"
+      AZURE_KEYVAULT_TOKEN: "${AZURE_KEYVAULT_TOKEN:-}"
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db-data:

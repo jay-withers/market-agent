@@ -1,0 +1,22 @@
+# syntax=docker/dockerfile:1
+
+# Postgres for the local loop, with the schema baked in rather than bind
+# mounted. Two reasons, both learned the hard way:
+#
+# 1. A bind mount is resolved by the Docker *daemon*, which here runs on the
+#    host, so `./sql` in a compose file means a host path. Inside the dev
+#    container the repo is at /workspaces/market-agent, which does not exist on
+#    the host, and compose fails with "path is not shared from the host". A
+#    build context is sent by the *client*, so it resolves correctly from
+#    either side.
+# 2. It copies only the numbered migrations. `sql/grant-uai-access.sql` cannot
+#    run here at all: it calls pgaadauth_create_principal, which exists only in
+#    Azure's `postgres` maintenance database, and \connect's to a database named
+#    after the Azure server. As an initdb script it would fail the whole
+#    initialisation.
+
+FROM postgres:16-alpine
+
+# Numbered files only, applied by initdb in filename order — the same order the
+# Invoke-DbSql.ps1 runner uses against Azure.
+COPY sql/0*.sql /docker-entrypoint-initdb.d/
