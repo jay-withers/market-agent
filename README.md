@@ -9,8 +9,8 @@ to six months, whether the AI beats simply putting £500 into a passive index or
 leaving it in a savings account.
 
 This repository contains the Terraform infrastructure and the **application**,
-which runs locally but is **not yet deployed** — see
-[The application](#the-application) and [Deploying](#deploying).
+both deployed and running — see [The application](#the-application) and
+[Deploying](#deploying).
 
 ## What gets deployed
 
@@ -97,20 +97,33 @@ but no order is ever submitted.
 
 ## Deploying
 
-Terraform points all four workloads at real ghcr.io images and `terraform plan`
-is clean, but **nothing is deployed yet** — the images have not been pushed. In
-order:
+All four workloads run from public ghcr.io images. To ship a change:
 
 ```bash
-gh auth refresh --scopes write:packages,read:packages   # the token needs write:packages
-make build push                                        # linux/amd64, tagged with the git SHA
-# then flip both ghcr packages to public, once
-make deploy
+make build push   # linux/amd64, tagged with the git SHA
+make deploy       # terraform apply with that same tag
 ```
 
-Both apps currently serve public Microsoft quickstart placeholder pages, so
-applying before the images exist would replace four working pages with four
-revisions that cannot pull.
+The push needs a `gh` token carrying `write:packages`
+(`gh auth refresh --scopes write:packages,read:packages`), and ghcr defaults a
+*new* package to private regardless of repository visibility — so both packages
+needed flipping to public once, after the first push, or Container Apps cannot
+pull them.
+
+Never deploy a tag that already exists in the registry under different content.
+Container Apps creates a revision only when the template changes, so re-pushing
+a moving tag deploys nothing and reports success; `image_tag` rejects `latest`,
+`main` and `unset` for that reason.
+
+**Apply the SQL before deploying a change that needs it.** `make sql` is not run
+by the deploy, and the schema is not versioned with the image — a migration the
+code depends on has to land first. The agent job queries `companies.is_benchmark`,
+for instance, and would fail outright against a database without
+`004-benchmark-companies.sql`.
+
+**Expect the first request after idle to be slow.** `min_replicas = 0` means a
+cold start, and the first call can take long enough to look like a failure. That
+is the cost design working.
 
 `--platform linux/amd64` is not optional: Container Apps runs amd64 only, and a
 native build on an Apple Silicon host produces an image that crash-loops with an

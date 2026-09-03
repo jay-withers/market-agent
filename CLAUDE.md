@@ -11,27 +11,33 @@ run against a paper-trading broker. No real money, ever — the experiment is
 whether the AI beats a passive index or a savings account over 3–6 months with a
 notional £500.
 
-**The application is written and runs; it is not yet deployed.**
-`apps/investagent/` is the Python package (API, agent job, summary job) and
-`apps/dashboard/` is the React front end, both with Dockerfiles, and
-`docker-compose.yml` runs the lot locally. Everything has been exercised against
-live Alpaca, Anthropic, Frankfurter, Key Vault and PostgreSQL.
+**The application is written, deployed and working.** `apps/investagent/` is the
+Python package (API, agent job, summary job) and `apps/dashboard/` is the React
+front end; both run in Container Apps from public ghcr.io images, and
+`docker-compose.yml` runs the same code locally. All eight steps of
+`docs/deployment-plan.md` are done.
 
-**What remains is the deploy itself.** Terraform now points all four workloads
-at real ghcr.io images, and `terraform plan` is clean (0 add, 4 change, 0
-destroy) — but **the images have never been pushed**, because the `gh` token
-lacks `write:packages`. Applying before they exist would replace four working
-placeholder pages with four revisions that cannot pull, so the order is
-`gh auth refresh --scopes write:packages,read:packages`, then `make build push`,
-then flip both ghcr packages to public, then `make deploy`.
+Verified live on 2026-09-03, image tag `8d2788f`:
 
-Three code paths still have never executed, and they are the ones that break a
-first deploy: **the Entra token path in `db.py`** (local runs set
-`POSTGRES_PASSWORD` and take the password branch), **`ManagedIdentityCredential`**
-(local runs use `StaticTokenCredential`), and the images running on **amd64**
-(built and verified as amd64, but never started).
+- The agent job ran to completion in Azure — 84 articles, 50 relevant, 9
+  decisions, 3 trades, **$0.19, 4m13s** — with `trigger = schedule` and the
+  image tag recorded on the `agent_runs` row. The risk engine refused two of
+  the model's four BUYs on `daily_trade_limit`.
+- The summary job wrote a `daily_performance` row, four benchmark arms and a
+  Sonnet-written `daily_summaries` row in 44 seconds. `email_status` is
+  `skipped` because `SUMMARY_EMAIL_TO` is unset — sending is opt-in.
+- `/readyz` returns `{"status":"ok","database":true}`, which is the **managed
+  identity and the Entra token path to PostgreSQL** both working: those two,
+  plus the images running on amd64, were the three code paths that had never
+  executed anywhere before the deploy.
 
-`docs/deployment-plan.md` is the agreed plan; steps 1-7 are done.
+**A first request after idle is slow.** `min_replicas = 0` means a cold start,
+and the first call can take long enough to look like a failure — that is the
+cost design working, not a fault. Retry before investigating.
+
+**Both apps are publicly reachable and unauthenticated.** Deliberate: the API
+is read-only, so it cannot place a trade or alter a decision however it is
+called, and no response carries a secret, PII or real money.
 
 This repo began as a generic Azure Terraform module template and was converted;
 if something looks like leftover template scaffolding, it probably is.

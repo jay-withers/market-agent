@@ -134,7 +134,7 @@ Four secrets to set by hand before the deploy works: `ANTHROPIC-API-KEY`,
 
 ## Database schema and migrations
 
-Numbered, idempotent SQL files in `sql/` (`001-schema.sql`, `002-seed-watchlist.sql`),
+Numbered, idempotent SQL files in `sql/` (`001-schema.sql`, `003-seed-watchlist.sql`),
 run by the **existing** `scripts/Invoke-DbSql.ps1`. That script currently takes a
 single `-SqlFile`; extend it to accept several files or a directory and run them
 in order under **one** firewall rule and **one** token — its own comments note
@@ -270,6 +270,16 @@ adding it later is a code change only.
 - `Makefile`: new `build`, `push`, `sql`, `deploy`, `run-agent`, `logs`, `up`
   targets. Widen the help `printf` from `%-10s` — the current width truncates the
   new names.
+
+> **Status: complete.** All eight steps below were carried out, and the whole
+> thing is deployed and verified working on image tag `8d2788f`. Kept as the
+> record of what was agreed and why; `CLAUDE.md` is the current description of
+> what exists. Two deviations worth knowing: `repository.py` and `queries.py`
+> are not in the file layout below (the alternative was the same SQL in the
+> agent job and again in the API's routers), and the numbering shifted — the
+> watchlist seed is `003-seed-watchlist.sql`, because `002` became the
+> trade-submission schema correction that a scheduled run's unfilled orders
+> turned out to need.
 
 ## Sequencing
 
