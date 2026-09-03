@@ -1,5 +1,9 @@
-# Both run a public quickstart image for now, so both are publicly reachable
-# unauthenticated placeholder pages.
+# Both are publicly reachable and unauthenticated. That is a deliberate,
+# documented position rather than an oversight: the API is read-only, so this
+# process cannot place a trade or alter a decision however it is called, and no
+# response contains a secret, any PII, or real money. The proper fix is
+# Container Apps EasyAuth with Entra, which `azurerm` does not expose and which
+# would need `azapi`.
 #
 # Separate naming instances so each app carries its own workload name.
 #
@@ -39,9 +43,13 @@ resource "azurerm_container_app" "api" {
 
     container {
       name   = "api"
-      image  = local.placeholder_app_image
+      image  = local.app_image
       cpu    = local.container_cpu
       memory = local.container_memory
+
+      # One image, three entrypoints: the console script picks the workload.
+      command = ["investagent"]
+      args    = ["api"]
 
       dynamic "env" {
         for_each = local.common_env
@@ -50,12 +58,40 @@ resource "azurerm_container_app" "api" {
           value = env.value
         }
       }
+
+      # Liveness deliberately hits /healthz, which does **not** touch the
+      # database. A failed liveness probe restarts the container, so a probe
+      # that depended on PostgreSQL would turn a database blip into a
+      # cluster-wide crash loop.
+      liveness_probe {
+        transport        = "HTTP"
+        port             = local.api_target_port
+        path             = "/healthz"
+        initial_delay    = 5
+        interval_seconds = 30
+        timeout          = 5
+
+        failure_count_threshold = 3
+      }
+
+      # Readiness is where the database check belongs: it takes a replica out
+      # of rotation without killing it.
+      readiness_probe {
+        transport        = "HTTP"
+        port             = local.api_target_port
+        path             = "/readyz"
+        interval_seconds = 10
+        timeout          = 5
+
+        failure_count_threshold = 3
+        success_count_threshold = 1
+      }
     }
   }
 
   ingress {
     external_enabled = true
-    target_port      = 80
+    target_port      = local.api_target_port
     transport        = "auto"
 
     traffic_weight {
@@ -84,23 +120,43 @@ resource "azurerm_container_app" "dashboard" {
 
     container {
       name   = "dashboard"
-      image  = local.placeholder_app_image
+      image  = local.dashboard_image
       cpu    = local.container_cpu
       memory = local.container_memory
 
-      dynamic "env" {
-        for_each = local.common_env
-        content {
-          name  = env.key
-          value = env.value
-        }
+      # API_ORIGIN and nothing else. The dashboard is nginx serving static
+      # files: it holds no credential, touches no database, and passing it
+      # `common_env` would put the database host and the vault URI into a
+      # container that has no use for either.
+      #
+      # The browser talks to the API directly, so this has to be an address the
+      # *browser* can reach — the API's public ingress, not an internal name.
+      # The entrypoint renders it into config.json at start-up, which is what
+      # lets one image serve every environment.
+      env {
+        name  = "API_ORIGIN"
+        value = "https://${azurerm_container_app.api.ingress[0].fqdn}"
+      }
+
+      # nginx answers this from memory, without reaching the API. A dashboard
+      # that restarted whenever the API blipped would be strictly worse than
+      # one showing a stale error.
+      liveness_probe {
+        transport        = "HTTP"
+        port             = local.dashboard_target_port
+        path             = "/healthz"
+        initial_delay    = 3
+        interval_seconds = 30
+        timeout          = 5
+
+        failure_count_threshold = 3
       }
     }
   }
 
   ingress {
     external_enabled = true
-    target_port      = 80
+    target_port      = local.dashboard_target_port
     transport        = "auto"
 
     traffic_weight {

@@ -21,6 +21,11 @@ module "naming_daily_summary" {
 }
 
 # Market data and news in, analysis and risk rules applied, decisions recorded.
+#
+# One measured run takes about 4 minutes against the 1800-second timeout, so the
+# bound is comfortable rather than tight. A run terminated on that timeout still
+# closes its `agent_runs` row: Container Apps sends SIGTERM first, and the CLI
+# turns it into an exception so the failure is recorded.
 resource "azurerm_container_app_job" "agent" {
   name                         = module.naming_agent.container_app_job.name
   container_app_environment_id = azurerm_container_app_environment.this.id
@@ -44,9 +49,14 @@ resource "azurerm_container_app_job" "agent" {
   template {
     container {
       name   = "agent"
-      image  = local.placeholder_job_image
+      image  = local.app_image
       cpu    = local.container_cpu
       memory = local.container_memory
+
+      # `schedule`, not the CLI's `manual` default, so `agent_runs.trigger`
+      # distinguishes a cron firing from someone running it by hand.
+      command = ["investagent"]
+      args    = ["agent", "--trigger", "schedule"]
 
       dynamic "env" {
         for_each = local.common_env
@@ -85,9 +95,12 @@ resource "azurerm_container_app_job" "daily_summary" {
   template {
     container {
       name   = "daily-summary"
-      image  = local.placeholder_job_image
+      image  = local.app_image
       cpu    = local.container_cpu
       memory = local.container_memory
+
+      command = ["investagent"]
+      args    = ["summary"]
 
       dynamic "env" {
         for_each = local.common_env

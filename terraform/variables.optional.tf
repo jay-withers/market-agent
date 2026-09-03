@@ -63,6 +63,23 @@ variable "postgres_zone" {
 }
 
 
+variable "image_registry" {
+  description = "Registry and repository prefix the workload images are pulled from. Public packages on ghcr.io deliberately: a private one would need a `registry` block and a Key Vault-backed pull secret on every workload, and there is no Azure Container Registry because ACR Basic is a flat monthly charge with no consumption tier."
+  type        = string
+  default     = "ghcr.io/jay-withers/market-agent"
+}
+
+variable "image_tag" {
+  description = "Immutable tag of the images to deploy, normally the short git SHA. Must not be `latest`: Container Apps creates a revision only when the template changes, so re-pushing a moving tag deploys nothing at all and reports success."
+  type        = string
+  default     = "unset"
+
+  validation {
+    condition     = !contains(["latest", "main", "unset"], var.image_tag)
+    error_message = "image_tag must be an immutable tag. A moving tag re-pushed under the same name changes no revision template, so Container Apps deploys nothing and reports success. Pass -var image_tag=$(git rev-parse --short HEAD)."
+  }
+}
+
 variable "agent_cron_expression" {
   description = "Schedule for the AI trading agent job, as a 5-field cron expression evaluated in UTC."
   type        = string

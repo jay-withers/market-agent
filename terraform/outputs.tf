@@ -32,3 +32,20 @@ output "dashboard_fqdn" {
   description = "Public hostname of the dashboard container app."
   value       = azurerm_container_app.dashboard.ingress[0].fqdn
 }
+
+# The two job names are the deploy targets: a scheduled job has to be started by
+# hand to test it, with `az containerapp job start --name <this>`.
+output "agent_job_name" {
+  description = "Name of the agent container app job, for `az containerapp job start`."
+  value       = azurerm_container_app_job.agent.name
+}
+
+output "summary_job_name" {
+  description = "Name of the daily summary container app job, for `az containerapp job start`."
+  value       = azurerm_container_app_job.daily_summary.name
+}
+
+output "identity_client_id" {
+  description = "Client ID of the workload identity, which the containers receive as `AZURE_CLIENT_ID` and use to acquire Key Vault and PostgreSQL tokens."
+  value       = azurerm_user_assigned_identity.this.client_id
+}
