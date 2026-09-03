@@ -17,13 +17,13 @@ which runs locally but is **not yet deployed** — see
 | Resource | Purpose |
 | --- | --- |
 | Resource group | Everything below lives here |
-| User-assigned managed identity | Shared by all four workloads; reads Key Vault, and authenticates to SQL once there's an app |
+| User-assigned managed identity | Shared by all four workloads; reads Key Vault and authenticates to PostgreSQL |
 | Log Analytics workspace | Container and job logs, with a daily ingestion cap |
-| Application Insights | Workspace-based, for future application telemetry |
+| Application Insights | Workspace-based, with a daily data cap |
 | Key Vault | RBAC-authorised. Terraform owns the vault, **not** the secret values |
 | Container Apps environment | Consumption-only, so idle costs nothing |
-| Container app `api` | FastAPI backend (placeholder image), scales to zero |
-| Container app `dashboard` | React dashboard (placeholder image), scales to zero |
+| Container app `api` | Read-only FastAPI backend, scales to zero |
+| Container app `dashboard` | React dashboard on nginx, scales to zero |
 | Container app job `agent` | Scheduled: news → analysis → risk engine → simulated trade |
 | Container app job `daily-summary` | Scheduled: performance, benchmarks, email |
 | PostgreSQL Flexible Server + database | Burstable B1ms, Entra-only authentication. The one resource that bills while idle |
@@ -32,8 +32,8 @@ Two departures from the original design:
 
 - **No Azure Container Registry**, driven by the requirement that nothing bills
   meaningfully while idle. ACR Basic is a flat monthly charge with no consumption
-  tier. Images will live in ghcr.io instead. The placeholder images are public, so
-  nothing needs a registry yet.
+  tier. The images live in public ghcr.io packages instead, which also means no
+  workload needs a `registry` block or a pull secret.
 - **PostgreSQL, not Azure SQL** — and this one was forced rather than chosen.
   Azure SQL serverless auto-pauses to near zero and would have been the cheaper
   design, but this subscription cannot provision Azure SQL in any region policy
@@ -140,12 +140,18 @@ make install
 Run `make` (or `make help`) to list the available targets:
 
 ```bash
-make install           # install pre-commit hooks (run once after cloning)
-make lint              # run all pre-commit hooks against every file
+make install           # pre-commit hooks and Python dependencies
+make test              # the Python test suite
+make lint              # all pre-commit hooks against every file
+make secrets           # prompt for the application secrets, store them in Key Vault
+make sql               # run every file in sql/ against the database
+make up / down / logs  # the local stack
+make run-agent         # one agent run against the local stack
+make build / push      # the linux/amd64 images, and ghcr.io
+make deploy            # terraform apply with the built image tag
 make fmt               # terraform fmt -recursive
 make validate          # terraform init + validate (no Azure credentials needed)
 make plan              # terraform init + plan (set ENV=dev|stg|prd, default dev)
-make apply             # terraform init + apply (set ENV=dev|stg|prd, default dev)
 ```
 
 `validate` initialises with `-backend=false`, so it works with no Azure
