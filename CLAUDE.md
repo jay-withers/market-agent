@@ -714,14 +714,31 @@ pre-commit config.
 `make` with no target prints the self-documenting help (the default goal).
 
 ```bash
-make install           # install pre-commit hooks and Python dependencies
-make test              # run the Python test suite (pytest)
-make lint              # run all pre-commit hooks against every file
+make install           # pre-commit hooks and Python dependencies
+make test              # the Python test suite (pytest)
+make lint              # all pre-commit hooks against every file
+make secrets           # prompt for the Key Vault values and store them
+make sql               # every file in sql/, in filename order, against the database
+make up / down / logs  # the local docker compose stack
+make run-agent         # one agent run against the local stack
+make build             # both images for linux/amd64, tagged with the git SHA
+make push              # both images to ghcr.io (needs write:packages)
+make deploy            # terraform apply with that same image tag
+make logs-azure        # tail the deployed agent job's logs
 make fmt               # terraform fmt -recursive
 make validate          # terraform init + validate (no Azure credentials)
 make plan              # terraform init + plan (set ENV=dev|stg|prd, default dev)
 make apply             # terraform init + apply (set ENV=dev|stg|prd, default dev)
 ```
+
+**`make sql` is not part of `make deploy`, and the schema is not versioned with
+the image.** A migration the code depends on has to be applied first, or the
+deployed workload fails against a database that predates it — the agent job
+queries `companies.is_benchmark`, so it would have failed outright on a
+database holding only `001` through `003`. This has already been forgotten once.
+
+`make deploy` is `apply` with `-var image_tag=$(IMAGE_TAG)`, so the tag built is
+the tag deployed and the two cannot drift. Neither passes `-auto-approve`.
 
 `make test` runs the Python suite. There are no *Terraform* tests — those were
 removed at the user's request — and `make validate` is the credential-free
