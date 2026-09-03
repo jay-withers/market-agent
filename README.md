@@ -8,10 +8,9 @@ money is ever connected. The point of the experiment is to find out, over three
 to six months, whether the AI beats simply putting £500 into a passive index or
 leaving it in a savings account.
 
-This repository contains the Terraform infrastructure and a **part-written
-application** — see [The application](#the-application) and
-[Out of scope](#out-of-scope-right-now). `docs/deployment-plan.md` is the plan
-for the rest.
+This repository contains the Terraform infrastructure and the **application**,
+which runs locally but is **not yet deployed** — see
+[The application](#the-application) and [Deploying](#deploying).
 
 ## What gets deployed
 
@@ -75,17 +74,54 @@ reasoning can raise a limit. Every verdict records each cap it considered and
 the single constraint that decided the outcome, which is what gets written to
 `ai_decisions.risk_verdict`.
 
-## Out of scope right now
+## Running it locally
 
-No LLM client, no broker client, no jobs, no API, no dashboard, no Dockerfiles
-and no image build pipeline. Both container apps and both jobs still run public
-Microsoft quickstart images, which means the two apps are currently **publicly
-reachable, unauthenticated placeholder pages**. Authentication belongs with the
-real API.
+```bash
+make up          # Postgres with the schema baked in, the API, and the dashboard
+make run-agent   # one agent run: real market data and LLM calls, no orders
+make down        # stop, and delete the data volume
+```
 
-Replacing a placeholder with a real image is an image-reference change; the
-images will be public on ghcr.io, so no `registry` block or pull-token `secret`
-is needed — see `locals.container-apps.tf`.
+The dashboard is then on <http://localhost:8080> and the API on
+<http://localhost:8000>. Note that published ports land on the Docker *host*, so
+from inside the dev container reach a service at its bridge IP or via
+`host.docker.internal`.
+
+Secrets come from Key Vault, not a file: `make run-agent` mints a short-lived,
+Key Vault-scoped token from your `az login` and passes it in, because the image
+has no `az` and so cannot authenticate on its own. A `.env` works too — see
+`.env.example` — for anyone with no Azure access.
+
+`DRY_RUN` defaults to **true**, so the whole decision path runs and is recorded
+but no order is ever submitted.
+
+## Deploying
+
+Terraform points all four workloads at real ghcr.io images and `terraform plan`
+is clean, but **nothing is deployed yet** — the images have not been pushed. In
+order:
+
+```bash
+gh auth refresh --scopes write:packages,read:packages   # the token needs write:packages
+make build push                                        # linux/amd64, tagged with the git SHA
+# then flip both ghcr packages to public, once
+make deploy
+```
+
+Both apps currently serve public Microsoft quickstart placeholder pages, so
+applying before the images exist would replace four working pages with four
+revisions that cannot pull.
+
+`--platform linux/amd64` is not optional: Container Apps runs amd64 only, and a
+native build on an Apple Silicon host produces an image that crash-loops with an
+exec format error and no other clue. The Makefile does it rather than leaving it
+to memory.
+
+**Both apps are publicly reachable and unauthenticated**, deliberately: the API
+is read-only, so it cannot place a trade or alter a decision however it is
+called, and no response carries a secret, any PII, or real money. A shared
+bearer sits behind `API_REQUIRE_TOKEN` for when that changes; the proper fix is
+Container Apps EasyAuth with Entra, which `azurerm` does not expose.
 
 ## Getting started
 

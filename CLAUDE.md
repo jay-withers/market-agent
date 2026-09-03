@@ -11,14 +11,27 @@ run against a paper-trading broker. No real money, ever — the experiment is
 whether the AI beats a passive index or a savings account over 3–6 months with a
 notional £500.
 
-**The application is part-written.** `apps/investagent/` holds the settings, the
-database layer, the domain models and the risk engine with its tests; there is
-still no LLM client, no broker client, no jobs, no API, no dashboard, no
-Dockerfile and no image build pipeline. Both container apps and both jobs still
-run public Microsoft quickstart images as placeholders, which also means the two
-apps are publicly reachable unauthenticated pages — authentication belongs with
-the real API. `docs/deployment-plan.md` is the agreed plan for the rest and is
-worth reading before adding to it.
+**The application is written and runs; it is not yet deployed.**
+`apps/investagent/` is the Python package (API, agent job, summary job) and
+`apps/dashboard/` is the React front end, both with Dockerfiles, and
+`docker-compose.yml` runs the lot locally. Everything has been exercised against
+live Alpaca, Anthropic, Frankfurter, Key Vault and PostgreSQL.
+
+**What remains is the deploy itself.** Terraform now points all four workloads
+at real ghcr.io images, and `terraform plan` is clean (0 add, 4 change, 0
+destroy) — but **the images have never been pushed**, because the `gh` token
+lacks `write:packages`. Applying before they exist would replace four working
+placeholder pages with four revisions that cannot pull, so the order is
+`gh auth refresh --scopes write:packages,read:packages`, then `make build push`,
+then flip both ghcr packages to public, then `make deploy`.
+
+Three code paths still have never executed, and they are the ones that break a
+first deploy: **the Entra token path in `db.py`** (local runs set
+`POSTGRES_PASSWORD` and take the password branch), **`ManagedIdentityCredential`**
+(local runs use `StaticTokenCredential`), and the images running on **amd64**
+(built and verified as amd64, but never started).
+
+`docs/deployment-plan.md` is the agreed plan; steps 1-7 are done.
 
 This repo began as a generic Azure Terraform module template and was converted;
 if something looks like leftover template scaffolding, it probably is.
@@ -529,6 +542,36 @@ rather than falling through to a real call, and it clears both `settings()` and
 `secret()` caches around each test. HTTP is faked with `httpx.MockTransport` via
 `tests/helpers.py`. Note `tests/` is a package, so helpers import as
 `tests.helpers` — a bare `from conftest import ...` does not resolve.
+
+### The dashboard
+
+`apps/dashboard/` is Vite + React + TypeScript built to static files and served
+by **unprivileged nginx on 8080** — 8080 rather than 80 because a non-root
+process cannot bind below 1024.
+
+- **It learns the API's address at runtime.** The entrypoint renders
+  `config.json` from `$API_ORIGIN` at container start and the SPA fetches it on
+  boot, so one image serves every environment. A build-time `VITE_API_URL`
+  would produce an image that is only correct where it was built.
+- **The rendered `config.json` goes to `/tmp`, not the document root.** The
+  unprivileged image runs as uid 101 and `/usr/share/nginx/html` is root-owned,
+  so writing there fails at start-up; nginx aliases the one path, which keeps
+  the served root read-only anyway. It is also `no-store`: a cached copy from a
+  previous revision points at the wrong API and reads as a CORS bug.
+- **The chart palette is validated, not chosen.** The five series use the
+  reference categorical palette in its documented slot order — that order *is*
+  the colourblind-safety mechanism, so reordering or cycling it breaks the
+  guarantee. Colour follows the entity rather than its rank, so hiding a series
+  never repaints the others. Light mode puts three slots under 3:1 against the
+  surface, which obliges relief: the **table view beside the chart is a required
+  accessibility channel**, not a convenience. One y-axis, because every series
+  is the value of the same notional £500.
+- A benchmark with no data is omitted rather than drawn flat at the notional,
+  matching the summary job.
+- `shellcheck`'s SC2016 fires on `envsubst '${API_ORIGIN}'`, where the single
+  quotes are the point — expanding them would substitute the value into the
+  variable *list* and leave the template untouched. Suppressed inline with that
+  reason.
 
 ### The summary job
 
