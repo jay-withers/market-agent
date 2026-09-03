@@ -125,6 +125,21 @@ for instance, and would fail outright against a database without
 cold start, and the first call can take long enough to look like a failure. That
 is the cost design working.
 
+## The daily email
+
+Off until a recipient exists. `make secrets` prompts for it along with the four
+API keys, or set it directly:
+
+```bash
+az keyvault secret set --vault-name kv-marketagent-dev \
+  --name SUMMARY-EMAIL-TO --value 'you@example.com'
+```
+
+It lives in Key Vault rather than in Terraform because this repository is
+public, and because a value read at runtime takes effect on the next scheduled
+run with no redeploy. Note that Resend's shared sender only delivers to the
+address that owns the Resend account until a domain is verified.
+
 `--platform linux/amd64` is not optional: Container Apps runs amd64 only, and a
 native build on an Apple Silicon host produces an image that crash-loops with an
 exec format error and no other clue. The Makefile does it rather than leaving it

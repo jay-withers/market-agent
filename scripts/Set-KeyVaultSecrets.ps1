@@ -1,19 +1,27 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Prompts for the application's secret values and stores them in Key Vault.
+    Prompts for the application's Key Vault values and stores them.
 
 .DESCRIPTION
     Terraform owns the vault and its RBAC but deliberately owns none of the
     values, so populating them is a manual step. This is that step, made
     repeatable.
 
-    Values are read from a masked prompt, held only as a SecureString until the
+    Secrets are read from a masked prompt, held only as a SecureString until the
     moment they are passed to `az`, and never written to disk, logged, echoed,
-    or placed in shell history. Press Enter at a prompt to skip that secret —
-    they are needed at different points in the build (Anthropic and the two
-    Alpaca keys for the agent, Resend only for the daily summary), so there is
-    no need to have all four to hand.
+    or placed in shell history. Press Enter at a prompt to skip one — they are
+    needed at different points (Anthropic and the two Alpaca keys for the
+    agent, Resend only for the daily summary), so there is no need to have them
+    all to hand.
+
+    Not everything here is a secret. SUMMARY-EMAIL-TO is the daily summary's
+    recipient, and it lives in Key Vault for a different reason: this repository
+    is public and so are terraform/environments/*.tfvars, so an address in
+    either would be committed permanently. Reading it at runtime also means
+    changing the recipient needs no redeploy. It is prompted **unmasked**,
+    because a masked prompt hides a typo and a mistyped recipient sends the
+    summary nowhere — or to a stranger.
 
     Existing secrets are left alone unless you say otherwise, because Key Vault
     versions every write and re-setting an unchanged value just adds noise.
@@ -22,7 +30,7 @@
     Officer` on the vault — which whoever ran `terraform apply` already has.
 
 .PARAMETER Name
-    Which secrets to prompt for. Defaults to all four the application uses.
+    Which values to prompt for. Defaults to all five the application uses.
 
 .PARAMETER Force
     Overwrite an existing secret without asking.
@@ -30,12 +38,19 @@
 .EXAMPLE
     ./scripts/Set-KeyVaultSecrets.ps1
 
-    Prompts for each of the four, skipping any that already exist.
+    Prompts for each of the five, skipping any that already exist.
 
 .EXAMPLE
     ./scripts/Set-KeyVaultSecrets.ps1 -Name ANTHROPIC-API-KEY -Force
 
     Rotates one secret.
+
+.EXAMPLE
+    ./scripts/Set-KeyVaultSecrets.ps1 -Name SUMMARY-EMAIL-TO
+
+    Switches the daily summary email on, or points it somewhere else. Takes
+    effect on the next scheduled run — no redeploy, because the value is read
+    at runtime.
 #>
 [CmdletBinding()]
 param(
@@ -52,6 +67,7 @@ param(
         'ALPACA-API-KEY'
         'ALPACA-SECRET-KEY'
         'RESEND-API-KEY'
+        'SUMMARY-EMAIL-TO'
     ),
 
     [switch]$Force
@@ -116,6 +132,12 @@ $expectedPrefixes = @{
     'ALPACA-API-KEY'    = 'PK'
 }
 
+# Prompted in the clear, and echoed back on success. These are configuration
+# that happens to live in Key Vault rather than credentials, and hiding them
+# only hides mistakes: a mistyped API key fails loudly on first use, whereas a
+# mistyped email address silently delivers nowhere.
+$plainText = @('SUMMARY-EMAIL-TO')
+
 $set = 0
 $skipped = 0
 
@@ -132,11 +154,19 @@ foreach ($secretName in $Name) {
     }
 
     $envVar = $secretName.Replace('-', '_').ToUpperInvariant()
-    $secure = Read-Host "$secretName (Enter to skip, read as `$$envVar locally)" -AsSecureString
+    $isSecret = $plainText -notcontains $secretName
+    $secure = $null
 
-    # NetworkCredential is the tidy cross-platform way back to plaintext; the
-    # alternative is a manual unmanaged-memory dance for no benefit here.
-    $value = [System.Net.NetworkCredential]::new('', $secure).Password
+    if ($isSecret) {
+        $secure = Read-Host "$secretName (Enter to skip, read as `$$envVar locally)" -AsSecureString
+
+        # NetworkCredential is the tidy cross-platform way back to plaintext;
+        # the alternative is a manual unmanaged-memory dance for no benefit.
+        $value = [System.Net.NetworkCredential]::new('', $secure).Password
+    }
+    else {
+        $value = (Read-Host "$secretName (Enter to skip, read as `$$envVar locally)").Trim()
+    }
 
     if ([string]::IsNullOrWhiteSpace($value)) {
         Write-Host "    skipped $secretName"
@@ -149,6 +179,18 @@ foreach ($secretName in $Name) {
         Write-Warning "$secretName does not start with '$($expectedPrefixes[$secretName])' — storing it anyway, but check for a truncated paste."
     }
 
+    # Advisory, like the prefix checks: the recipient may be a comma-separated
+    # list, and every entry should look like an address. Storing a malformed one
+    # costs a silent non-delivery rather than an error.
+    if ($secretName -eq 'SUMMARY-EMAIL-TO') {
+        $bad = @($value -split ',' | ForEach-Object { $_.Trim() } |
+            Where-Object { $_ -and $_ -notmatch '^[^@\s]+@[^@\s]+\.[^@\s]+$' })
+        if ($bad.Count -gt 0) {
+            Write-Warning "$secretName does not look like an email address: $($bad -join ', ')"
+        }
+        Write-Host "    note: Resend's shared sender only delivers to the address that owns the Resend account, until a domain is verified."
+    }
+
     # --value puts the secret in this process's argument list, where anything
     # running as the same user could read it for the lifetime of the call. The
     # alternative, --file, writes it to disk instead, which is worse. In a
@@ -156,11 +198,18 @@ foreach ($secretName in $Name) {
     az keyvault secret set `
         --vault-name $VaultName --name $secretName --value $value --output none
 
-    Write-Host "    set $secretName ($($value.Length) characters)"
+    # The value itself for a non-secret, which is the only way to spot a typo;
+    # a length only, for a secret.
+    if ($isSecret) {
+        Write-Host "    set $secretName ($($value.Length) characters)"
+    }
+    else {
+        Write-Host "    set $secretName = $value"
+    }
     $set++
 
     $value = $null
-    $secure.Dispose()
+    if ($secure) { $secure.Dispose() }
 }
 
 Write-Host "==> $set set, $skipped skipped"
