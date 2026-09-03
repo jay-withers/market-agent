@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import time
+from decimal import Decimal
 from functools import cache, lru_cache
 from typing import Any
 
@@ -90,6 +91,23 @@ class Settings(BaseSettings):
     # account default so that losing the subscription fails the run visibly
     # instead of silently downgrading which prices the experiment ran against.
     alpaca_data_feed: str = "sip"
+
+    # The daily summary email. Resend refuses a `from` on an unverified domain,
+    # so the default is their shared testing sender — which only delivers to the
+    # address that owns the Resend account. A real domain replaces it later.
+    summary_email_from: str = "InvestAgent <onboarding@resend.dev>"
+    # Empty means compose and store the summary but send nothing, which is the
+    # right default: a job that emails on every run during development is worse
+    # than one that has to be switched on.
+    summary_email_to: str = ""
+
+    # Honest proxies, since Alpaca only covers US-listed instruments: SPY for
+    # the S&P 500, VT for a global index, and EWU as a UK proxy — *not* the
+    # FTSE 100, and labelled as a proxy wherever it is shown.
+    benchmark_symbols: str = "SPY,VT,EWU"
+    # A savings account at 5% APR, compounded daily and computed arithmetically
+    # rather than fetched. The "or leave it in the bank" arm of the experiment.
+    cash_benchmark_apr_pct: Decimal = Decimal("5.0")
 
     log_level: str = Field(default="INFO")
 

@@ -530,6 +530,49 @@ rather than falling through to a real call, and it clears both `settings()` and
 `tests/helpers.py`. Note `tests/` is a package, so helpers import as
 `tests.helpers` — a bare `from conftest import ...` does not resolve.
 
+### The summary job
+
+`jobs/summary.py` runs at 21:00 UTC and does the thing the agent could not:
+the agent submits at 06:00 and the US market opens at 14:30, so **this is where
+a fill becomes known**, cash and positions move, and the day gets a valuation.
+Then benchmarks, a written commentary, an email, and a `daily_summaries` row.
+
+**Every figure in the email comes from the database.** The model is given the
+numbers as a Markdown table it is told not to restate, and writes only the
+commentary; the subject line is built from the stored total, not by the model.
+Nothing it writes can become a reported balance.
+
+That rule is only as good as the table. The first version listed a
+reconciliation count and no trades — and that count is *zero* on a dry run,
+because a simulated trade never reaches a broker. The model then reported,
+accurately from what it had been given, that cash and positions were unchanged
+on a day three trades had executed. The table now states the day's trades
+first and spells out what `simulated` means. `tests/test_summary.py` is the
+regression.
+
+- **Benchmarks live in `companies` with `is_benchmark = true`.** `prices.ticker`
+  references `companies`, so storing a close for SPY, VT or EWU failed with a
+  foreign key violation until they existed. A flag rather than reusing
+  `is_active = false`, which means "retired from the watchlist" — a benchmark
+  never was on it, and the dashboard has to tell them apart to label a proxy as
+  a proxy. `004-benchmark-companies.sql`.
+- **The index arms need no FX.** Value is `notional x close_now / close_at_inception`,
+  a pure ratio in which the currency cancels. An earlier version applied
+  today's rate to both ends and produced a series that moved with sterling
+  rather than with the index.
+- **A benchmark with no price is omitted, not flat-lined.** £500 on the chart
+  reads as "the index did nothing", which is a different and wrong claim from
+  "we have no data".
+- **Cash-at-5% compounds daily**, because the chart is read daily and an annual
+  step function would be nonsense.
+- **A mail failure never loses the summary.** `mailer.send` returns a status
+  rather than raising; the row is stored either way and the dashboard renders
+  from it. `SUMMARY_EMAIL_TO` is empty by default, so sending is opt-in — a job
+  that emails on every development run is worse than one switched on
+  deliberately.
+- Reconciliation commits per trade: one order the broker cannot answer for must
+  not roll back the fills already applied.
+
 ### The API and the local stack
 
 `api/` is **read-only**. Every mutation belongs to the agent and summary jobs,

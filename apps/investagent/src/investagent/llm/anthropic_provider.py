@@ -24,7 +24,7 @@ from typing import Any
 
 import anthropic
 
-from ..models import NewsRelevance, Recommendation
+from ..models import DailyNarrative, NewsRelevance, Recommendation
 from ..settings import secret, settings
 from .base import PROMPT_VERSION, LlmResult, Usage
 
@@ -67,6 +67,20 @@ justifies a trade. Do not manufacture conviction.
 3. Your reasoning and risks are stored and read by a human later. Be specific \
 about what in the evidence drove the call. State the strongest argument \
 against your own recommendation in the risks field."""
+
+
+NARRATIVE_SYSTEM = f"""You write the daily email for an automated paper-trading \
+experiment running a notional GBP 500. Prompt version {PROMPT_VERSION}.
+
+You are given the day's figures as a table. They are already correct and are \
+shown to the reader above your text, so do not repeat them and never restate a \
+number in a different form — no rounding, no percentages you worked out \
+yourself, no totals. If a figure is not in the table, you do not know it.
+
+Write a few short paragraphs covering what the AI decided and why, anything the \
+risk engine refused or reduced, and what is worth watching tomorrow. Be plain \
+and specific. The reader is the person running the experiment, so no \
+salesmanship and no financial advice."""
 
 
 class AnthropicLlm:
@@ -125,6 +139,17 @@ class AnthropicLlm:
             **self._reasoning_params(self.analysis_model),
         )
         return self._result(response, self.analysis_model, Recommendation)
+
+    def narrate(self, prompt: str) -> LlmResult[DailyNarrative]:
+        response = self.client.messages.parse(
+            model=self.analysis_model,
+            max_tokens=self._analysis_max_tokens,
+            system=NARRATIVE_SYSTEM,
+            messages=[{"role": "user", "content": prompt}],
+            output_format=DailyNarrative,
+            **self._reasoning_params(self.analysis_model),
+        )
+        return self._result(response, self.analysis_model, DailyNarrative)
 
     def _reasoning_params(self, model: str) -> dict[str, Any]:
         """Thinking and effort, or nothing at all on a pre-4.6 model.

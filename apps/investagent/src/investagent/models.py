@@ -108,6 +108,17 @@ class Recommendation(BaseModel):
     risks: str = Field(description="The strongest argument against this recommendation.")
 
 
+class DailyNarrative(BaseModel):
+    """A short written commentary on one day of the experiment."""
+
+    body_markdown: str = Field(
+        description="A few short paragraphs in Markdown. Do not restate the figures "
+        "already given to you as a table — they appear above your text. Explain what "
+        "the AI decided and why, what the risk engine changed, and anything worth "
+        "watching. Do not invent numbers."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Portfolio state
 # ---------------------------------------------------------------------------

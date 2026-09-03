@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Protocol
 
-from ..models import NewsRelevance, Recommendation
+from ..models import DailyNarrative, NewsRelevance, Recommendation
 
 # Bump when a prompt changes in a way that could change an answer. It is stored
 # on every `news_analysis` and `ai_decisions` row and is part of the
@@ -128,4 +128,8 @@ class Llm(Protocol):
 
     def analyse(self, prompt: str) -> LlmResult[Recommendation]:
         """Produce a BUY/SELL/HOLD assessment from an assembled prompt."""
+        ...
+
+    def narrate(self, prompt: str) -> LlmResult[DailyNarrative]:
+        """Write the daily summary's commentary. Figures are supplied, not derived."""
         ...

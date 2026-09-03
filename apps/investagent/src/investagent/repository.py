@@ -31,7 +31,16 @@ DEFAULT_PORTFOLIO = "default"
 
 
 def active_tickers(conn: Any) -> list[str]:
-    rows = conn.execute("SELECT ticker FROM companies WHERE is_active ORDER BY ticker").fetchall()
+    """The watchlist the agent analyses and may trade.
+
+    Benchmarks are excluded explicitly as well as by `is_active`. They exist in
+    `companies` only so `prices.ticker` has something to reference, and
+    analysing SPY as though it were a stock pick would waste a model call at
+    best and place a trade at worst.
+    """
+    rows = conn.execute(
+        "SELECT ticker FROM companies WHERE is_active AND NOT is_benchmark ORDER BY ticker"
+    ).fetchall()
     return [r[0] for r in rows]
 
 
@@ -394,3 +403,205 @@ def apply_fill(
         "DELETE FROM positions WHERE portfolio_id = %s AND ticker = %s AND quantity <= 0",
         (pid, ticker),
     )
+
+
+# ---------------------------------------------------------------------------
+# Reconciliation and the daily rollup, both owned by the summary job
+# ---------------------------------------------------------------------------
+
+
+def unreconciled_trades(conn: Any, pid: int) -> list[dict[str, Any]]:
+    """Trades submitted to the broker whose outcome we do not yet know.
+
+    The agent runs at 06:00 UTC and the market opens at 14:30, so a scheduled
+    run's orders are still resting when it finishes. This is the queue the
+    summary job works through at 21:00.
+
+    Dry-run trades are excluded: they never reached a broker, so there is
+    nothing to ask about.
+    """
+    rows = conn.execute(
+        "SELECT id, ticker, side, client_order_id, notional_gbp, fx_rate_gbp_usd"
+        " FROM trades"
+        " WHERE portfolio_id = %s AND dry_run = false"
+        "   AND client_order_id IS NOT NULL"
+        "   AND status IN ('pending', 'submitted', 'partially_filled')"
+        " ORDER BY created_at",
+        (pid,),
+    ).fetchall()
+    return [
+        {
+            "id": r[0],
+            "ticker": r[1],
+            "side": r[2],
+            "client_order_id": r[3],
+            "notional_gbp": Decimal(r[4]),
+            "fx_rate_gbp_usd": Decimal(r[5]),
+        }
+        for r in rows
+    ]
+
+
+def update_trade_outcome(
+    conn: Any,
+    trade_id: int,
+    status: str,
+    quantity: Decimal | None,
+    price_usd: Decimal | None,
+    filled_at: Any,
+) -> None:
+    conn.execute(
+        "UPDATE trades SET status = %s, quantity = %s, price_usd = %s, filled_at = %s"
+        " WHERE id = %s",
+        (status, quantity, price_usd, filled_at, trade_id),
+    )
+
+
+def portfolio_inception(conn: Any, pid: int) -> date:
+    """The day the experiment started, which every benchmark is indexed from."""
+    row = conn.execute("SELECT created_at::date FROM portfolio WHERE id = %s", (pid,)).fetchone()
+    return row[0]
+
+
+def initial_cash(conn: Any, pid: int) -> Decimal:
+    row = conn.execute("SELECT initial_cash_gbp FROM portfolio WHERE id = %s", (pid,)).fetchone()
+    return money(row[0])
+
+
+def close_on(conn: Any, ticker: str, on_or_after: date) -> Decimal | None:
+    """The first close at or after `on_or_after`, for indexing a benchmark.
+
+    At or after, not on: the inception date is frequently a weekend or a
+    holiday, and demanding an exact match would silently drop the benchmark.
+    """
+    row = conn.execute(
+        "SELECT close_usd FROM prices WHERE ticker = %s AND bar_date >= %s"
+        " ORDER BY bar_date LIMIT 1",
+        (ticker, on_or_after),
+    ).fetchone()
+    return Decimal(row[0]) if row else None
+
+
+def save_daily_performance(
+    conn: Any,
+    pid: int,
+    as_of: date,
+    cash_gbp: Decimal,
+    positions_value_gbp: Decimal,
+    total_value_gbp: Decimal,
+    pnl_gbp: Decimal,
+    pnl_pct: Decimal,
+    fx_rate: Decimal,
+    fx_rate_as_of: date,
+) -> None:
+    conn.execute(
+        "INSERT INTO daily_performance (portfolio_id, as_of, cash_gbp, positions_value_gbp,"
+        "   total_value_gbp, pnl_gbp, pnl_pct, fx_rate_gbp_usd, fx_rate_as_of)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+        # Re-running the summary for a day overwrites its row rather than
+        # failing, so a retry after a mail outage is safe.
+        " ON CONFLICT (portfolio_id, as_of) DO UPDATE SET"
+        "   cash_gbp = EXCLUDED.cash_gbp,"
+        "   positions_value_gbp = EXCLUDED.positions_value_gbp,"
+        "   total_value_gbp = EXCLUDED.total_value_gbp,"
+        "   pnl_gbp = EXCLUDED.pnl_gbp, pnl_pct = EXCLUDED.pnl_pct,"
+        "   fx_rate_gbp_usd = EXCLUDED.fx_rate_gbp_usd,"
+        "   fx_rate_as_of = EXCLUDED.fx_rate_as_of, computed_at = now()",
+        (
+            pid,
+            as_of,
+            cash_gbp,
+            positions_value_gbp,
+            total_value_gbp,
+            pnl_gbp,
+            pnl_pct,
+            fx_rate,
+            fx_rate_as_of,
+        ),
+    )
+
+
+def save_benchmarks(conn: Any, points: list[Any]) -> int:
+    if not points:
+        return 0
+    with conn.cursor() as cur:
+        cur.executemany(
+            "INSERT INTO benchmarks (symbol, as_of, close_usd, fx_rate_gbp_usd, value_gbp,"
+            "                        source)"
+            " VALUES (%s, %s, %s, %s, %s, %s)"
+            " ON CONFLICT (symbol, as_of) DO UPDATE SET"
+            "   close_usd = EXCLUDED.close_usd, value_gbp = EXCLUDED.value_gbp,"
+            "   fx_rate_gbp_usd = EXCLUDED.fx_rate_gbp_usd, fetched_at = now()",
+            [
+                (p.symbol, p.as_of, p.close_usd, p.fx_rate_gbp_usd, p.value_gbp, p.source)
+                for p in points
+            ],
+        )
+    return len(points)
+
+
+def day_activity(conn: Any, pid: int, as_of: date) -> dict[str, Any]:
+    """What happened on `as_of`, as the narrative's raw material."""
+    decisions = conn.execute(
+        "SELECT ticker, action, confidence, approved_amount_gbp, reasoning,"
+        "       risk_verdict->>'binding_constraint'"
+        " FROM ai_decisions WHERE decided_at::date = %s ORDER BY ticker",
+        (as_of,),
+    ).fetchall()
+
+    trades = conn.execute(
+        "SELECT ticker, side, status, notional_gbp, quantity, price_usd"
+        " FROM trades WHERE portfolio_id = %s AND created_at::date = %s ORDER BY id",
+        (pid, as_of),
+    ).fetchall()
+
+    holdings = conn.execute(
+        "SELECT p.ticker, p.quantity, p.avg_cost_gbp, lc.close_usd"
+        " FROM positions p"
+        " LEFT JOIN LATERAL ("
+        "   SELECT close_usd FROM prices WHERE ticker = p.ticker ORDER BY bar_date DESC LIMIT 1"
+        " ) lc ON true"
+        " WHERE p.portfolio_id = %s ORDER BY p.ticker",
+        (pid,),
+    ).fetchall()
+
+    return {"decisions": decisions, "trades": trades, "holdings": holdings}
+
+
+def save_summary(
+    conn: Any,
+    as_of: date,
+    subject: str,
+    body_markdown: str,
+    body_html: str,
+    model: str | None,
+    prompt_version: str | None,
+    email_status: str,
+    provider_id: str | None,
+    error: str | None,
+) -> int:
+    row = conn.execute(
+        "INSERT INTO daily_summaries (as_of, subject, body_markdown, body_html, model,"
+        "   prompt_version, email_status, email_provider_id, email_error, sent_at)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,"
+        "         CASE WHEN %s = 'sent' THEN now() ELSE NULL END)"
+        " ON CONFLICT (as_of) DO UPDATE SET"
+        "   subject = EXCLUDED.subject, body_markdown = EXCLUDED.body_markdown,"
+        "   body_html = EXCLUDED.body_html, email_status = EXCLUDED.email_status,"
+        "   email_provider_id = EXCLUDED.email_provider_id,"
+        "   email_error = EXCLUDED.email_error, sent_at = EXCLUDED.sent_at"
+        " RETURNING id",
+        (
+            as_of,
+            subject,
+            body_markdown,
+            body_html,
+            model,
+            prompt_version,
+            email_status,
+            provider_id,
+            error,
+            email_status,
+        ),
+    ).fetchone()
+    return int(row[0])

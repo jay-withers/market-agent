@@ -103,7 +103,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "summary":
-        raise SystemExit("the summary job is not implemented yet (step 6)")
+        from .jobs import summary as summary_job
+
+        signal.signal(signal.SIGTERM, _terminate)
+        try:
+            summary_job.run()
+        except (Exception, SystemExit) as exc:
+            logging.getLogger("investagent").exception("summary failed: %s", exc)
+            return 1
+        return 0
 
     return 1
 
