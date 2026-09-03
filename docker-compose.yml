@@ -82,6 +82,19 @@ services:
       db:
         condition: service_healthy
 
+  dashboard:
+    build:
+      context: ./apps/dashboard
+    environment:
+      # The browser talks to the API directly, so this must be an address the
+      # *browser* can reach — not the compose service name. Published ports land
+      # on the Docker host, which is where a browser on that host looks.
+      API_ORIGIN: "${API_ORIGIN:-http://localhost:8000}"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - api
+
   # Not started by default: `docker compose run --rm agent` runs it once. It is
   # a scheduled job rather than a service, and a restarting container would
   # trade repeatedly.

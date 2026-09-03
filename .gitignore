@@ -51,3 +51,6 @@ dist/
 # ...but a committed template holds none, and `.env.*` would otherwise swallow
 # it silently.
 !.env.example
+
+# Vite build output and its cache
+apps/dashboard/dist/
