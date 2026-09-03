@@ -428,7 +428,7 @@ terraform/
   versions.tf                   # terraform{}, required_providers, backend, provider
   data.tf                       # azurerm_client_config
   locals.tf                     # default tags
-  locals.container-apps.tf      # placeholder images, container sizing, shared env
+  locals.container-apps.tf      # image references, ports, container sizing, shared env
   locals.database.tf            # PostgreSQL administrator defaults
   main.tf                       # naming module + resource group
   main.identity.tf              # user-assigned managed identity
