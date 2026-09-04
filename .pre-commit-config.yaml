@@ -30,7 +30,7 @@ repos:
       - id: forbid-new-submodules
 
   - repo: https://github.com/gitleaks/gitleaks
-    rev: 2ca41cc1372d1e939a6a879f18cdc19fc1cac1ce # frozen: v8.30.0
+    rev: 83d9cd684c87d95d656c1458ef04895a7f1cbd8e # frozen: v8.30.1
     hooks:
       - id: gitleaks
 
@@ -40,7 +40,7 @@ repos:
       - id: actionlint
 
   - repo: https://github.com/alessandrojcm/commitlint-pre-commit-hook
-    rev: 1d7031e6d0bbfce76e5a625b0cec24fb22e517a0 # frozen: v9.25.0
+    rev: 25d0a52aa8bc0fc242613346792dc8d726c13347 # frozen: v9.26.0
     hooks:
       - id: commitlint
         stages: [commit-msg]
@@ -60,7 +60,7 @@ repos:
   # apps/investagent/pyproject.toml — ruff walks up from each file to find it,
   # so nothing needs pointing at it from here.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: 1f1e8bf348ff38fc88619a38d3ca4d9c56abea49 # frozen: v0.16.5
+    rev: 321478e58f4938179c6b86e4ddfa923d1547a49b # frozen: v0.16.6
     hooks:
       - id: ruff-check
         args: [--fix]
@@ -119,7 +119,7 @@ repos:
         exclude: \.terraform/.*$
 
   - repo: https://github.com/antonbabenko/pre-commit-terraform
-    rev: 05fd71a57a467ccf5598f7e836d3af4cf9225abb # frozen: v1.108.0
+    rev: 581213484f4262600d17c71e272176d4eb6724a5 # frozen: v1.109.0
     hooks:
       - id: terraform_fmt
 
