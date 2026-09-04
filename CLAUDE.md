@@ -24,8 +24,9 @@ Verified live on 2026-09-03, image tag `8d2788f`:
   image tag recorded on the `agent_runs` row. The risk engine refused two of
   the model's four BUYs on `daily_trade_limit`.
 - The summary job wrote a `daily_performance` row, four benchmark arms and a
-  Sonnet-written `daily_summaries` row in 44 seconds. `email_status` is
-  `skipped` because `SUMMARY_EMAIL_TO` is unset — sending is opt-in.
+  Sonnet-written `daily_summaries` row in 44 seconds. A recipient is now
+  configured in Key Vault, so `email_status` is no longer `skipped`; the
+  2026-09-03 send itself failed on the non-ASCII address below.
 - `/readyz` returns `{"status":"ok","database":true}`, which is the **managed
   identity and the Entra token path to PostgreSQL** both working: those two,
   plus the images running on amd64, were the three code paths that had never
@@ -626,6 +627,15 @@ regression.
   redeploy. Absent means store the summary and send nothing, so sending is
   opt-in: a job that emails on every development run is worse than one switched
   on deliberately.
+- **A stored recipient must be plain ASCII.** Resend rejects a `to` containing
+  anything else with a 422 (`The email address contains non-ASCII characters`),
+  and the 2026-09-03 summary was lost to exactly that: the value in Key Vault
+  had been pasted from somewhere that autocorrects quotes and was stored as
+  `‘withersj888@outlook.com’`. Curly quotes are invisible in `az keyvault secret
+  show` output, so read the codepoints (`| cat -A`) rather than the string when
+  a send fails on the address. `Set-KeyVaultSecrets.ps1` now warns on it — its
+  advisory pattern is printable-ASCII either side of the `@`, because the
+  obvious `[^@\s]` accepts U+2018 happily.
 - **`optional_secret` treats absence and failure differently.** A missing
   variable, no vault, or a secret not in the vault all return `None`; an
   authentication or network error propagates, because "the credential is

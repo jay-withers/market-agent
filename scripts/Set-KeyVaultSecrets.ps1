@@ -182,9 +182,17 @@ foreach ($secretName in $Name) {
     # Advisory, like the prefix checks: the recipient may be a comma-separated
     # list, and every entry should look like an address. Storing a malformed one
     # costs a silent non-delivery rather than an error.
+    #
+    # The character classes are printable ASCII either side of '@' rather than
+    # the obvious [^@\s], because Resend rejects a non-ASCII `to` with a 422 and
+    # the way that happens is invisible: an address pasted from somewhere that
+    # autocorrects quotes arrives wrapped in U+2018/U+2019, which a
+    # "not @ and not whitespace" class accepts happily. It has already cost one
+    # day's summary email.
     if ($secretName -eq 'SUMMARY-EMAIL-TO') {
+        $addressPattern = '^[\x21-\x3f\x41-\x7e]+@[\x21-\x3f\x41-\x7e]+\.[\x21-\x3f\x41-\x7e]+$'
         $bad = @($value -split ',' | ForEach-Object { $_.Trim() } |
-            Where-Object { $_ -and $_ -notmatch '^[^@\s]+@[^@\s]+\.[^@\s]+$' })
+            Where-Object { $_ -and $_ -notmatch $addressPattern })
         if ($bad.Count -gt 0) {
             Write-Warning "$secretName does not look like an email address: $($bad -join ', ')"
         }
