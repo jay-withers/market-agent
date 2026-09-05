@@ -282,3 +282,71 @@ button.toggle:hover {
 .tooltip .t-val {
   font-variant-numeric: tabular-nums;
 }
+
+/* The articles behind a decision, revealed under its row.
+ *
+ * Subordinate to the table by inset and type size rather than by colour. The
+ * palette's slots are spoken for by the chart, where colour follows the entity;
+ * borrowing one for a UI affordance here would weaken exactly that rule.
+ */
+tr.detail > td {
+  background: var(--page);
+  padding: 4px 10px 14px;
+}
+
+.articles {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+  /* Prose in a table cell: unbounded, it runs the full width of a wide screen
+   * and stops being readable. */
+  max-width: 78ch;
+}
+
+.articles .headline {
+  font-weight: 600;
+}
+
+/* Underlined rather than coloured, for the palette reason above — and the
+ * underline is the affordance, so it stays visible rather than appearing on
+ * hover only. */
+.articles a {
+  color: var(--text-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--axis);
+}
+
+.articles a:hover {
+  text-decoration-color: currentColor;
+}
+
+.articles .meta {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.articles .summary {
+  color: var(--text-secondary);
+  margin: 6px 0 0;
+}
+
+.articles-state {
+  color: var(--text-secondary);
+  padding: 10px 0;
+}
+
+/* `.error` is defined earlier in this file, so at equal specificity the rule
+ * above would win on order alone and a failure would read as ordinary text. */
+.articles-state.error {
+  color: var(--critical);
+}
+
+/* The count is the control, so it must keep the column's tabular alignment. */
+button.toggle.count {
+  padding: 2px 9px;
+  font-variant-numeric: tabular-nums;
+}
