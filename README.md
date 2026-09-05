@@ -463,6 +463,7 @@ apps/
       benchmarks.py             # SPY/VT/EWU proxies and cash at 5%
       mailer.py                 # Resend; reports its outcome, never raises
       repository.py             # the writes, sharing a caller's transaction
+      telemetry.py              # App Insights; off without a connection string
       queries.py                # the API's reads
       cli.py                    # investagent api|agent|summary
       llm/base.py  llm/anthropic_provider.py

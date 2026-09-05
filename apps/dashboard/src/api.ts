@@ -71,6 +71,26 @@ export type Decision = {
   news_count: number;
 };
 
+/* One article as `/api/decisions/{id}` returns it. The list endpoint carries
+ * only `news_count`; these are what that count is counting. */
+export type Article = {
+  id: number;
+  headline: string;
+  summary: string | null;
+  url: string | null;
+  source: string | null;
+  published_at: string;
+  tickers: string[];
+};
+
+/* The detail endpoint returns the whole `ai_decisions` row plus its trades as
+ * well. Only the articles are typed here, because only they are rendered —
+ * everything else in the table above already comes from the list endpoint. */
+export type DecisionDetail = {
+  id: number;
+  news: Article[];
+};
+
 export type Trade = {
   id: number;
   ticker: string;
