@@ -160,3 +160,10 @@ export const pct = (value: number | null | undefined): string =>
   value === null || value === undefined ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
 
 export const day = (iso: string): string => iso.slice(0, 10);
+
+// Sliced rather than parsed through Date, for the same reason day() is: the
+// zone is forced to UTC and said out loud. Everything these timestamps get read
+// against is UTC — the 06:00 agent cron, the 14:30 market open, the job logs —
+// so rendering them in the browser's zone would shift them an hour under BST
+// and make a 06:00 run look like it started at 07:00.
+export const when = (iso: string): string => `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;

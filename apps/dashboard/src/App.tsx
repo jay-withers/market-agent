@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { Decision, Holding, Overview, Performance, Run, Trade } from "./api";
-import { gbp, get, pct } from "./api";
+import { gbp, get, pct, when } from "./api";
 import { PerformanceChart } from "./components/PerformanceChart";
 import {
   DecisionsTable,
@@ -80,7 +80,7 @@ export default function App() {
         </div>
         {overview.last_run && (
           <div className="subtitle">
-            Last run {overview.last_run.started_at.slice(0, 16).replace("T", " ")} ·{" "}
+            Last run {when(overview.last_run.started_at)} ·{" "}
             {overview.last_run.status}
             {overview.last_run.dry_run ? " · dry run" : ""}
           </div>
