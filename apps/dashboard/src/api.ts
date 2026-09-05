@@ -19,6 +19,7 @@ export type Overview = {
     id: number;
     started_at: string;
     status: string;
+    trigger: string;
     dry_run: boolean;
     decisions_made: number | null;
     trades_executed: number | null;
@@ -108,6 +109,10 @@ export type Run = {
   started_at: string;
   finished_at: string | null;
   status: string;
+  // 'schedule' or 'manual', per the CHECK constraint on agent_runs.trigger. A
+  // run started by hand and a run the cron fired are otherwise indistinguishable
+  // in this table, and they are read very differently.
+  trigger: string;
   dry_run: boolean;
   decisions_made: number | null;
   trades_executed: number | null;

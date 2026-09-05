@@ -256,6 +256,7 @@ export function RunsTable({ rows }: { rows: Run[] }) {
         <thead>
           <tr>
             <th>Started</th>
+            <th>Trigger</th>
             <th>Status</th>
             <th className="num">Decisions</th>
             <th className="num">Trades</th>
@@ -267,6 +268,7 @@ export function RunsTable({ rows }: { rows: Run[] }) {
           {rows.map((row) => (
             <tr key={row.id}>
               <td>{when(row.started_at)}</td>
+              <td>{row.trigger}</td>
               <td>
                 {/* Status is a word, never a colour alone. `stale` is computed
                     by the API: a run killed outright cannot close its own row,
