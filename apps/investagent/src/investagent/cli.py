@@ -12,6 +12,7 @@ import os
 import signal
 import sys
 
+from . import telemetry
 from .settings import settings
 
 
@@ -20,8 +21,10 @@ def _configure_logging() -> None:
 
     The Container Apps environment already ships stdout to Log Analytics, and
     `daily_quota_gb = 0.15` there is genuinely tight — so this stays plain and
-    the volume stays low. No OpenTelemetry distro yet; the connection string is
-    already injected, so adding one later is a code change only.
+    the volume stays low. `telemetry.configure()` then exports this same
+    `investagent` logger to Application Insights when a connection string is
+    present, so a line logged here is a line paid for twice — keep it that way
+    round rather than logging more because one of the two destinations is quiet.
     """
     logging.basicConfig(
         level=getattr(logging, settings().log_level.upper(), logging.INFO),
@@ -69,19 +72,28 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     _configure_logging()
+    # Before any of the three branches, and in particular before uvicorn imports
+    # the FastAPI app: the instrumentation patches `FastAPI.__init__`, so an app
+    # built first would never be instrumented. `--reload` is the exception —
+    # uvicorn re-imports the app in a child process this never runs in — which
+    # is a development flag only.
+    telemetry.configure(args.command)
 
     if args.command == "api":
         import uvicorn
 
-        uvicorn.run(
-            "investagent.api.main:app",
-            host=args.host,
-            port=args.port,
-            reload=args.reload,
-            # Access logs are pure noise against a tight ingestion cap, and the
-            # dashboard polls.
-            access_log=False,
-        )
+        try:
+            uvicorn.run(
+                "investagent.api.main:app",
+                host=args.host,
+                port=args.port,
+                reload=args.reload,
+                # Access logs are pure noise against a tight ingestion cap, and
+                # the dashboard polls.
+                access_log=False,
+            )
+        finally:
+            telemetry.flush()
         return 0
 
     if args.command == "agent":
@@ -100,6 +112,11 @@ def main(argv: list[str] | None = None) -> int:
             # buried between two copies of the same stack.
             logging.getLogger("investagent").error("agent run failed: %s", exc)
             return 1
+        finally:
+            # A job exits within seconds of this point, and the exporters batch.
+            # Without the flush a run's telemetry dies in the buffer — including
+            # the failure path above, which is the one worth having.
+            telemetry.flush()
         return 0
 
     if args.command == "summary":
@@ -111,6 +128,8 @@ def main(argv: list[str] | None = None) -> int:
         except (Exception, SystemExit) as exc:
             logging.getLogger("investagent").exception("summary failed: %s", exc)
             return 1
+        finally:
+            telemetry.flush()
         return 0
 
     return 1

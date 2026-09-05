@@ -22,6 +22,11 @@ dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.34",
   "markdown>=3.7",
+  # Telemetry. The distro brings the exporter plus FastAPI, logging and Azure
+  # SDK instrumentation; httpx is separate because the distro does not carry it,
+  # and it is what turns the Alpaca, news and FX calls into dependency spans.
+  "azure-monitor-opentelemetry>=1.6",
+  "opentelemetry-instrumentation-httpx>=0.50b0",
 ]
 
 [project.optional-dependencies]

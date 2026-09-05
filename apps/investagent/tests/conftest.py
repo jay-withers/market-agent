@@ -32,6 +32,9 @@ def fake_secrets(monkeypatch):
     # Must stay empty: a configured vault URI would let a missing env var fall
     # through to a real network call.
     monkeypatch.delenv("KEY_VAULT_URI", raising=False)
+    # Same reasoning: a developer with this set in their own environment would
+    # otherwise have the suite configure a real exporter and ship spans.
+    monkeypatch.delenv("APPLICATIONINSIGHTS_CONNECTION_STRING", raising=False)
 
     settings_module.settings.cache_clear()
     settings_module.secret.cache_clear()
