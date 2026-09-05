@@ -86,7 +86,7 @@ def overview(conn: Any) -> dict[str, Any]:
 
     last_run = _row(
         conn,
-        "SELECT id, started_at, finished_at, status, dry_run, decisions_made,"
+        "SELECT id, started_at, finished_at, status, trigger, dry_run, decisions_made,"
         "       trades_executed, cost_usd"
         " FROM agent_runs ORDER BY started_at DESC LIMIT 1",
     )

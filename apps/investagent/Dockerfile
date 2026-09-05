@@ -6,7 +6,24 @@
 # must pass --platform linux/amd64. The Makefile's `build` target does it rather
 # than leaving it to memory.
 
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
+# Builder and runtime both derive from `base`, and that is load-bearing rather
+# than tidy. The runtime stage copies the whole virtualenv, and a venv is bound
+# to the exact minor version that created it — its packages live in
+# lib/python3.X/site-packages and no other interpreter will look there. While
+# the stages named their Python separately, a Renovate "non-major" bump moved
+# the runtime from 3.12 to 3.14 and left the builder's uv image on 3.12; the
+# image that produced had no site-packages on sys.path at all and died with a
+# bare "No module named 'investagent'". One FROM line for the version means the
+# two cannot drift apart again.
+FROM python:3.14-slim-bookworm@sha256:9ab8d9c8514b44f90cf0029dd42fdd7e9e211e639c8b995304cc04568dee900f AS base
+
+
+FROM base AS builder
+
+# uv is copied in rather than supplying the base image, which is exactly what
+# lets the builder share the runtime's interpreter. UV_PYTHON_DOWNLOADS=never
+# then stops uv fetching a different one of its own.
+COPY --from=ghcr.io/astral-sh/uv:0.9.30 /uv /uvx /bin/
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -30,7 +47,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable
 
 
-FROM python:3.14-slim-bookworm@sha256:9ab8d9c8514b44f90cf0029dd42fdd7e9e211e639c8b995304cc04568dee900f AS runtime
+FROM base AS runtime
 
 # psycopg is installed as the binary wheel, so no libpq or build toolchain is
 # needed at runtime — which is most of why this image stays small.

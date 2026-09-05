@@ -9,7 +9,7 @@
 import { Fragment, useState } from "react";
 
 import type { Article, Decision, DecisionDetail, Holding, Run, Trade } from "../api";
-import { day, gbp, get, pct } from "../api";
+import { day, gbp, get, pct, when } from "../api";
 
 export function HoldingsTable({ rows }: { rows: Holding[] }) {
   if (rows.length === 0) return <div className="state">Nothing held yet.</div>;
@@ -157,7 +157,7 @@ export function DecisionsTable({ rows }: { rows: Decision[] }) {
           {rows.map((row) => (
             <Fragment key={row.id}>
               <tr>
-                <td>{day(row.decided_at)}</td>
+                <td>{when(row.decided_at)}</td>
                 <td>{row.ticker}</td>
                 <td>{row.action}</td>
                 <td className="num">
@@ -226,7 +226,7 @@ export function TradesTable({ rows }: { rows: Trade[] }) {
         <tbody>
           {rows.map((row) => (
             <tr key={row.id}>
-              <td>{day(row.created_at)}</td>
+              <td>{when(row.created_at)}</td>
               <td>{row.ticker}</td>
               <td>{row.side}</td>
               <td>
@@ -256,6 +256,7 @@ export function RunsTable({ rows }: { rows: Run[] }) {
         <thead>
           <tr>
             <th>Started</th>
+            <th>Trigger</th>
             <th>Status</th>
             <th className="num">Decisions</th>
             <th className="num">Trades</th>
@@ -266,7 +267,8 @@ export function RunsTable({ rows }: { rows: Run[] }) {
         <tbody>
           {rows.map((row) => (
             <tr key={row.id}>
-              <td>{row.started_at.slice(0, 16).replace("T", " ")}</td>
+              <td>{when(row.started_at)}</td>
+              <td>{row.trigger}</td>
               <td>
                 {/* Status is a word, never a colour alone. `stale` is computed
                     by the API: a run killed outright cannot close its own row,

@@ -19,6 +19,7 @@ export type Overview = {
     id: number;
     started_at: string;
     status: string;
+    trigger: string;
     dry_run: boolean;
     decisions_made: number | null;
     trades_executed: number | null;
@@ -108,6 +109,10 @@ export type Run = {
   started_at: string;
   finished_at: string | null;
   status: string;
+  // 'schedule' or 'manual', per the CHECK constraint on agent_runs.trigger. A
+  // run started by hand and a run the cron fired are otherwise indistinguishable
+  // in this table, and they are read very differently.
+  trigger: string;
   dry_run: boolean;
   decisions_made: number | null;
   trades_executed: number | null;
@@ -160,3 +165,10 @@ export const pct = (value: number | null | undefined): string =>
   value === null || value === undefined ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
 
 export const day = (iso: string): string => iso.slice(0, 10);
+
+// Sliced rather than parsed through Date, for the same reason day() is: the
+// zone is forced to UTC and said out loud. Everything these timestamps get read
+// against is UTC — the 06:00 agent cron, the 14:30 market open, the job logs —
+// so rendering them in the browser's zone would shift them an hour under BST
+// and make a 06:00 run look like it started at 07:00.
+export const when = (iso: string): string => `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
