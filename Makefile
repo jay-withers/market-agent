@@ -2,6 +2,9 @@ TF_DIR := terraform
 APP_DIR := apps/investagent
 ENV ?= dev
 
+# How many log lines logs-azure-history pulls back.
+LINES ?= 200
+
 # Deterministic by convention — the naming module carries no random suffix — so
 # hardcoding the dev vault is safe, and overridable for anything else.
 KEY_VAULT_URI ?= https://kv-marketagent-dev.vault.azure.net/
@@ -98,11 +101,27 @@ deploy: ## terraform apply with the built image tag (set ENV, default dev)
 	  -var-file=environments/$(ENV).tfvars \
 	  -var image_tag=$(IMAGE_TAG)
 
-logs-azure: ## Tail the agent job's logs in Azure
+# --container is mandatory here, and it names the container inside the job
+# (`agent`), not the job itself. Streaming only works while an execution has a
+# live replica: a finished run keeps none, and the CLI then fails with "No
+# replicas found for execution". Use logs-azure-history for a run that is over.
+logs-azure: ## Tail the agent job's logs in Azure (only while a run is in flight)
 	az containerapp job logs show \
 	  --name $$(terraform -chdir=$(TF_DIR) output -raw agent_job_name) \
 	  --resource-group $$(terraform -chdir=$(TF_DIR) output -raw resource_group_name) \
+	  --container agent \
 	  --follow
+
+# Log Analytics keeps what the replicas don't, so this is the one that works
+# after a scheduled run has finished. Ingestion lags by a few minutes, which is
+# why it complements the live tail rather than replacing it.
+logs-azure-history: ## The agent job's recent logs from Log Analytics (LINES=200)
+	az monitor log-analytics query \
+	  --workspace $$(az monitor log-analytics workspace list \
+	    --resource-group $$(terraform -chdir=$(TF_DIR) output -raw resource_group_name) \
+	    --query "[0].customerId" -o tsv) \
+	  --analytics-query "ContainerAppConsoleLogs_CL | where ContainerName_s == 'agent' | top $(LINES) by TimeGenerated desc | order by TimeGenerated asc | project TimeGenerated, Log_s" \
+	  -o table
 
 # -backend=false: the azurerm backend is configured partially (see
 # terraform/backends/), so a plain init would prompt for the missing values.

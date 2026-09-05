@@ -83,4 +83,14 @@ testpaths = ["tests"]
 # Money is Decimal throughout and a float creeping in would silently reintroduce
 # the rounding the schema's NUMERIC columns exist to avoid, so the warning that
 # catches it is an error here.
-filterwarnings = ["error"]
+#
+# The one exemption is starlette's TestClient, which reaches for the
+# anyio.abc.BlockingPortal alias that anyio 4.15 deprecated. It fires on import
+# rather than in a test, so it takes out collection of the whole API module.
+# starlette 1.6.0 is the current release and still carries it, so there is no
+# version to move to — drop this line once there is. Matched on the exact
+# message so nothing else is silenced.
+filterwarnings = [
+  "error",
+  "ignore:The anyio\\.abc\\.BlockingPortal alias is deprecated:DeprecationWarning",
+]
