@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
 
 # Container Apps runs linux/amd64 only, and the dev host here is arm64 (Docker
 # Desktop on Apple Silicon). A native build produces an image that crash-loops
@@ -23,7 +23,7 @@ FROM base AS builder
 # uv is copied in rather than supplying the base image, which is exactly what
 # lets the builder share the runtime's interpreter. UV_PYTHON_DOWNLOADS=never
 # then stops uv fetching a different one of its own.
-COPY --from=ghcr.io/astral-sh/uv:0.9.30 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.9.30@sha256:538e0b39736e7feae937a65983e49d2ab75e1559d35041f9878b7b7e51de91e4 /uv /uvx /bin/
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
