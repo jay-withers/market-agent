@@ -11,3 +11,20 @@ jobs:
     permissions:
       contents: write
     uses: jay-withers/workflows/.github/workflows/release.yml@944b2861b22b81934f91f3e2d7e4c56c5dc17da8 # v0.2.9
+
+  # Publish runs as a reusable workflow so the same job can be re-triggered
+  # manually (workflow_dispatch) against an existing tag if a build fails,
+  # without minting a new version.
+  #
+  # Guarded on a tag actually having been created: a merge whose commits carry
+  # no release-worthy change bumps nothing, and there would be no version to
+  # tag an image with.
+  publish:
+    needs: tag
+    if: needs.tag.outputs.tag != ''
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/cd-publish.yml
+    with:
+      version: ${{ needs.tag.outputs.tag }}

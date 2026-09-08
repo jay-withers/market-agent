@@ -1,0 +1,16 @@
+# The build context is sent to the Docker daemon before anything is built, so
+# excluding node_modules is not tidiness: it is ~80 MB shipped over the socket
+# on every `make build`, and the Dockerfile deliberately does not use it — the
+# builder stage runs `npm ci` from package-lock.json so the install is
+# reproducible rather than whatever the host happens to have resolved.
+node_modules/
+
+# Built by the builder stage inside the image. A host dist/ in the context is
+# stale by definition and is never copied.
+dist/
+.vite/
+
+# Never wanted in an image, and .env in particular would bake local secrets
+# into a layer that ships to a public registry.
+.env
+.env.*

@@ -1,0 +1,106 @@
+name: cd-publish
+
+# Builds and pushes the application images to GHCR for a given tag. Invoked by
+# cd-tag after a version bump, or manually to (re)publish an existing tag.
+#
+# This replaces `make build && make push` from a laptop as the release path.
+# That worked, but it published whatever was in the working tree, tagged with
+# the local git SHA, built through QEMU emulation because the dev host is arm64
+# and Container Apps is amd64-only. Here the runner is natively amd64 and the
+# source is an immutable tag, so what is published is exactly what was merged.
+# The Makefile targets stay for local iteration.
+#
+# Only linux/amd64 is built. Container Apps runs nothing else, and a manifest
+# list with one entry buys nothing.
+#
+# Two tags are pushed for each image, both immutable:
+#
+#   vX.Y.Z    the release this came from, for a deploy someone has to reason
+#             about later
+#   <sha>     the short commit SHA, which is what the Makefile's IMAGE_TAG
+#             defaults to and what existing deploys and agent_runs rows record
+#
+# Neither is ever moved. Container Apps only creates a revision when the
+# template changes, so re-pushing a moving tag would deploy nothing and report
+# success — which is the failure mode this avoids by construction.
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Git tag to publish (e.g. v1.2.3)
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing git tag to publish (e.g. v1.2.3)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  publish:
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [investagent, dashboard]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout ${{ inputs.version }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.version }}
+
+      # The tag points at a commit, and that commit's short SHA is the tag the
+      # Makefile and Terraform already use — so resolve it here rather than
+      # using github.sha, which on a workflow_call is the branch head and would
+      # drift from the tag being published.
+      - name: Resolve the commit SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # GHCR defaults a new package to private regardless of repository
+      # visibility, and Container Apps pulls anonymously. Both packages were
+      # made public by hand after their first manual push; pushing to an
+      # existing package keeps that setting, so this needs no action here — but
+      # a new image added to the matrix will need the same one-off flip.
+      - name: Build and push ${{ matrix.image }}
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: apps/${{ matrix.image }}
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${{ inputs.version }}
+            ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${{ steps.sha.outputs.short }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+      - name: Summarise
+        run: |
+          {
+            echo "### ${{ matrix.image }}"
+            echo
+            echo '```'
+            echo "${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${{ inputs.version }}"
+            echo "${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${{ steps.sha.outputs.short }}"
+            echo '```'
+            echo
+            echo "Deploy with \`make deploy IMAGE_TAG=${{ inputs.version }}\`."
+          } >> "$GITHUB_STEP_SUMMARY"
