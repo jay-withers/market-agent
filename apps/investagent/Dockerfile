@@ -49,6 +49,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 FROM base AS runtime
 
+# This label is what connects the pushed package to this repository, and the
+# connection is what gives a workflow's GITHUB_TOKEN write access to it. Both
+# packages were first pushed by hand without it, so they were user-scoped and
+# unlinked, and cd-publish failed with `denied: permission_denied:
+# write_package` however its `packages: write` permission was declared.
+LABEL org.opencontainers.image.source="https://github.com/jay-withers/market-agent"
+
 # psycopg is installed as the binary wheel, so no libpq or build toolchain is
 # needed at runtime — which is most of why this image stays small.
 ENV PATH="/app/.venv/bin:$PATH" \
