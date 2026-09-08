@@ -37,7 +37,7 @@ reached through the host daemon via a devcontainer feature.
 
 ```
 apps/
-  investagent/            # one Python package, one image, three entrypoints
+  investagent/            # one Python package, one image, four entrypoints
     pyproject.toml
     Dockerfile
     src/investagent/

@@ -49,6 +49,7 @@ def client(monkeypatch):
     monkeypatch.setattr(queries, "trades", lambda c, limit: [])
     monkeypatch.setattr(queries, "runs", lambda c, limit: [])
     monkeypatch.setattr(queries, "latest_summary", lambda c: None)
+    monkeypatch.setattr(queries, "latest_review", lambda c: None)
 
     with TestClient(app) as test_client:
         test_client.conn = conn
@@ -120,6 +121,27 @@ def test_a_missing_decision_is_a_404_not_a_null_body(client):
 
 def test_a_missing_summary_is_a_404(client):
     assert client.get("/api/summaries/latest").status_code == 404
+
+
+def test_a_missing_weekly_review_is_a_404(client):
+    """Which is the state of things until the first Sunday run, so the
+    dashboard fetches this one endpoint tolerantly."""
+    assert client.get("/api/reviews/latest").status_code == 404
+
+
+def test_a_weekly_review_is_returned_without_its_rendered_html(client, monkeypatch):
+    """`body_html` is Markdown-rendered *model* output and Python-Markdown
+    passes raw HTML through, so it is not served to a browser at all."""
+    monkeypatch.setattr(
+        queries,
+        "latest_review",
+        lambda c: {"id": 1, "assessment": "A quiet week.", "recommendations": []},
+    )
+
+    body = client.get("/api/reviews/latest").json()
+
+    assert body["assessment"] == "A quiet week."
+    assert "body_html" not in body
 
 
 @pytest.mark.parametrize(("limit", "expected"), [(1, 200), (500, 200), (0, 422), (501, 422)])

@@ -36,9 +36,10 @@ _configured = False
 def configure(role: str) -> bool:
     """Set up tracing, metrics and log export. Returns whether it was enabled.
 
-    `role` becomes the cloud role name, so the API, the agent and the summary
-    job are distinguishable in the portal rather than appearing as one
-    application — they share an image and would otherwise be indistinguishable.
+    `role` becomes the cloud role name, so the API, the agent, the summary job
+    and the weekly review are distinguishable in the portal rather than
+    appearing as one application — they share an image and would otherwise be
+    indistinguishable.
 
     Call this *before* the FastAPI app is imported: the instrumentation patches
     `FastAPI.__init__` to add its middleware, so an app object built first is

@@ -24,7 +24,7 @@ from typing import Any
 
 import anthropic
 
-from ..models import DailyNarrative, NewsRelevance, Recommendation
+from ..models import DailyNarrative, NewsRelevance, Recommendation, WeeklyReview
 from ..settings import secret, settings
 from .base import PROMPT_VERSION, LlmResult, Usage
 
@@ -81,6 +81,41 @@ Write a few short paragraphs covering what the AI decided and why, anything the 
 risk engine refused or reduced, and what is worth watching tomorrow. Be plain \
 and specific. The reader is the person running the experiment, so no \
 salesmanship and no financial advice."""
+
+
+REVIEW_SYSTEM = f"""You review one week of an automated paper-trading \
+experiment running a notional GBP 500, and propose what to change. Prompt \
+version {PROMPT_VERSION}.
+
+The system you are reviewing has three parts: an LLM that recommends \
+BUY/SELL/HOLD per ticker from news, a deterministic risk engine that decides \
+what is actually permitted, and a paper broker that executes what survives. \
+The experiment's question is whether this beats a passive index or a savings \
+account over months.
+
+You are given the week's figures as tables, including the risk engine's limits \
+and a count of which constraint bound or refused each decision. They are \
+already correct and are shown to the reader above your text, so do not repeat \
+them and never restate a number in a different form. If a figure is not in the \
+tables, you do not know it.
+
+Four things to understand about your role:
+
+1. **One week is a very short sample.** Say so where it matters. Distinguish \
+between what the figures show about the *machinery* — a constraint that \
+refuses most decisions, a ticker that never produces relevant news, a job that \
+failed — which one week evidences well, and what they show about the \
+*strategy*, which one week barely evidences at all.
+2. **The risk engine's refusals are the most informative column you have.** A \
+constraint that binds constantly is either doing its job or is mis-sized, and \
+which of those it is depends on what it refused. Take a view.
+3. **Your proposals are advisory.** A person reads them and edits the code; \
+nothing here is applied automatically. So propose changes to configuration, \
+the watchlist, the prompts or the schedule — concretely, naming values — and \
+do not propose a specific trade. Individual positions are the daily job's \
+business, not yours.
+4. **Proposing nothing is a real answer.** A week that supports no change \
+should produce an empty list, not five weak suggestions."""
 
 
 class AnthropicLlm:
@@ -150,6 +185,23 @@ class AnthropicLlm:
             **self._reasoning_params(self.analysis_model),
         )
         return self._result(response, self.analysis_model, DailyNarrative)
+
+    def review(self, prompt: str) -> LlmResult[WeeklyReview]:
+        """The weekly review. Same model and shape as `narrate`, different system prompt.
+
+        On the analysis model rather than the filter model: this is the one
+        call a week where the reasoning is the product, and it runs 52 times a
+        year against the filter stage's ~40,000.
+        """
+        response = self.client.messages.parse(
+            model=self.analysis_model,
+            max_tokens=self._analysis_max_tokens,
+            system=REVIEW_SYSTEM,
+            messages=[{"role": "user", "content": prompt}],
+            output_format=WeeklyReview,
+            **self._reasoning_params(self.analysis_model),
+        )
+        return self._result(response, self.analysis_model, WeeklyReview)
 
     def _reasoning_params(self, model: str) -> dict[str, Any]:
         """Thinking and effort, or nothing at all on a pre-4.6 model.

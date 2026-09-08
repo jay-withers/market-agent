@@ -20,6 +20,16 @@ module "naming_daily_summary" {
   suffix  = [var.project_name, var.environment, "summary"]
 }
 
+# "weekly", not "weekly-review": caj-marketagent-dev-weekly-review is 33
+# characters against the 32 that container app jobs allow — the same trap the
+# daily summary hit. The job's own container is still named weekly-review below.
+module "naming_weekly_review" {
+  # checkov:skip=CKV_TF_1: Terraform Registry module pinned by semver.
+  source  = "Azure/naming/azurerm"
+  version = "~> 0.4"
+  suffix  = [var.project_name, var.environment, "weekly"]
+}
+
 # Market data and news in, analysis and risk rules applied, decisions recorded.
 #
 # One measured run takes about 4 minutes against the 1800-second timeout, so the
@@ -101,6 +111,56 @@ resource "azurerm_container_app_job" "daily_summary" {
 
       command = ["investagent"]
       args    = ["summary"]
+
+      dynamic "env" {
+        for_each = local.common_env
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+    }
+  }
+
+  tags = local.tags
+}
+
+
+# The week in review: is the machinery working, and what should change.
+#
+# Sunday at 22:00 UTC by default, an hour after that day's summary, because it
+# reads the summary's valuation as the week's closing figure. Reads only — no
+# market data, no broker, one model call — so the 1800-second bound is loose
+# rather than considered.
+resource "azurerm_container_app_job" "weekly_review" {
+  name                         = module.naming_weekly_review.container_app_job.name
+  container_app_environment_id = azurerm_container_app_environment.this.id
+  resource_group_name          = azurerm_resource_group.this.name
+  location                     = azurerm_resource_group.this.location
+
+  replica_timeout_in_seconds = 1800
+  replica_retry_limit        = 1
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.this.id]
+  }
+
+  schedule_trigger_config {
+    cron_expression          = var.weekly_review_cron_expression
+    parallelism              = 1
+    replica_completion_count = 1
+  }
+
+  template {
+    container {
+      name   = "weekly-review"
+      image  = local.app_image
+      cpu    = local.container_cpu
+      memory = local.container_memory
+
+      command = ["investagent"]
+      args    = ["weekly"]
 
       dynamic "env" {
         for_each = local.common_env

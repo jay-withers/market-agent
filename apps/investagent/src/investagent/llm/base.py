@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Protocol
 
-from ..models import DailyNarrative, NewsRelevance, Recommendation
+from ..models import DailyNarrative, NewsRelevance, Recommendation, WeeklyReview
 
 # Bump when a prompt changes in a way that could change an answer. It is stored
 # on every `news_analysis` and `ai_decisions` row and is part of the
@@ -116,8 +116,8 @@ class Llm(Protocol):
     """What the agent job needs from an LLM.
 
     A Protocol rather than an abstract base class so a test double is any
-    object with the right two methods — no import of the provider, no API key,
-    no network.
+    object with the right methods — no import of the provider, no API key, no
+    network.
     """
 
     def filter_news(
@@ -132,4 +132,8 @@ class Llm(Protocol):
 
     def narrate(self, prompt: str) -> LlmResult[DailyNarrative]:
         """Write the daily summary's commentary. Figures are supplied, not derived."""
+        ...
+
+    def review(self, prompt: str) -> LlmResult[WeeklyReview]:
+        """Assess a week of the experiment and propose changes. Advisory only."""
         ...

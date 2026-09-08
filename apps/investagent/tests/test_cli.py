@@ -1,6 +1,8 @@
-"""Tests for the entrypoint the three workloads share."""
+"""Tests for the entrypoint the four workloads share."""
 
 from __future__ import annotations
+
+from datetime import date
 
 import pytest
 
@@ -106,20 +108,59 @@ def test_a_terminated_agent_run_still_exits_non_zero(monkeypatch, caplog):
     assert "terminated by signal 15" in caplog.text
 
 
-class _FakeSummary:
-    """Stands in for the `investagent.jobs.summary` module.
+def test_the_weekly_command_runs_the_review_job(monkeypatch):
+    called = {}
+    monkeypatch.setattr(cli, "_configure_logging", lambda: None)
+    _stub_job(monkeypatch, "weekly", _FakeSummary(called))
 
-    Substituted rather than left to import: the real one opens a connection
+    assert cli.main(["weekly"]) == 0
+    assert called["ran"] is True
+
+
+def test_the_weekly_command_takes_a_date_so_a_past_week_can_be_reviewed(monkeypatch):
+    """The review reads only stored rows, so an older window is as answerable
+    as the current one — and the first run wants last week, not today."""
+    called = {}
+    monkeypatch.setattr(cli, "_configure_logging", lambda: None)
+    _stub_job(monkeypatch, "weekly", _FakeSummary(called))
+
+    assert cli.main(["weekly", "--as-of", "2026-09-06"]) == 0
+    assert called["as_of"] == date(2026, 9, 6)
+
+
+def test_a_malformed_as_of_is_rejected_before_the_job_starts(monkeypatch):
+    monkeypatch.setattr(cli, "_configure_logging", lambda: None)
+
+    with pytest.raises(SystemExit):
+        cli.main(["weekly", "--as-of", "last sunday"])
+
+
+def test_a_failed_weekly_review_exits_non_zero(monkeypatch, caplog):
+    monkeypatch.setattr(cli, "_configure_logging", lambda: None)
+    _stub_job(monkeypatch, "weekly", _FakeSummary({}, error=RuntimeError("no portfolio")))
+
+    assert cli.main(["weekly"]) == 1
+    assert "weekly review failed: no portfolio" in caplog.text
+
+
+class _FakeSummary:
+    """Stands in for the `investagent.jobs.summary` and `.weekly` modules.
+
+    Substituted rather than left to import: the real ones open a connection
     pool, and a test that reaches for a database waits out the pool timeout
-    before failing for the wrong reason.
+    before failing for the wrong reason. Both take only keyword arguments, so
+    one double serves for both.
     """
 
     def __init__(self, called: dict, error: Exception | None = None):
         self._called = called
         self._error = error
 
-    def run(self, *_args, **_kwargs):
+    def run(self, *_args, **kwargs):
         self._called["ran"] = True
+        # Recorded so the weekly command's --as-of can be asserted; the daily
+        # summary passes nothing and simply leaves it absent.
+        self._called.update(kwargs)
         if self._error:
             raise self._error
         return 1

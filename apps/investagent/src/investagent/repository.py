@@ -16,6 +16,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
+from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from .marketdata import Bar
@@ -605,3 +606,236 @@ def save_summary(
         ),
     ).fetchone()
     return int(row[0])
+
+
+# ---------------------------------------------------------------------------
+# The weekly review, owned by the weekly job
+# ---------------------------------------------------------------------------
+
+
+def _jsonable(value: Any) -> Any:
+    """Make a metrics structure safe for `jsonb`.
+
+    The same conversion `model_dump(mode="json")` does for the Pydantic objects
+    in `ai_decisions`, but these rows come straight from SQL and are plain
+    dicts: `Decimal` becomes a string rather than a float, because the column
+    is a record of what the model was shown and a float would quietly lose the
+    last penny.
+    """
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {k: _jsonable(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [_jsonable(v) for v in value]
+    return value
+
+
+def week_metrics(conn: Any, pid: int, start: date, end: date) -> dict[str, Any]:
+    """Everything the weekly review is allowed to state, straight from the tables.
+
+    Reads only. The review job fetches no prices, no news and no broker state:
+    the agent and the summary have already written the week down, and a review
+    that re-fetched could report figures the stored series disagrees with.
+
+    Both ends of the window are inclusive.
+    """
+    window = {"pid": pid, "start": start, "end": end}
+
+    def rows(sql: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        with conn.cursor(row_factory=dict_row) as cur:
+            return cur.execute(sql, params or window).fetchall()
+
+    def one(sql: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        found = rows(sql, params)
+        return found[0] if found else None
+
+    runs = one(
+        "SELECT count(*) AS runs,"
+        "       count(*) FILTER (WHERE status = 'succeeded') AS succeeded,"
+        "       count(*) FILTER (WHERE status = 'failed') AS failed,"
+        "       count(*) FILTER (WHERE status = 'running') AS unfinished,"
+        "       count(*) FILTER (WHERE dry_run) AS dry_runs,"
+        "       coalesce(sum(news_fetched), 0) AS news_fetched,"
+        "       coalesce(sum(news_relevant), 0) AS news_relevant,"
+        "       coalesce(sum(decisions_made), 0) AS decisions_made,"
+        "       coalesce(sum(trades_executed), 0) AS trades_executed,"
+        "       coalesce(sum(input_tokens), 0) AS input_tokens,"
+        "       coalesce(sum(output_tokens), 0) AS output_tokens,"
+        # Summed from the per-run figure, which was itself accumulated per call:
+        # the two stages use different models at different rates, so pricing a
+        # mixed token total at either rate is simply wrong.
+        "       coalesce(sum(cost_usd), 0) AS cost_usd,"
+        "       avg(extract(epoch FROM finished_at - started_at)) AS avg_seconds"
+        " FROM agent_runs WHERE started_at::date BETWEEN %(start)s AND %(end)s"
+    )
+
+    decisions = rows(
+        "SELECT action, count(*) AS decisions,"
+        "       avg(confidence) AS avg_confidence,"
+        "       count(*) FILTER (WHERE (risk_verdict->>'approved')::boolean) AS approved"
+        " FROM ai_decisions WHERE decided_at::date BETWEEN %(start)s AND %(end)s"
+        " GROUP BY action ORDER BY action"
+    )
+
+    # The most informative table in the review. `binding_constraint` names the
+    # single rule that decided each verdict, so grouped and split by outcome it
+    # answers the question a week of prose cannot: which limit is actually
+    # shaping this experiment. `binding` rather than `constraint` as the alias
+    # because CONSTRAINT is reserved.
+    constraints = rows(
+        "SELECT risk_verdict->>'binding_constraint' AS binding,"
+        "       (risk_verdict->>'approved')::boolean AS approved,"
+        "       count(*) AS decisions"
+        " FROM ai_decisions WHERE decided_at::date BETWEEN %(start)s AND %(end)s"
+        " GROUP BY binding, approved ORDER BY decisions DESC, binding"
+    )
+
+    trades = rows(
+        "SELECT status, count(*) AS trades,"
+        "       count(*) FILTER (WHERE dry_run) AS simulated,"
+        "       coalesce(sum(notional_gbp), 0) AS notional_gbp"
+        " FROM trades WHERE portfolio_id = %(pid)s"
+        "   AND created_at::date BETWEEN %(start)s AND %(end)s"
+        " GROUP BY status ORDER BY status"
+    )
+
+    # Per watchlist name, from `companies` rather than from the decisions: a
+    # ticker the agent never reached is exactly the row worth seeing, and a join
+    # driven by `ai_decisions` would omit it. Scalar subqueries because the
+    # counts come from three different tables and the watchlist is ten rows.
+    tickers = rows(
+        "SELECT c.ticker,"
+        "       (SELECT count(*) FROM ai_decisions d WHERE d.ticker = c.ticker"
+        "          AND d.decided_at::date BETWEEN %(start)s AND %(end)s) AS decisions,"
+        "       (SELECT count(*) FROM ai_decisions d WHERE d.ticker = c.ticker"
+        "          AND d.action <> 'HOLD'"
+        "          AND d.decided_at::date BETWEEN %(start)s AND %(end)s) AS convictions,"
+        "       (SELECT count(*) FROM news_analysis a WHERE a.ticker = c.ticker AND a.relevant"
+        "          AND a.analysed_at::date BETWEEN %(start)s AND %(end)s) AS relevant_news,"
+        "       (SELECT count(*) FROM trades t WHERE t.ticker = c.ticker"
+        "          AND t.portfolio_id = %(pid)s"
+        "          AND t.created_at::date BETWEEN %(start)s AND %(end)s) AS trades"
+        " FROM companies c WHERE c.is_active AND NOT c.is_benchmark ORDER BY c.ticker"
+    )
+
+    valuation = one(
+        "SELECT as_of, total_value_gbp, cash_gbp, positions_value_gbp, pnl_gbp, pnl_pct"
+        " FROM daily_performance WHERE portfolio_id = %(pid)s"
+        "   AND as_of BETWEEN %(start)s AND %(end)s"
+        " ORDER BY as_of DESC LIMIT 1"
+    )
+
+    # The last valuation *before* the window, which is what the week's change is
+    # measured against. Absent in the experiment's first week, and the caller
+    # substitutes the notional rather than reporting a change of nothing.
+    opening = one(
+        "SELECT total_value_gbp FROM daily_performance WHERE portfolio_id = %(pid)s"
+        "   AND as_of < %(start)s ORDER BY as_of DESC LIMIT 1"
+    )
+
+    # A benchmark with no point inside the window is absent from this list, not
+    # reported flat: £500 unchanged reads as "the index did nothing", which is a
+    # different and wrong claim from "we have no data".
+    benchmarks = rows(
+        "SELECT b.symbol,"
+        "       (SELECT value_gbp FROM benchmarks n WHERE n.symbol = b.symbol"
+        "          AND n.as_of <= %(end)s ORDER BY n.as_of DESC LIMIT 1) AS value_gbp,"
+        "       (SELECT value_gbp FROM benchmarks o WHERE o.symbol = b.symbol"
+        "          AND o.as_of < %(start)s ORDER BY o.as_of DESC LIMIT 1) AS opening_gbp"
+        " FROM benchmarks b WHERE b.as_of BETWEEN %(start)s AND %(end)s"
+        " GROUP BY b.symbol ORDER BY b.symbol"
+    )
+
+    # Whether the daily job actually reported. A week of missing or failed
+    # emails is a finding in its own right — the 2026-09-03 send was lost to a
+    # bad recipient and nothing but this column would have said so.
+    summaries = one(
+        "SELECT count(*) AS days,"
+        "       count(*) FILTER (WHERE email_status = 'sent') AS sent,"
+        "       count(*) FILTER (WHERE email_status = 'failed') AS failed,"
+        "       count(*) FILTER (WHERE email_status = 'skipped') AS skipped"
+        " FROM daily_summaries WHERE as_of BETWEEN %(start)s AND %(end)s"
+    )
+
+    return {
+        "runs": runs or {},
+        "decisions": decisions,
+        "constraints": constraints,
+        "trades": trades,
+        "tickers": tickers,
+        "valuation": valuation,
+        "opening_total_gbp": opening["total_value_gbp"] if opening else None,
+        "benchmarks": benchmarks,
+        "summaries": summaries or {},
+    }
+
+
+def save_weekly_review(
+    conn: Any,
+    period_start: date,
+    period_end: date,
+    subject: str,
+    assessment: str,
+    body_markdown: str,
+    body_html: str,
+    metrics: dict[str, Any],
+    recommendations: list[dict[str, Any]],
+    model: str | None,
+    prompt_version: str | None,
+    email_status: str,
+    provider_id: str | None,
+    error: str | None,
+) -> int:
+    row = conn.execute(
+        "INSERT INTO weekly_reviews (period_start, period_end, subject, assessment,"
+        "   body_markdown, body_html, metrics, recommendations, model, prompt_version,"
+        "   email_status, email_provider_id, email_error, sent_at)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
+        "         CASE WHEN %s = 'sent' THEN now() ELSE NULL END)"
+        # Re-running a week overwrites its review, so a retry after a mail
+        # outage is safe — the same property the daily summary has.
+        " ON CONFLICT (period_end) DO UPDATE SET"
+        "   period_start = EXCLUDED.period_start, subject = EXCLUDED.subject,"
+        "   assessment = EXCLUDED.assessment,"
+        "   body_markdown = EXCLUDED.body_markdown, body_html = EXCLUDED.body_html,"
+        "   metrics = EXCLUDED.metrics, recommendations = EXCLUDED.recommendations,"
+        "   model = EXCLUDED.model, prompt_version = EXCLUDED.prompt_version,"
+        "   email_status = EXCLUDED.email_status,"
+        "   email_provider_id = EXCLUDED.email_provider_id,"
+        "   email_error = EXCLUDED.email_error, sent_at = EXCLUDED.sent_at"
+        " RETURNING id",
+        (
+            period_start,
+            period_end,
+            subject,
+            assessment,
+            body_markdown,
+            body_html,
+            Jsonb(_jsonable(metrics)),
+            Jsonb(_jsonable(recommendations)),
+            model,
+            prompt_version,
+            email_status,
+            provider_id,
+            error,
+            email_status,
+        ),
+    ).fetchone()
+    return int(row[0])
+
+
+def last_recommendations(conn: Any, before: date) -> list[dict[str, Any]]:
+    """The previous review's proposals, for the next review's prompt.
+
+    Empty rather than absent when there is no earlier review, so the first week
+    needs no special case at the call site.
+    """
+    row = conn.execute(
+        "SELECT recommendations FROM weekly_reviews WHERE period_end < %s"
+        " ORDER BY period_end DESC LIMIT 1",
+        (before,),
+    ).fetchone()
+    return list(row[0]) if row and row[0] else []
