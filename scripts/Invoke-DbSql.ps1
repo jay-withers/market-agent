@@ -157,7 +157,13 @@ finally {
     # blocking forever — the message below says how to remove it.
     $keep = $KeepFirewallRule -or [Console]::IsInputRedirected
     if (-not $keep) {
-        $keep = (Read-Host "remove firewall rule $rule for $myIp? [Y/n]").Trim() -match '^n'
+        # ${myIp}, braced: `?` is a legal character in an unbraced PowerShell
+        # variable name, so "$myIp?" parses as a variable called `myIp?` and
+        # Set-StrictMode throws on it as unset. The prompt is the only
+        # interactive line in the script, so this failed *after* every file had
+        # run and left the firewall rule behind — with the error pointing at a
+        # variable that is plainly set two lines up.
+        $keep = (Read-Host "remove firewall rule $rule for ${myIp}? [Y/n]").Trim() -match '^n'
     }
 
     if ($keep) {
