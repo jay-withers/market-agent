@@ -75,11 +75,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Two one-off things a package needs before this step can work, neither
+      # of which `packages: write` above can supply.
+      #
       # GHCR defaults a new package to private regardless of repository
-      # visibility, and Container Apps pulls anonymously. Both packages were
-      # made public by hand after their first manual push; pushing to an
-      # existing package keeps that setting, so this needs no action here — but
-      # a new image added to the matrix will need the same one-off flip.
+      # visibility, and Container Apps pulls anonymously, so each package has
+      # to be flipped to public once. Pushing to an existing package keeps the
+      # setting.
+      #
+      # And GITHUB_TOKEN only has write access to a package that is *linked*
+      # to this repository. A package first pushed by hand (`make push`, a
+      # personal token) is user-scoped and unlinked, and this step then fails
+      # with `denied: permission_denied: write_package` — which reads like a
+      # missing permission rather than a missing link. The
+      # `org.opencontainers.image.source` label in both Dockerfiles is what
+      # establishes the link, but only from a push that is already permitted:
+      # for an already-unlinked package, either push once by hand with the
+      # label in place, or grant this repository Write under the package's
+      # "Manage Actions access".
       - name: Build and push ${{ matrix.image }}
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:

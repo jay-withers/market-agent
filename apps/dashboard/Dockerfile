@@ -21,6 +21,11 @@ RUN npm run build
 
 FROM nginxinc/nginx-unprivileged:1.31-alpine@sha256:aa8c9087d36d93e9d650c5365f883b421e8214aedbad24ade52b844c583358f1 AS runtime
 
+# Connects the pushed package to this repository, which is what gives a
+# workflow's GITHUB_TOKEN write access to it — see the same label in
+# apps/investagent/Dockerfile.
+LABEL org.opencontainers.image.source="https://github.com/jay-withers/market-agent"
+
 # The unprivileged image already runs as uid 101 and listens above 1024, which
 # is what Container Apps wants; rolling our own non-root nginx means fighting
 # its pid file, cache and log paths.
