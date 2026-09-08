@@ -40,6 +40,19 @@ RELEVANCE_JSON = {
     "rationale": "Earnings beat.",
 }
 
+REVIEW_JSON = {
+    "assessment": "A quiet week.",
+    "proposals": [
+        {
+            "area": "risk_limits",
+            "change": "Raise RISK_MAX_DAILY_TRADES from 3 to 5.",
+            "rationale": "daily_trade_limit refused 31 of 51 decisions.",
+            "expected_effect": "More of the model's BUYs reach the broker.",
+            "confidence": 0.7,
+        }
+    ],
+}
+
 
 @pytest.fixture
 def wire():
@@ -152,3 +165,69 @@ def test_every_field_carries_a_description_for_the_model(wire):
 
     properties = captured[0]["output_config"]["format"]["schema"]["properties"]
     assert all("description" in field for field in properties.values())
+
+
+# ---------------------------------------------------------------------------
+# The weekly review, whose schema is the only nested one in the system
+# ---------------------------------------------------------------------------
+
+
+def test_the_weekly_review_request_the_sdk_would_send(wire):
+    client, captured, payload = wire
+    payload["body"] = REVIEW_JSON
+
+    result = AnthropicLlm(
+        client=client, analysis_model="claude-sonnet-5", analysis_effort="high"
+    ).review("The week in figures.")
+
+    body = captured[0]
+    assert body["model"] == "claude-sonnet-5"
+    assert body["thinking"] == {"type": "adaptive"}
+    assert body["output_config"]["effort"] == "high"
+    assert body["output_config"]["format"]["type"] == "json_schema"
+    assert result.value.proposals[0].change.startswith("Raise RISK_MAX_DAILY_TRADES")
+
+
+def test_the_nested_proposal_model_reaches_the_schema_with_its_own_descriptions(wire):
+    """`proposals` is a list of a second Pydantic model, which pydantic renders
+    as a `$defs` entry behind a `$ref` — so its field descriptions sit a level
+    down from every other schema here and are easy to lose without noticing."""
+    client, captured, payload = wire
+    payload["body"] = REVIEW_JSON
+
+    AnthropicLlm(client=client).review("The week in figures.")
+
+    schema = captured[0]["output_config"]["format"]["schema"]
+    assert schema["properties"]["proposals"]["items"] == {"$ref": "#/$defs/ProposedChange"}
+
+    proposal = schema["$defs"]["ProposedChange"]
+    assert all("description" in field for field in proposal["properties"].values())
+    # The closed set of areas, which is what keeps the stored column groupable.
+    assert "risk_limits" in proposal["properties"]["area"]["enum"]
+
+
+def test_the_review_schema_descriptions_are_written_for_the_model(wire):
+    """Both docstrings become schema descriptions the model reads, so neither
+    may carry a note meant for a maintainer — the trap `Recommendation` fell
+    into once already."""
+    client, captured, payload = wire
+    payload["body"] = REVIEW_JSON
+
+    AnthropicLlm(client=client).review("The week in figures.")
+
+    schema = captured[0]["output_config"]["format"]["schema"]
+    for description in (schema["description"], schema["$defs"]["ProposedChange"]["description"]):
+        for leak in ("jsonb", "Decimal", "dashboard", "column", "risklimits.py"):
+            assert leak not in description
+
+
+def test_an_empty_proposal_list_survives_the_round_trip(wire):
+    """Proposing nothing is a real answer, and the field is optional rather
+    than required — a week that supports no change must not fail validation."""
+    client, captured, payload = wire
+    payload["body"] = {"assessment": "Nothing happened worth changing anything over."}
+
+    result = AnthropicLlm(client=client).review("The week in figures.")
+
+    assert result.value.proposals == []
+    assert "proposals" not in captured[0]["output_config"]["format"]["schema"]["required"]

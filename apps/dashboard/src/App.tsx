@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 
-import type { Decision, Holding, Overview, Performance, Run, Trade } from "./api";
-import { gbp, get, pct, when } from "./api";
+import type { Decision, Holding, Overview, Performance, Review, Run, Trade } from "./api";
+import { gbp, get, getOptional, pct, when } from "./api";
 import { PerformanceChart } from "./components/PerformanceChart";
+import { WeeklyReview } from "./components/Review";
 import {
   DecisionsTable,
   HoldingsTable,
@@ -18,6 +19,8 @@ type Data = {
   decisions: Decision[];
   trades: Trade[];
   runs: Run[];
+  // Null until the first Sunday run, which is a state and not a failure.
+  review: Review | null;
 };
 
 export default function App() {
@@ -29,7 +32,7 @@ export default function App() {
 
     // One round of requests in parallel. The API is read-only and every
     // endpoint is bounded, so there is nothing to paginate and nothing to
-    // poll for — the data changes twice a day, on a schedule.
+    // poll for — the data changes twice a day and once a week, on a schedule.
     Promise.all([
       get<Overview>("/api/overview"),
       get<Performance>("/api/performance"),
@@ -37,9 +40,13 @@ export default function App() {
       get<Decision[]>("/api/decisions?limit=50"),
       get<Trade[]>("/api/trades?limit=50"),
       get<Run[]>("/api/runs?limit=20"),
+      // getOptional, because /api/reviews/latest is a 404 until the first
+      // weekly run and one missing section must not blank the page.
+      getOptional<Review>("/api/reviews/latest"),
     ])
-      .then(([overview, performance, holdings, decisions, trades, runs]) => {
-        if (!cancelled) setData({ overview, performance, holdings, decisions, trades, runs });
+      .then(([overview, performance, holdings, decisions, trades, runs, review]) => {
+        if (!cancelled)
+          setData({ overview, performance, holdings, decisions, trades, runs, review });
       })
       .catch((exc: Error) => {
         if (!cancelled) setError(exc.message);
@@ -110,6 +117,15 @@ export default function App() {
 
       <section className="card">
         <PerformanceChart data={data.performance} />
+      </section>
+
+      <section className="card">
+        <h2>Weekly review</h2>
+        <p className="hint">
+          Written on Sunday from the week&rsquo;s stored figures, with the changes it
+          proposes to the experiment.
+        </p>
+        <WeeklyReview review={data.review} />
       </section>
 
       <section className="card">

@@ -33,8 +33,8 @@ output "dashboard_fqdn" {
   value       = azurerm_container_app.dashboard.ingress[0].fqdn
 }
 
-# The two job names are the deploy targets: a scheduled job has to be started by
-# hand to test it, with `az containerapp job start --name <this>`.
+# The three job names are the deploy targets: a scheduled job has to be started
+# by hand to test it, with `az containerapp job start --name <this>`.
 output "agent_job_name" {
   description = "Name of the agent container app job, for `az containerapp job start`."
   value       = azurerm_container_app_job.agent.name
@@ -43,6 +43,11 @@ output "agent_job_name" {
 output "summary_job_name" {
   description = "Name of the daily summary container app job, for `az containerapp job start`."
   value       = azurerm_container_app_job.daily_summary.name
+}
+
+output "weekly_review_job_name" {
+  description = "Name of the weekly review container app job, for `az containerapp job start`."
+  value       = azurerm_container_app_job.weekly_review.name
 }
 
 output "identity_client_id" {

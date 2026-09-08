@@ -1,4 +1,4 @@
-"""Trades, runs, and the daily summary."""
+"""Trades, runs, the daily summary and the weekly review."""
 
 from __future__ import annotations
 
@@ -33,4 +33,13 @@ def latest_summary(conn: Any = Depends(connection)) -> dict[str, Any]:
     found = queries.latest_summary(conn)
     if found is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no summary yet")
+    return found
+
+
+@router.get("/reviews/latest")
+def latest_review(conn: Any = Depends(connection)) -> dict[str, Any]:
+    """The most recent weekly review. 404 until the first Sunday run."""
+    found = queries.latest_review(conn)
+    if found is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no weekly review yet")
     return found

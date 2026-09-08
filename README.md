@@ -43,10 +43,10 @@ Two departures from the original design:
 
 ## The application
 
-`apps/investagent/` is one Python package with three entrypoints (`api`, `agent`,
-`summary`) sharing one image: they have the risk engine, the database layer, the
-broker client and the LLM client in common, so three images would mean three
-builds of near-identical layers. The dashboard is genuinely separate and gets
+`apps/investagent/` is one Python package with four entrypoints (`api`, `agent`,
+`summary`, `weekly`) sharing one image: they have the risk engine, the database
+layer, the broker client and the LLM client in common, so four images would mean
+four builds of near-identical layers. The dashboard is genuinely separate and gets
 its own.
 
 | Module | What it does |
@@ -449,7 +449,7 @@ always runs and aggregates the validate and plan jobs.
 
 ```
 apps/
-  investagent/                  # one Python package, three entrypoints, one image
+  investagent/                  # one Python package, four entrypoints, one image
     src/investagent/
       settings.py               # config; secrets from env, then Key Vault
       db.py                     # psycopg pool, Entra token or password auth

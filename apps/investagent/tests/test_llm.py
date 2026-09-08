@@ -19,7 +19,7 @@ import pytest
 
 from investagent.llm.anthropic_provider import AnthropicLlm
 from investagent.llm.base import PROMPT_VERSION, LlmResult, Usage
-from investagent.models import NewsRelevance, Recommendation
+from investagent.models import NewsRelevance, ProposedChange, Recommendation, WeeklyReview
 
 D = Decimal
 
@@ -70,6 +70,22 @@ def recommendation(**overrides) -> Recommendation:
         risks="Concentration.",
     )
     return Recommendation(**{**defaults, **overrides})
+
+
+def weekly_review(**overrides) -> WeeklyReview:
+    defaults = dict(
+        assessment="A quiet week.",
+        proposals=[
+            ProposedChange(
+                area="risk_limits",
+                change="Raise RISK_MAX_DAILY_TRADES from 3 to 5.",
+                rationale="daily_trade_limit refused 31 of 51 decisions.",
+                expected_effect="More of the model's BUYs reach the broker.",
+                confidence=0.7,
+            )
+        ],
+    )
+    return WeeklyReview(**{**defaults, **overrides})
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +158,41 @@ def test_neither_stage_sends_an_assistant_prefill():
 
     for call in client.messages.calls:
         assert [m["role"] for m in call["messages"]] == ["user"]
+
+
+def test_the_weekly_review_goes_to_the_analysis_model_with_its_own_system_prompt():
+    """One call a week where the reasoning is the product, against the filter
+    stage's tens of thousands — so it gets the capable model, not the cheap one."""
+    client = FakeClient(FakeResponse(weekly_review()))
+    llm = AnthropicLlm(
+        client=client,
+        filter_model="claude-haiku-4-5",
+        analysis_model="claude-sonnet-5",
+        analysis_effort="high",
+    )
+
+    result = llm.review("The week in figures.")
+
+    call = client.messages.calls[0]
+    assert call["model"] == "claude-sonnet-5"
+    assert call["thinking"] == {"type": "adaptive"}
+    assert call["output_config"] == {"effort": "high"}
+    assert call["output_format"] is WeeklyReview
+    assert [m["role"] for m in call["messages"]] == ["user"]
+    assert result.value.proposals[0].area == "risk_limits"
+
+
+def test_the_review_prompt_tells_the_model_its_proposals_are_advisory():
+    """The system prompt is the only place this is said to the model, and it is
+    what keeps it proposing configuration changes rather than trades."""
+    client = FakeClient(FakeResponse(weekly_review()))
+
+    AnthropicLlm(client=client).review("The week in figures.")
+
+    system = client.messages.calls[0]["system"]
+    assert "advisory" in system
+    assert "do not propose a specific trade" in system
+    assert PROMPT_VERSION in system
 
 
 def test_both_stages_request_a_validated_pydantic_model():

@@ -350,3 +350,57 @@ button.toggle.count {
   padding: 2px 9px;
   font-variant-numeric: tabular-nums;
 }
+
+/* The weekly review's proposals.
+ *
+ * A list rather than a table: each entry is three sentences of prose and one
+ * number, which a table would either truncate or stretch. Set apart by inset
+ * and a rule, not by colour — the palette's slots belong to the chart, where
+ * colour carries the identity of a series.
+ */
+.card h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 22px 0 10px;
+}
+
+.card p {
+  color: var(--text-secondary);
+  line-height: 1.55;
+  margin: 0 0 11px;
+}
+
+.proposals {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.proposal {
+  border-left: 2px solid var(--border);
+  padding: 0 0 0 14px;
+  margin: 0 0 18px;
+}
+
+.proposal-head {
+  display: flex;
+  gap: 9px;
+  align-items: baseline;
+  margin-bottom: 5px;
+}
+
+.proposal-index {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.proposal-change {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.proposal-meta {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-bottom: 9px;
+}

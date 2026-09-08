@@ -119,5 +119,27 @@ services:
       db:
         condition: service_healthy
 
+  # Also on demand: `docker compose run --rm weekly`. Reads only — no market
+  # data, no broker — so the one thing it costs is a single Sonnet call.
+  weekly:
+    build:
+      context: ./apps/investagent
+    command: ["weekly"]
+    profiles: ["jobs"]
+    environment:
+      ENVIRONMENT: local
+      POSTGRES_HOST: db
+      POSTGRES_DATABASE: investagent
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: local
+      KEY_VAULT_URI: "${KEY_VAULT_URI:-}"
+      AZURE_KEYVAULT_TOKEN: "${AZURE_KEYVAULT_TOKEN:-}"
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      db:
+        condition: service_healthy
+
 volumes:
   db-data:

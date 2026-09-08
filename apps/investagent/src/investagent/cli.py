@@ -1,6 +1,6 @@
-"""One entrypoint, three commands — `investagent api|agent|summary`.
+"""One entrypoint, four commands — `investagent api|agent|summary|weekly`.
 
-The three workloads share one image and differ only by the container's `args`,
+The four workloads share one image and differ only by the container's `args`,
 so this is what Terraform's `command = ["investagent"]` reaches.
 """
 
@@ -11,6 +11,7 @@ import logging
 import os
 import signal
 import sys
+from datetime import date
 
 from . import telemetry
 from .settings import settings
@@ -70,9 +71,21 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("summary", help="produce and send the daily summary")
 
+    weekly = sub.add_parser("weekly", help="produce and send the weekly review")
+    # A date rather than always "today", so a week can be reviewed after the
+    # fact — the review reads only stored rows, so an older window is as
+    # answerable as the current one.
+    weekly.add_argument(
+        "--as-of",
+        type=date.fromisoformat,
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="last day of the week to review (default: today, in UTC)",
+    )
+
     args = parser.parse_args(argv)
     _configure_logging()
-    # Before any of the three branches, and in particular before uvicorn imports
+    # Before any of the four branches, and in particular before uvicorn imports
     # the FastAPI app: the instrumentation patches `FastAPI.__init__`, so an app
     # built first would never be instrumented. `--reload` is the exception —
     # uvicorn re-imports the app in a child process this never runs in — which
@@ -127,6 +140,19 @@ def main(argv: list[str] | None = None) -> int:
             summary_job.run()
         except (Exception, SystemExit) as exc:
             logging.getLogger("investagent").exception("summary failed: %s", exc)
+            return 1
+        finally:
+            telemetry.flush()
+        return 0
+
+    if args.command == "weekly":
+        from .jobs import weekly as weekly_job
+
+        signal.signal(signal.SIGTERM, _terminate)
+        try:
+            weekly_job.run(as_of=args.as_of)
+        except (Exception, SystemExit) as exc:
+            logging.getLogger("investagent").exception("weekly review failed: %s", exc)
             return 1
         finally:
             telemetry.flush()

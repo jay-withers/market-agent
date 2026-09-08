@@ -172,3 +172,67 @@ export const day = (iso: string): string => iso.slice(0, 10);
 // so rendering them in the browser's zone would shift them an hour under BST
 // and make a 06:00 run look like it started at 07:00.
 export const when = (iso: string): string => `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+
+/* The weekly review: the model's prose, and the changes it proposes.
+ *
+ * `body_html` is deliberately not part of this type and the API does not send
+ * it. That column is Markdown-rendered *model output*, and Python-Markdown
+ * passes raw HTML straight through, so putting it in the DOM would let the
+ * model inject markup. The figures it contains are ones this dashboard already
+ * renders itself from the same tables. */
+export type ProposedChange = {
+  area: string;
+  change: string;
+  rationale: string;
+  expected_effect: string;
+  confidence: number;
+};
+
+export type Review = {
+  id: number;
+  period_start: string;
+  period_end: string;
+  subject: string;
+  assessment: string | null;
+  /* jsonb, so null is possible on a row written before this column meant
+   * anything — and an empty list is a real answer: a week that supported no
+   * change. */
+  recommendations: ProposedChange[] | null;
+  model: string | null;
+  email_status: string;
+  sent_at: string | null;
+};
+
+/* A GET whose 404 is an expected state rather than an error.
+ *
+ * The weekly review does not exist until the first Sunday run, and the
+ * dashboard's other requests share one Promise.all — a rejection here would
+ * blank the whole page over a section that is merely not ready yet. Anything
+ * other than a 404 still throws. */
+export async function getOptional<T>(path: string): Promise<T | null> {
+  const base = await apiOrigin();
+  const response = await fetch(`${base}${path}`, {
+    headers: { accept: "application/json" },
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText} from ${path}`);
+  }
+  return (await response.json()) as T;
+}
+
+/* Markdown emphasis stripped rather than rendered.
+ *
+ * The model is asked for Markdown because the email is Markdown, and this is
+ * the same text in a browser. Rendering it properly would mean either a
+ * Markdown library or injecting the server's rendered HTML, and the second of
+ * those is the XSS vector described above — so the inline markers are removed
+ * and the words are shown as words. Block structure survives as paragraphs. */
+export const plain = (text: string): string =>
+  text
+    .replace(/`{1,3}([^`]*)`{1,3}/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/(^|\s)[*_]([^*_]+)[*_]/g, "$1$2")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/^\s{0,3}>\s?/gm, "")
+    .trim();

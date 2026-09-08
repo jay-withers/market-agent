@@ -62,8 +62,8 @@ def money(value: Decimal | int | str | float) -> Decimal:
 # ---------------------------------------------------------------------------
 
 
-# Docstrings and Field descriptions on the two classes below are sent to the
-# model: `messages.parse()` builds its JSON schema from the Pydantic model, and
+# Docstrings and Field descriptions on every class in this section are sent to
+# the model: `messages.parse()` builds its JSON schema from the Pydantic model, and
 # the class docstring becomes the schema's `description`. So they are written
 # for the model as instructions, and anything that is really a note to a future
 # maintainer goes in a comment like this one instead.
@@ -116,6 +116,66 @@ class DailyNarrative(BaseModel):
         "already given to you as a table — they appear above your text. Explain what "
         "the AI decided and why, what the risk engine changed, and anything worth "
         "watching. Do not invent numbers."
+    )
+
+
+# The area of the experiment a proposal is about. A closed set for the same
+# reason `Constraint` is one: these are written to
+# `weekly_reviews.recommendations` and then queried — "has it asked for a
+# looser risk limit three weeks running?" has to be answerable without reading
+# the prose.
+ReviewArea = Literal[
+    "risk_limits",
+    "watchlist",
+    "prompts",
+    "model_or_cost",
+    "schedule",
+    "data_or_plumbing",
+    "other",
+]
+
+
+class ProposedChange(BaseModel):
+    """One specific change to the experiment, for a human to accept or reject.
+
+    Propose a change only where the week's evidence supports it. Nothing you
+    write here is applied automatically: a person reads these and edits the
+    code, so a vague proposal is worthless and a concrete one is actionable.
+    """
+
+    area: ReviewArea = Field(description="Which part of the experiment this changes.")
+    change: str = Field(
+        description="The change itself, concretely and in one or two sentences. Name the "
+        "setting, ticker or prompt and the value you would give it — not 'consider "
+        "loosening the limits'."
+    )
+    rationale: str = Field(
+        description="What in this week's figures supports it. Cite the evidence, not a "
+        "general principle about investing."
+    )
+    expected_effect: str = Field(
+        description="What you expect to change if this is done, including what it would "
+        "cost or risk."
+    )
+    confidence: float = Field(
+        ge=0.0, le=1.0, description="0.0 a guess worth recording, 1.0 the evidence is plain."
+    )
+
+
+class WeeklyReview(BaseModel):
+    """A weekly review of an automated paper-trading experiment."""
+
+    assessment: str = Field(
+        description="A few short paragraphs in Markdown: how the week went, whether the "
+        "agent is behaving as intended, and what the figures show about the risk "
+        "engine's effect. Do not restate the figures already given to you as tables — "
+        "they appear above your text. Do not invent numbers."
+    )
+    proposals: list[ProposedChange] = Field(
+        default_factory=list,
+        max_length=5,
+        description="The changes worth making, most important first. An empty list is a "
+        "valid and useful answer on a week that supports no change; do not pad it.",
     )
 
 

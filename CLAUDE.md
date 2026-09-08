@@ -84,7 +84,8 @@ Two repo-specific conventions on top of that, both requested explicitly:
 Resource group, user-assigned managed identity, Log Analytics workspace,
 Application Insights (workspace-based), Key Vault (RBAC), Container Apps
 environment (Consumption-only), two container apps (`api`, `dashboard`), two
-scheduled container app jobs (`agent`, `daily-summary`), and a PostgreSQL
+scheduled container app jobs (`agent`, `daily-summary`, `weekly-review`), and a
+PostgreSQL
 Flexible Server plus database. Names come from `Azure/naming/azurerm`.
 
 ### The cost constraint drives most of the design
@@ -226,11 +227,14 @@ rg-marketagent-dev              cae-marketagent-dev   ca-marketagent-dev-api    
 kv-marketagent-dev      (18/24) log-marketagent-dev   ca-marketagent-dev-dashboard  (28/32)
 psql-marketagent-dev            appi-marketagent-dev  caj-marketagent-dev-agent     (25/32)
 psqldb-marketagent-dev          uai-marketagent-dev   caj-marketagent-dev-summary   (27/32)
+                                                      caj-marketagent-dev-weekly    (26/32)
 ```
 
 The daily summary job is named `summary`, not `daily-summary`: the latter would be
 33 characters against the 32 container app jobs allow, and the naming module
-truncates silently. Its container is still `daily-summary`.
+truncates silently. Its container is still `daily-summary`. The weekly review
+hits the same wall — `weekly-review` would be 33 too — so the job is `weekly`
+and its container is `weekly-review`.
 
 Two consequences of dropping the suffix:
 
@@ -368,10 +372,10 @@ rule.
 
 ## The application package
 
-`apps/investagent/` is one Python package, one image, three entrypoints
-(`api`, `agent`, `summary`). They share the risk engine, the database layer, the
-broker client and the LLM client, so splitting them into three images would mean
-three builds of near-identical layers. Deviates from the brief's suggested
+`apps/investagent/` is one Python package, one image, four entrypoints
+(`api`, `agent`, `summary`, `weekly`). They share the risk engine, the database
+layer, the broker client and the LLM client, so splitting them into four images
+would mean four builds of near-identical layers. Deviates from the brief's suggested
 `apps/{api,agent,dashboard}` deliberately; the dashboard is genuinely separate
 and gets its own image.
 
@@ -644,9 +648,61 @@ regression.
 - Reconciliation commits per trade: one order the broker cannot answer for must
   not roll back the fills already applied.
 
+### The weekly review
+
+`jobs/weekly.py` runs at 22:00 UTC on Sunday and answers the question a single
+day cannot: is the *machinery* working, and which knob is worth turning. It
+reads a week of the tables the agent and the summary already wrote, hands the
+model those figures, and stores an assessment plus structured proposals.
+
+- **It reads only** — no market data, no news, no broker, one Sonnet call. The
+  week is already written down, and a review that re-fetched could report
+  figures the stored series disagrees with. It also means running it repeatedly
+  costs one model call and changes nothing.
+- **22:00, an hour after the summary**, because the week's closing valuation
+  *is* that evening's `daily_performance` row. Moving
+  `weekly_review_cron_expression` before `daily_summary_cron_expression` would
+  silently review a week ending a day early.
+- **A week with no `agent_runs` rows is not reviewed at all**, and `run()`
+  returns `None`. An LLM call to say nothing happened is worth neither the
+  money nor a stored row that reviews nothing.
+- **The binding-constraint histogram is the point of the whole job.**
+  `ai_decisions.risk_verdict->>'binding_constraint'` grouped by outcome answers
+  "which limit is actually shaping this experiment", which is unanswerable from
+  any single day. Refusals and approvals are split into two tables: a cap
+  binding an approval and a gate refusing one are opposite facts, and one table
+  reads as a single ranking of "constraints that fired".
+- **The limits table carries the env var name beside each value**
+  (`RISK_MAX_DAILY_TRADES` and friends). A proposal has to name the knob to be
+  actionable and the model has no other way to learn what they are called. The
+  values come from `risklimits.limits()` — the same call the engine makes — not
+  a second read of the same environment.
+- **Proposals are advisory and structured.** `ProposedChange` has a closed
+  `area` literal for the same reason `Constraint` does:
+  `weekly_reviews.recommendations` is queryable, so "has it asked for the same change three
+  weeks running?" is a query rather than a re-read of the prose. Nothing reads
+  them back and applies them — a risk limit changes when a human edits
+  `risklimits.py`, which is the entire point of the limits sitting outside the
+  model's reach. The system prompt says so, and there is a test that it does.
+- **The previous review's proposals go into the prompt**, so the review
+  compounds instead of restarting every Sunday. The model is told the list
+  cannot tell it whether any were acted on — a rejected proposal and one nobody
+  read look identical — and that the limits table is the current state to
+  compare against.
+- `assessment` is stored in its own column as well as inside `body_markdown`.
+  The dashboard renders that column as **text**: `body_html` is
+  Markdown-rendered *model output* and Python-Markdown passes raw HTML straight
+  through, so putting it in the DOM would hand the model an XSS vector for
+  nothing. `api.ts`'s `plain()` strips the inline Markdown markers instead.
+- The recipient is the **same** `SUMMARY-EMAIL-TO` secret as the daily email —
+  one reader, one address, and a second secret to forget to set would be worse.
+- `--as-of YYYY-MM-DD` reviews a past week. Cheap to offer, because the job
+  reads only stored rows, and the first run wants last week rather than today.
+
 ### The API and the local stack
 
-`api/` is **read-only**. Every mutation belongs to the agent and summary jobs,
+`api/` is **read-only**. Every mutation belongs to the agent, summary and weekly
+jobs,
 so this process cannot place a trade or alter a decision however it is called —
 which is most of why it is comfortable being publicly reachable. `/api/*` is
 guarded by an optional shared bearer (`API_REQUIRE_TOKEN`, off by default); the
@@ -731,6 +787,7 @@ make secrets           # prompt for the Key Vault values and store them
 make sql               # every file in sql/, in filename order, against the database
 make up / down / logs  # the local docker compose stack
 make run-agent         # one agent run against the local stack
+make run-weekly        # one weekly review against the local stack
 make build             # both images for linux/amd64, tagged with the git SHA
 make push              # both images to ghcr.io (needs write:packages)
 make deploy            # terraform apply with that same image tag
@@ -746,6 +803,9 @@ the image.** A migration the code depends on has to be applied first, or the
 deployed workload fails against a database that predates it — the agent job
 queries `companies.is_benchmark`, so it would have failed outright on a
 database holding only `001` through `003`. This has already been forgotten once.
+The weekly review job is the same shape of dependency: it needs `005` for
+`weekly_reviews`, and its first Sunday run against a database without it fails
+on a missing relation.
 
 `make deploy` is `apply` with `-var image_tag=$(IMAGE_TAG)`, so the tag built is
 the tag deployed and the two cannot drift. Neither passes `-auto-approve`.
@@ -787,11 +847,16 @@ rebuild. These files are committed intentionally; don't put secrets in them
 
 ## Scheduling
 
-`agent_cron_expression` (default `0 6 * * *`) and `daily_summary_cron_expression`
-(default `0 21 * * *`) are **evaluated in UTC**, five fields, no seconds field —
+`agent_cron_expression` (default `0 6 * * *`), `daily_summary_cron_expression`
+(default `0 21 * * *`) and `weekly_review_cron_expression` (default
+`0 22 * * 0`, Sunday) are **evaluated in UTC**, five fields, no seconds field —
 so the wall-clock time shifts with British Summer Time. `schedule_trigger_config`
 forces replacement, so a schedule change shows as destroy/create; harmless, since
 jobs hold no state.
+
+**The weekly review must fall after that day's summary.** It reports the
+summary's valuation as the week's close, so scheduling it earlier reviews a week
+that ends a day short — an ordering the cron expressions do not enforce.
 
 ## Commit messages
 

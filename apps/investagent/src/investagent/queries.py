@@ -252,3 +252,20 @@ def latest_summary(conn: Any) -> dict[str, Any] | None:
         "       sent_at, created_at"
         " FROM daily_summaries ORDER BY as_of DESC LIMIT 1",
     )
+
+
+def latest_review(conn: Any) -> dict[str, Any] | None:
+    """The most recent weekly review, for the dashboard.
+
+    Returns the model's prose and its structured proposals, not `body_html`.
+    That column is Markdown-rendered model output and Python-Markdown passes
+    raw HTML straight through, so serving it to a browser that would inject it
+    into the DOM hands a model an XSS vector for no gain — the dashboard
+    already renders the week's figures itself.
+    """
+    return _row(
+        conn,
+        "SELECT id, period_start, period_end, subject, assessment, recommendations,"
+        "       model, email_status, sent_at, created_at"
+        " FROM weekly_reviews ORDER BY period_end DESC LIMIT 1",
+    )

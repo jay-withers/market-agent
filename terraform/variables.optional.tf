@@ -91,3 +91,9 @@ variable "daily_summary_cron_expression" {
   type        = string
   default     = "0 21 * * *"
 }
+
+variable "weekly_review_cron_expression" {
+  description = "Schedule for the weekly review job, as a 5-field cron expression evaluated in UTC. Must fall after that day's daily summary, whose valuation it reports as the week's close."
+  type        = string
+  default     = "0 22 * * 0"
+}
