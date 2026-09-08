@@ -907,8 +907,21 @@ Workflows are prefixed `ci-` (pull-request checks) or `cd-` (post-merge delivery
   subscription. The `ci-terraform` gate job always runs and is the check to
   require in branch protection; path filtering is at the job level (not the
   workflow trigger) precisely so the required check always reports.
+- **ci-container-build**: builds `apps/investagent` and `apps/dashboard` on PRs
+  touching `apps/**`, without pushing. The runner is natively amd64, which is
+  what Container Apps runs, so this also proves the target architecture builds —
+  a local `make build` on Apple Silicon reaches amd64 only through QEMU. Nothing
+  else in CI touches these images, so before this a broken Dockerfile surfaced
+  only when someone next built by hand.
 - **cd-tag**: auto-creates a semver tag on every merge to `main` (default bump:
   patch).
+- **cd-publish**: reusable (`workflow_call`) and manual (`workflow_dispatch`).
+  Builds both images for linux/amd64 and pushes each under two immutable tags —
+  the release `vX.Y.Z` and the commit's short SHA, which is what `IMAGE_TAG` and
+  the `agent_runs` rows already use. Neither tag is ever moved: Container Apps
+  creates a revision only when the template changes, so a re-pushed moving tag
+  would deploy nothing and report success. Only amd64 is built because Container
+  Apps runs nothing else.
 
 ## Renovate
 

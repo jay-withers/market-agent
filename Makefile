@@ -76,10 +76,17 @@ run-weekly: ## Run the weekly review once against the local stack
 lint: ## Run all pre-commit hooks against every file
 	pre-commit run --all-files
 
-# --platform linux/amd64 is not optional. Container Apps runs amd64 only, and
-# this dev host is arm64 (Docker Desktop on Apple Silicon): a native build
+# These targets are for local iteration and for testing an image before it is
+# merged. The release path is CI: cd-tag mints the version on merge to main and
+# cd-publish builds both images on a native amd64 runner, pushing each under the
+# release tag and the commit's short SHA. Deploy a published tag with
+# `make deploy IMAGE_TAG=v1.2.3`.
+#
+# --platform linux/amd64 is not optional here. Container Apps runs amd64 only,
+# and this dev host is arm64 (Docker Desktop on Apple Silicon): a native build
 # deploys an image that crash-loops with an exec format error and no other
-# clue. buildx emulates, so it is slower than a native build.
+# clue. buildx emulates, so it is slower than a native build — which is most of
+# why building in CI is worth having.
 #
 # The tag is the short git SHA, and it must be immutable — Container Apps only
 # creates a revision when the template changes, so a re-pushed moving tag

@@ -1,0 +1,20 @@
+# The build context is sent to the Docker daemon before anything is built, so
+# what is excluded here is not a tidiness question: .venv alone is ~150 MB, and
+# on this dev host the daemon runs on the *host*, so that is 150 MB over the
+# socket on every `make build`. None of it is COPYed by the Dockerfile — uv
+# builds a fresh virtualenv from pyproject.toml and uv.lock — and a host .venv
+# arriving in the image would be the wrong platform anyway.
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Tests are not installed into the image: the Dockerfile copies src only.
+tests/
+
+# Never wanted in an image, and .env in particular would bake local secrets
+# into a layer that ships to a public registry.
+.env
+.env.*

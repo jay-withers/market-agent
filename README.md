@@ -97,7 +97,18 @@ but no order is ever submitted.
 
 ## Deploying
 
-All four workloads run from public ghcr.io images. To ship a change:
+All four workloads run from public ghcr.io images. **Merging to `main` builds
+and pushes them**: `cd-tag` bumps the semver tag, then `cd-publish` builds both
+images on a native amd64 runner and pushes each under two immutable tags — the
+release (`v1.2.3`) and the commit's short SHA, which is what `IMAGE_TAG`
+already defaults to. Deploying is then:
+
+```bash
+make deploy IMAGE_TAG=v1.2.3   # terraform apply with a published tag
+```
+
+Building locally is still there for iteration, and is the only way to test an
+image before merge:
 
 ```bash
 make build push   # linux/amd64, tagged with the git SHA
@@ -509,7 +520,9 @@ docs/deployment-plan.md         # the agreed plan; complete
 .github/workflows/
   ci-pre-commit.yml             # lints all files on PRs to main
   ci-terraform.yml              # terraform validate + plan (dev/stg/prd)
-  cd-tag.yml                    # auto-tags on merge to main
+  ci-container-build.yml        # builds both app images on PRs (no push)
+  cd-tag.yml                    # auto-tags on merge to main, then publishes
+  cd-publish.yml                # builds + pushes the app images for a tag
 .pre-commit-config.yaml
 commitlint.config.js
 renovate.json
@@ -531,8 +544,6 @@ is not construction:
 - **Monitoring alerts.** There are none. `agent_runs` records every execution
   with its cost and error, and the dashboard shows a run abandoned past the job
   timeout, but nothing tells you a run failed unless you look.
-- **A CI image pipeline.** Building and pushing is `make build push` from a
-  workstation; nothing builds on merge.
 - **Cheaper filtering, if it ever matters.** One filter call per
   article/ticker pair is about 110 calls a run. Batching would cut that to
   roughly six, but at the measured £4/month it is a latency argument rather
