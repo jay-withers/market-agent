@@ -504,6 +504,35 @@ at either rate is simply wrong — it read 30% high when the filter's Haiku
 tokens were priced as Sonnet ($0.566 against a true $0.434). The token columns
 still hold the mixed totals, which is fine because they are counts.
 
+**The model is shown its own recent decisions on the ticker.** Five of them,
+most recent first, with the engine's verdict and the resulting order's status —
+`repository.recent_decisions`, covered by the `ai_decisions_ticker_idx` that
+already existed. Without it nothing in the prompt lets the model know it has
+argued the same BUY four mornings running, or that every one was clamped to the
+same cap. The prompt says explicitly what the history does *not* mean: a
+refusal is a statement about the limits rather than about the reasoning, and an
+order's status is not its outcome. It is decision memory, not a score.
+
+The consequence is `prompt_context`, added by `006-decision-context.sql`. The
+history is an input to the decision that `portfolio_state` does not carry, so
+without a column for it the replayability claim on an `ai_decisions` row
+quietly stops being true. Structured rather than the rendered prompt text, for
+the reason the weekly review's proposals are: "has it asked for the same thing
+three days running?" stays a query. **Anything added to `_prompt()` needs the
+same treatment** — a new input with nowhere to be stored breaks the row's claim
+to be a complete record of what was asked.
+
+**One run's model spend is capped by `MAX_RUN_COST_USD`**, defaulting to $1.00
+against a measured $0.18–0.19. It is checked as each call's cost lands rather
+than once per stage, because the stage that can run away is the filter at one
+call per article/ticker pair — exactly the one a per-stage check would let
+finish first. Crossing it raises `BudgetExceeded`, which the existing handler
+closes the `agent_runs` row with, so the failure reads like any other. `gt=0`
+on the setting rather than "0 disables": a guard that switches off at the value
+which reads like "spend nothing" is the wrong footgun to leave lying around.
+Not wired through Terraform, because `DRY_RUN` is not either — the default
+applies to the deployed job and an override is an env var on the container.
+
 **"Submitted, no fill" is the normal outcome of a scheduled run.** The agent
 runs at 06:00 UTC and the US market opens at 14:30, so a market order sits
 `accepted` for eight hours. Consequences: `trades.quantity` had to become
@@ -604,6 +633,32 @@ on a day three trades had executed. The table now states the day's trades
 first and spells out what `simulated` means. `tests/test_summary.py` is the
 regression.
 
+- **The email reports model spend, and there is no balance endpoint to check
+  it against.** Anthropic publishes usage and cost reports
+  (`/v1/organizations/usage_report/messages`, `/v1/organizations/cost_report`)
+  but nothing that returns a remaining prepaid credit balance — and both of
+  those need an Admin API key, which individual accounts cannot hold at all.
+  So the figure is built from our own ledger: `repository.spend()` sums
+  `agent_runs`, `daily_summaries` and `weekly_reviews`, and the email shows
+  today, the last seven days with a daily rate, and the total. `007-job-costs.sql`
+  exists because the other two jobs never recorded their own call — the weekly
+  review logged the figure and discarded it, the summary never looked — so a
+  total from `agent_runs` alone was low by a call a day and a call a week, and
+  the gap only grows.
+- **The runway needs a number a human supplies.** `optional_secret(
+  "ANTHROPIC-CREDIT-USD")` holds what the account started with; absent means
+  report spend and no runway, the same opt-in shape as `SUMMARY-EMAIL-TO` and
+  in Key Vault for the same reason — this repository is public. A value that
+  will not parse is warned about and ignored rather than fatal: a mistyped
+  credit figure must not cost the day its summary.
+- **The spend figures cannot include the call that writes the email**, because
+  the table is built before `narrate()` runs. The section says so in the text
+  rather than leaving it to be inferred, alongside the fact that the credit was
+  typed by hand and checked against nothing. Both are there so the model cannot
+  describe the figure as complete — the same discipline as the trades table.
+  The daily rate is over the last seven days, not all time, because the
+  question behind it is "how long at the current rate" and the first week of
+  manual runs answers a different one.
 - **Benchmarks live in `companies` with `is_benchmark = true`.** `prices.ticker`
   references `companies`, so storing a close for SPY, VT or EWU failed with a
   foreign key violation until they existed. A flag rather than reusing
@@ -805,7 +860,10 @@ queries `companies.is_benchmark`, so it would have failed outright on a
 database holding only `001` through `003`. This has already been forgotten once.
 The weekly review job is the same shape of dependency: it needs `005` for
 `weekly_reviews`, and its first Sunday run against a database without it fails
-on a missing relation.
+on a missing relation. `006-decision-context.sql` is the same again — the agent
+writes `ai_decisions.prompt_context` on every decision, so a deploy of that code
+against a database without it fails on the first analysis, not at start-up. So
+is `007-job-costs.sql`, which the summary and weekly jobs write to on every run.
 
 `make deploy` is `apply` with `-var image_tag=$(IMAGE_TAG)`, so the tag built is
 the tag deployed and the two cannot drift. Neither passes `-auto-approve`.
@@ -894,7 +952,7 @@ Workflows are prefixed `ci-` (pull-request checks) or `cd-` (post-merge delivery
 
 - **ci-pre-commit**: runs all linters on PRs to `main` via the `pre-commit` job,
   which calls the reusable workflow
-  `jay-withers/template-pipelines/.github/workflows/pre-commit.yml` (pinned by
+  `jay-withers/workflows/.github/workflows/pre-commit.yml` (pinned by
   commit SHA, with the tag as a comment). Because it's a reusable-workflow call,
   the status check context it reports is `pre-commit / Pre-commit`
   (`<caller job id> / <reusable job name>`), not the bare `pre-commit` job id.
@@ -907,6 +965,30 @@ Workflows are prefixed `ci-` (pull-request checks) or `cd-` (post-merge delivery
   subscription. The `ci-terraform` gate job always runs and is the check to
   require in branch protection; path filtering is at the job level (not the
   workflow trigger) precisely so the required check always reports.
+- **ci-python**: runs `pytest` on every PR, by calling the reusable
+  `jay-withers/workflows/.github/workflows/python.yml` (pinned by commit SHA
+  with the tag as a comment, like `ci-pre-commit`). Nothing in CI ran the suite
+  before it — `ci-pre-commit` lints with ruff and `ci-container-build` proves
+  the images compile, but neither executes a test, so the risk engine was
+  guarded only by whoever remembered `make test`. The sharp edge was Renovate:
+  `autoApprove` means a dependency bump reaches `main` with no human reading
+  it, so a `psycopg`, `pydantic` or `anthropic` release that broke the engine
+  or the request shapes would have merged green. Being a reusable-workflow
+  call, its status check context is **`test / Test`**, not the bare `test` job
+  id — the same namespacing `pre-commit / Pre-commit` has.
+
+  Three inputs, and `extras: dev` is the one to understand: **pytest is an
+  extra, not a dependency group, and `uv run` installs groups but not extras.**
+  Without it the job fails with a bare `Failed to spawn: pytest` after a
+  successful-looking install — and only in CI, because locally `make install`
+  (`uv sync --extra dev`) has already put pytest in the venv. `make test`
+  carried the same hole and hid it, so it now passes the extra too and works on
+  a fresh clone. `python-version` is pinned to 3.14 to match the image's base,
+  and the reusable workflow runs `uv run --locked`, so a `pyproject.toml`
+  edited without its lockfile fails here rather than on someone's machine.
+  It is deliberately **not** path filtered, unlike `ci-container-build`: the
+  suite takes seconds, and a required check skipped by a path filter never
+  reports, which blocks a PR instead of passing it.
 - **ci-container-build**: builds `apps/investagent` and `apps/dashboard` on PRs
   touching `apps/**`, without pushing. The runner is natively amd64, which is
   what Container Apps runs, so this also proves the target architecture builds —

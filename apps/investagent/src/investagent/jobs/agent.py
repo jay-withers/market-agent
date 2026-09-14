@@ -43,6 +43,29 @@ logger = logging.getLogger(__name__)
 # see a move without turning the prompt into a data dump.
 PRICE_HISTORY_DAYS = 7
 NEWS_WINDOW_HOURS = 24
+# How many of the agent's own prior decisions on a ticker it is shown. Five is
+# roughly a trading week: long enough to see a thesis being repeated, short
+# enough that it does not crowd out the news it is meant to be reading.
+DECISION_HISTORY = 5
+
+
+class BudgetExceeded(RuntimeError):
+    """One run spent more with the model than `MAX_RUN_COST_USD` allows."""
+
+
+def _check_budget(spent: Decimal, ceiling: Decimal) -> None:
+    """Stop the run if its model spend has crossed the ceiling.
+
+    Checked after every call rather than once per stage, because the stage that
+    can run away — the filter, at one call per article/ticker pair — is exactly
+    the one a per-stage check would let finish first. Raising leaves the work
+    already committed in place and closes the `agent_runs` row as failed with
+    this message, which is the same shape as any other failure.
+    """
+    if spent > ceiling:
+        raise BudgetExceeded(
+            f"model spend ${spent} exceeded the ${ceiling} ceiling for one run (MAX_RUN_COST_USD)"
+        )
 
 
 def run(
@@ -111,6 +134,7 @@ def run(
                 result = llm.filter_news(ticker, article.headline, article.summary)
                 usage += result.usage
                 cost_usd += result.cost_usd
+                _check_budget(cost_usd, cfg.max_run_cost_usd)
                 analysis_rows.append(
                     {
                         "news_id": news_ids[article.external_id],
@@ -148,6 +172,7 @@ def run(
             with pool().connection() as conn:
                 state, unpriced = repo.build_state(conn, pid, closes, rate.gbp_usd)
                 already = repo.trades_today(conn, pid)
+                history = repo.recent_decisions(conn, ticker, DECISION_HISTORY)
             if unpriced:
                 # Refuse rather than proceed: an unvalued holding understates
                 # exposure, which would let the engine approve a buy it should
@@ -155,9 +180,12 @@ def run(
                 raise RuntimeError(f"holdings with no current price: {', '.join(unpriced)}")
 
             limits = risklimits.limits(frozenset(tickers))
-            result = llm.analyse(_prompt(ticker, relevant[ticker], bars, state, limits, rate))
+            result = llm.analyse(
+                _prompt(ticker, relevant[ticker], bars, state, limits, rate, history)
+            )
             usage += result.usage
             cost_usd += result.cost_usd
+            _check_budget(cost_usd, cfg.max_run_cost_usd)
             rec = result.value
             verdict = evaluate(rec, state, limits, already)
             counts["decisions_made"] += 1
@@ -185,6 +213,10 @@ def run(
                     article_ids,
                     result.usage.input_tokens,
                     result.usage.output_tokens,
+                    # The history is an input to the decision that
+                    # `portfolio_state` does not carry, so it is stored beside
+                    # it rather than left only in a prompt nobody kept.
+                    prompt_context={"recent_decisions": history},
                 )
 
                 if verdict.approved and verdict.approved_amount_gbp:
@@ -313,14 +345,46 @@ def _execute(
     return False
 
 
-def _prompt(ticker, articles, bars, state, limits, rate) -> str:
+def _history_lines(history: list[dict]) -> str:
+    """The agent's own recent decisions on this ticker, as prompt text.
+
+    One fixed shape per row rather than prose, so an absent figure reads as an
+    absence instead of changing the sentence — and so a test can assert what
+    the model was told.
+    """
+    if not history:
+        return "  none recorded — this is the first assessment of this ticker"
+
+    def amount(value) -> str:
+        return f"GBP {value}" if value is not None else "none"
+
+    lines = []
+    for row in history:
+        confidence = f"{row['confidence']:.2f}" if row["confidence"] is not None else "n/a"
+        lines.append(
+            f"  {row['on_date']} {row['action']}"
+            f" confidence {confidence}"
+            f" | asked {amount(row['recommended_amount_gbp'])}"
+            f" | approved {amount(row['approved_amount_gbp'])}"
+            f" | binding constraint {row['binding_constraint'] or 'none recorded'}"
+            f" | order {row['trade_status'] or 'none placed'}"
+        )
+    return "\n".join(lines)
+
+
+def _prompt(ticker, articles, bars, state, limits, rate, history=()) -> str:
     """Assemble what the analysis model sees.
 
-    Everything here is also serialised into `ai_decisions.portfolio_state`, so
-    a decision stays replayable against exactly this picture.
+    Everything here is also serialised onto the `ai_decisions` row — the
+    portfolio into `portfolio_state` and the decision history into
+    `prompt_context` — so a decision stays replayable against exactly this
+    picture. Anything added here needs the same treatment, or the row stops
+    being a complete record of what was asked.
     """
-    history = [b for b in bars if b.ticker == ticker][-5:]
-    prices = "\n".join(f"  {b.bar_date} close ${b.close_usd} volume {b.volume:,}" for b in history)
+    recent_bars = [b for b in bars if b.ticker == ticker][-5:]
+    prices = "\n".join(
+        f"  {b.bar_date} close ${b.close_usd} volume {b.volume:,}" for b in recent_bars
+    )
     headlines = "\n".join(
         f"  [{a.published_at:%Y-%m-%d %H:%M} UTC] {a.headline}"
         + (f"\n     {a.summary[:300]}" if a.summary else "")
@@ -337,6 +401,16 @@ Recent daily closes:
 
 Relevant news from the last {NEWS_WINDOW_HOURS} hours:
 {headlines or "  none"}
+
+Your own recent decisions on {ticker} (most recent first):
+{_history_lines(list(history))}
+
+What that history does and does not tell you: "approved" is what the risk
+engine permitted after applying the limits below, so a refusal is a statement
+about those limits and not about your reasoning. "order" is the status of any
+resulting order, not its outcome — one submitted before the US open rests for
+hours — and nothing here says whether a decision turned out well. Use it to
+avoid re-arguing a case you have already made, not as a score.
 
 Portfolio (the experiment is a notional GBP 500):
   cash: GBP {state.cash_gbp}

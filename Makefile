@@ -27,7 +27,9 @@ install: ## Install pre-commit hooks and Python dependencies
 	uv sync --directory $(APP_DIR) --extra dev
 
 test: ## Run the Python test suite
-	uv run --directory $(APP_DIR) pytest
+	# --extra dev: pytest is an extra, not a dependency group, so `uv run` does
+	# not install it. Without this the target only works after `make install`.
+	uv run --directory $(APP_DIR) --extra dev pytest
 
 secrets: ## Prompt for the application secrets and store them in Key Vault
 	./scripts/Set-KeyVaultSecrets.ps1

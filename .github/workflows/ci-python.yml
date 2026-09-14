@@ -1,0 +1,43 @@
+name: ci-python
+
+# Runs the Python test suite on a pull request.
+#
+# Until this existed, nothing in CI ran pytest at all. ci-pre-commit lints the
+# code with ruff and ci-container-build proves the images compile, but neither
+# executes a single test — so the risk engine, the one component deciding what
+# the agent is permitted to trade, was covered only by whoever remembered to
+# run `make test` before pushing.
+#
+# That gap matters most for the changes nobody reads: renovate.json sets
+# autoApprove, so a dependency bump reaches main without a human. A psycopg,
+# pydantic or anthropic release that broke the engine or the request shapes
+# would have merged green.
+#
+# The mechanics live in jay-withers/workflows, so every repo of ours gets the
+# same job and a fix lands once. Only what is specific to this repo is here.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # `extras: dev` is the input that matters: pytest sits in
+    # [project.optional-dependencies] and `uv run` installs dependency groups
+    # but not extras, so without it the run fails with a bare "Failed to spawn:
+    # pytest" after a successful-looking install — and only in CI, because
+    # locally `make install` has already put it in the venv.
+    #
+    # python-version matches the python:3.14 base in apps/investagent/Dockerfile,
+    # so a pass here is a pass on the interpreter Container Apps runs.
+    #
+    # The reusable workflow runs unfiltered by path, which is deliberate: the
+    # suite takes seconds, and a required check skipped by a path filter never
+    # reports, blocking a pull request rather than passing it.
+    uses: jay-withers/workflows/.github/workflows/python.yml@dbf2a8b8c8d0fac6ffa7e8f94974c9dbb1e9276c # v1.1.0
+    with:
+      working-directory: apps/investagent
+      python-version: "3.14"
+      extras: dev
