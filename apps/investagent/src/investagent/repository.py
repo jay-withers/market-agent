@@ -546,6 +546,24 @@ def initial_cash(conn: Any, pid: int) -> Decimal:
     return money(row[0])
 
 
+def last_fx_rate(conn: Any, pid: int) -> tuple[Decimal, date] | None:
+    """The most recent GBP/USD rate already stored, and the day it is for.
+
+    The summary falls back to this when Frankfurter is unreachable, so a day's
+    valuation survives an upstream outage. `fx_rate_as_of` is required rather
+    than defaulted: a rate whose age cannot be stated is worse than none, since
+    the whole point of the fallback is that the staleness stays visible.
+    Nullable because `002` added the column to existing rows.
+    """
+    row = conn.execute(
+        "SELECT fx_rate_gbp_usd, fx_rate_as_of FROM daily_performance"
+        " WHERE portfolio_id = %s AND fx_rate_as_of IS NOT NULL"
+        " ORDER BY as_of DESC LIMIT 1",
+        (pid,),
+    ).fetchone()
+    return (Decimal(row[0]), row[1]) if row else None
+
+
 def close_on(conn: Any, ticker: str, on_or_after: date) -> Decimal | None:
     """The first close at or after `on_or_after`, for indexing a benchmark.
 

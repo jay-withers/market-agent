@@ -8,10 +8,16 @@ can truthfully say.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
 from investagent.benchmarks import CASH_SYMBOL, BenchmarkPoint
+from investagent.fetch import FetchError
+from investagent.fx import FxRate
+from investagent.jobs import summary
 from investagent.jobs.summary import _facts_table, _prompt, _spend_section
 from investagent.models import PortfolioState, Position
 
@@ -246,3 +252,63 @@ def test_the_facts_table_carries_the_spend_section_when_given_one():
     )
     assert "## Model spend" in table
     assert "Credit remaining" in table
+
+
+# ---------------------------------------------------------------------------
+# The FX fallback: an upstream outage costs accuracy, not the whole day
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _fake_pool(_conn=None):
+    """Stands in for `pool().connection()`, which the fallback path reaches for."""
+
+    class _Pool:
+        @staticmethod
+        @contextmanager
+        def connection():
+            yield _conn
+
+    yield _Pool
+
+
+def _patch_fx(monkeypatch, *, fetch, stored):
+    monkeypatch.setattr(summary, "fetch_gbp_usd", fetch)
+    monkeypatch.setattr(summary, "pool", lambda: _fake_pool().__enter__())
+    monkeypatch.setattr(summary.repo, "last_fx_rate", lambda _conn, _pid: stored)
+
+
+def test_a_published_rate_is_used_when_frankfurter_answers(monkeypatch):
+    live = FxRate(gbp_usd=D("1.349400"), as_of=TODAY)
+    _patch_fx(monkeypatch, fetch=lambda: live, stored=(D("1.100000"), date(2026, 1, 1)))
+
+    assert summary._fx_rate(1) is live
+
+
+def test_an_fx_outage_falls_back_to_the_last_stored_rate(monkeypatch):
+    """The 2026-09-14 failure: a 522 from Frankfurter lost the entire summary."""
+
+    def _boom():
+        raise FetchError("522 from https://api.frankfurter.dev/v1/latest")
+
+    stored_on = date(2026, 9, 13)
+    _patch_fx(monkeypatch, fetch=_boom, stored=(D("1.340000"), stored_on))
+
+    rate = summary._fx_rate(1)
+
+    assert rate.gbp_usd == D("1.340000")
+    # The staleness has to stay legible on the row, not just in the log.
+    assert rate.as_of == stored_on
+    assert "stored" in rate.source
+
+
+def test_an_fx_outage_with_nothing_stored_reports_the_original_failure(monkeypatch):
+    """A first-ever run has no rate to fall back to, so the fetch error stands."""
+
+    def _boom():
+        raise FetchError("522 from https://api.frankfurter.dev/v1/latest")
+
+    _patch_fx(monkeypatch, fetch=_boom, stored=None)
+
+    with pytest.raises(FetchError, match="522"):
+        summary._fx_rate(1)

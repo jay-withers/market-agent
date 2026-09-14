@@ -30,7 +30,13 @@ BACKOFF_SECONDS = 2.0
 
 # Worth retrying: the server said it was briefly unable, or asked us to slow
 # down. A 4xx other than 429 is our fault and will fail identically next time.
-RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504})
+#
+# 520-524 are Cloudflare's own inventions, not IANA codes, and they mean the
+# edge answered but its origin did not — the same transient class as a 502. A
+# standard-codes-only list silently misses them, which is how a Cloudflare 522
+# from Frankfurter took a whole daily summary down the un-retried path on
+# 2026-09-14. Both of this project's data sources sit behind Cloudflare.
+RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524})
 
 
 class FetchError(RuntimeError):
