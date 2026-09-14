@@ -15,7 +15,7 @@ def test_a_successful_get_returns_the_decoded_body():
     assert get_json("https://x/y", client=json_client({"ok": True})) == {"ok": True}
 
 
-@pytest.mark.parametrize("status", [408, 429, 500, 502, 503, 504])
+@pytest.mark.parametrize("status", [408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524])
 def test_a_transient_status_is_retried_and_can_succeed(status):
     calls: list = []
     client = sequence_client([(status, {}), (200, {"ok": True})], calls=calls)
@@ -31,6 +31,16 @@ def test_a_transient_status_that_never_clears_raises_after_its_attempts():
     with pytest.raises(FetchError, match="after 3 attempts"):
         get_json("https://x/y", client=client, attempts=3)
     assert len(calls) == 3
+
+
+def test_a_cloudflare_522_is_retried_rather_than_reported_immediately():
+    """The 2026-09-14 summary died here: 522 is not an IANA code, so a list of
+    standard statuses sent it down the permanent-failure path on attempt one."""
+    calls: list = []
+    client = sequence_client([(522, {}), (200, {"ok": True})], calls=calls)
+
+    assert get_json("https://x/y", client=client) == {"ok": True}
+    assert len(calls) == 2
 
 
 @pytest.mark.parametrize("status", [400, 401, 403, 404])

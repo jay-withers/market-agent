@@ -24,7 +24,8 @@ from ..benchmarks import build as build_benchmarks
 from ..broker.alpaca import AlpacaBroker
 from ..broker.base import Broker
 from ..db import pool
-from ..fx import fetch_gbp_usd
+from ..fetch import FetchError
+from ..fx import FxRate, fetch_gbp_usd
 from ..llm.anthropic_provider import AnthropicLlm
 from ..llm.base import PROMPT_VERSION, Llm
 from ..mailer import MailResult, send
@@ -62,7 +63,7 @@ def run(
 
     filled = _reconcile(pid, broker)
 
-    rate = fetch_gbp_usd()
+    rate = _fx_rate(pid)
     benchmark_symbols = [s.strip() for s in cfg.benchmark_symbols.split(",") if s.strip()]
 
     with pool().connection() as conn:
@@ -151,6 +152,35 @@ def run(
 
     logger.info("summary %d for %s: %s, %d fill(s) reconciled", summary_id, as_of, subject, filled)
     return summary_id
+
+
+def _fx_rate(pid: int) -> FxRate:
+    """Today's published rate, or the last one we stored if that is unreachable.
+
+    A Cloudflare 522 from Frankfurter cost the 2026-09-14 summary entirely — no
+    valuation, no benchmark arms, no row. On a series read over months a hole
+    distorts more than a rate a day or two old does, and the stored figure stays
+    honest either way: `fx_rate_as_of` records the day the rate is *for*, so a
+    fallback row is indistinguishable in shape from the weekend runs that
+    already carry Friday's rate because the ECB does not publish at weekends.
+
+    Deliberately not done in the agent job, which converts an approved GBP
+    amount into the USD notional it actually submits. Mis-sizing a real order
+    against an unknown-age rate works against the risk engine; skipping a
+    morning does not.
+    """
+    try:
+        return fetch_gbp_usd()
+    except FetchError as exc:
+        with pool().connection() as conn:
+            previous = repo.last_fx_rate(conn, pid)
+        if previous is None:
+            # Nothing to fall back to, so the original failure is the honest
+            # thing to report.
+            raise
+        rate, as_of = previous
+        logger.warning("fx lookup failed (%s); valuing at the stored rate from %s", exc, as_of)
+        return FxRate(gbp_usd=rate, as_of=as_of, source="frankfurter (stored)")
 
 
 def _reconcile(pid: int, broker: Broker) -> int:
