@@ -3,7 +3,7 @@ name: ci-python
 # Runs the Python test suite on a pull request.
 #
 # Until this existed, nothing in CI ran pytest at all. ci-pre-commit lints the
-# code with ruff and ci-container-build proves the image compiles, but neither
+# code with ruff and ci-container-build proves the images compile, but neither
 # executes a single test — so the risk engine, the one component deciding what
 # the agent is permitted to trade, was covered only by whoever remembered to
 # run `make test` before pushing.
@@ -13,11 +13,8 @@ name: ci-python
 # pydantic or anthropic release that broke the engine or the request shapes
 # would have merged green.
 #
-# Deliberately *not* filtered by path, unlike ci-container-build. The suite
-# takes seconds, so filtering saves nothing measurable — and a required status
-# check skipped by a path filter never reports, which blocks a pull request
-# rather than passing it. ci-terraform works around that same trap with an
-# always-running gate job; here it is cheaper to simply always run.
+# The mechanics live in jay-withers/workflows, so every repo of ours gets the
+# same job and a fix lands once. Only what is specific to this repo is here.
 on:
   pull_request:
     branches: [main]
@@ -27,26 +24,20 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
-        with:
-          # Matches the python:3.14 base in apps/investagent/Dockerfile, so a
-          # pass here is a pass on the interpreter the deployed image runs.
-          python-version: "3.14"
-          enable-cache: true
-          cache-dependency-glob: apps/investagent/uv.lock
-
-      # --extra dev because pytest is an optional-dependency extra rather than a
-      # dependency group, and `uv run` installs groups but not extras. Locally
-      # it is `make install` that supplies it, which is why `make test` works on
-      # a machine that has run it and fails on a fresh clone.
-      #
-      # --locked so a pyproject.toml edited without its lockfile fails here
-      # rather than being quietly resolved around on a developer's machine.
-      - name: Run the test suite
-        run: uv run --directory apps/investagent --locked --extra dev pytest
+    # `extras: dev` is the input that matters: pytest sits in
+    # [project.optional-dependencies] and `uv run` installs dependency groups
+    # but not extras, so without it the run fails with a bare "Failed to spawn:
+    # pytest" after a successful-looking install — and only in CI, because
+    # locally `make install` has already put it in the venv.
+    #
+    # python-version matches the python:3.14 base in apps/investagent/Dockerfile,
+    # so a pass here is a pass on the interpreter Container Apps runs.
+    #
+    # The reusable workflow runs unfiltered by path, which is deliberate: the
+    # suite takes seconds, and a required check skipped by a path filter never
+    # reports, blocking a pull request rather than passing it.
+    uses: jay-withers/workflows/.github/workflows/python.yml@dbf2a8b8c8d0fac6ffa7e8f94974c9dbb1e9276c # v1.1.0
+    with:
+      working-directory: apps/investagent
+      python-version: "3.14"
+      extras: dev

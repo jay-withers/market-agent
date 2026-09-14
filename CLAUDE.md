@@ -965,18 +965,30 @@ Workflows are prefixed `ci-` (pull-request checks) or `cd-` (post-merge delivery
   subscription. The `ci-terraform` gate job always runs and is the check to
   require in branch protection; path filtering is at the job level (not the
   workflow trigger) precisely so the required check always reports.
-- **ci-python**: runs `pytest` on every PR. Nothing in CI ran the suite before
-  it — `ci-pre-commit` lints with ruff and `ci-container-build` proves the
-  images compile, but neither executes a test, so the risk engine was guarded
-  only by whoever remembered `make test`. The sharp edge was Renovate:
+- **ci-python**: runs `pytest` on every PR, by calling the reusable
+  `jay-withers/workflows/.github/workflows/python.yml` (pinned by commit SHA
+  with the tag as a comment, like `ci-pre-commit`). Nothing in CI ran the suite
+  before it — `ci-pre-commit` lints with ruff and `ci-container-build` proves
+  the images compile, but neither executes a test, so the risk engine was
+  guarded only by whoever remembered `make test`. The sharp edge was Renovate:
   `autoApprove` means a dependency bump reaches `main` with no human reading
   it, so a `psycopg`, `pydantic` or `anthropic` release that broke the engine
-  or the request shapes would have merged green. Deliberately **not** path
-  filtered, unlike `ci-container-build`: the suite takes seconds, and a
-  required check skipped by a path filter never reports, which blocks a PR
-  instead of passing it. It pins Python to 3.14 to match the image's base, and
-  runs `uv run --locked` so a `pyproject.toml` edited without its lockfile
-  fails here rather than on someone's machine.
+  or the request shapes would have merged green. Being a reusable-workflow
+  call, its status check context is **`test / Test`**, not the bare `test` job
+  id — the same namespacing `pre-commit / Pre-commit` has.
+
+  Three inputs, and `extras: dev` is the one to understand: **pytest is an
+  extra, not a dependency group, and `uv run` installs groups but not extras.**
+  Without it the job fails with a bare `Failed to spawn: pytest` after a
+  successful-looking install — and only in CI, because locally `make install`
+  (`uv sync --extra dev`) has already put pytest in the venv. `make test`
+  carried the same hole and hid it, so it now passes the extra too and works on
+  a fresh clone. `python-version` is pinned to 3.14 to match the image's base,
+  and the reusable workflow runs `uv run --locked`, so a `pyproject.toml`
+  edited without its lockfile fails here rather than on someone's machine.
+  It is deliberately **not** path filtered, unlike `ci-container-build`: the
+  suite takes seconds, and a required check skipped by a path filter never
+  reports, which blocks a PR instead of passing it.
 - **ci-container-build**: builds `apps/investagent` and `apps/dashboard` on PRs
   touching `apps/**`, without pushing. The runner is natively amd64, which is
   what Container Apps runs, so this also proves the target architecture builds —
