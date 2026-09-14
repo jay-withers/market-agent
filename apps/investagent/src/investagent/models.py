@@ -199,8 +199,10 @@ class PortfolioState(BaseModel):
 
     Frozen, and passed to the risk engine by value: the engine is a pure
     function and must not be able to mutate the state it is judging. This is
-    also the object serialised into `ai_decisions.portfolio_state`, so a
-    decision can be replayed later against exactly what the model was shown.
+    also the object serialised into `ai_decisions.portfolio_state`. It is not
+    by itself everything the model was shown — the rest of the prompt's context
+    goes to `ai_decisions.prompt_context` — but between the two a decision can
+    be replayed later against exactly the picture that produced it.
     """
 
     model_config = ConfigDict(frozen=True)

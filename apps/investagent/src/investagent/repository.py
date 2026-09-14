@@ -87,6 +87,39 @@ def trades_today(conn: Any, pid: int) -> int:
     return int(row[0])
 
 
+def recent_decisions(conn: Any, ticker: str, limit: int) -> list[dict[str, Any]]:
+    """The agent's own recent decisions on one ticker, for the analysis prompt.
+
+    Without this the model re-argues the same thesis every morning: nothing in
+    the prompt otherwise tells it that it recommended the same BUY four days
+    running, or that the engine clamped every one of them to the same cap.
+
+    The verdict and the resulting trade's status both come along, because
+    "approved" and "filled" are different facts — a scheduled run submits
+    before the market opens, so its orders rest for hours.
+
+    `ai_decisions_ticker_idx` on (ticker, decided_at DESC) covers the ordering.
+    """
+    with conn.cursor(row_factory=dict_row) as cur:
+        return cur.execute(
+            "SELECT d.decided_at::date AS on_date, d.action, d.confidence,"
+            "   d.recommended_amount_gbp, d.approved_amount_gbp,"
+            "   d.risk_verdict->>'binding_constraint' AS binding_constraint,"
+            "   t.status AS trade_status"
+            " FROM ai_decisions d"
+            # A lateral single-row join rather than a plain one: a decision has
+            # at most one trade today, but a join that *could* duplicate a
+            # decision would silently double an entry in the prompt if that ever
+            # stopped being true.
+            " LEFT JOIN LATERAL ("
+            "   SELECT status FROM trades WHERE decision_id = d.id"
+            "   ORDER BY created_at DESC LIMIT 1"
+            " ) t ON true"
+            " WHERE d.ticker = %s ORDER BY d.decided_at DESC LIMIT %s",
+            (ticker, limit),
+        ).fetchall()
+
+
 def build_state(
     conn: Any, pid: int, closes: dict[str, Bar], rate_gbp_usd: Decimal
 ) -> tuple[PortfolioState, list[str]]:
@@ -256,12 +289,21 @@ def save_decision(
     news_ids: list[int],
     input_tokens: int,
     output_tokens: int,
+    prompt_context: dict[str, Any] | None = None,
 ) -> int:
+    """Store one decision.
+
+    `prompt_context` is whatever the model was shown that `portfolio_state`
+    does not already carry — today, its own decision history. Without it the
+    replayability claim on `PortfolioState` quietly stops being true: the
+    prompt would contain an input no stored column records.
+    """
     row = conn.execute(
         "INSERT INTO ai_decisions (run_id, ticker, action, confidence, reasoning, risks,"
         "   model, prompt_version, news_ids, recommended_amount_gbp, approved_amount_gbp,"
-        "   portfolio_state, risk_verdict, input_tokens, output_tokens)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+        "   portfolio_state, risk_verdict, prompt_context, input_tokens, output_tokens)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+        " RETURNING id",
         (
             run_id,
             rec.ticker,
@@ -279,6 +321,7 @@ def save_decision(
             # storing exactly what the model was shown.
             Jsonb(state.model_dump(mode="json")),
             Jsonb(verdict.model_dump(mode="json")),
+            Jsonb(_jsonable(prompt_context)) if prompt_context else None,
             input_tokens,
             output_tokens,
         ),

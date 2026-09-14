@@ -79,6 +79,18 @@ class Settings(BaseSettings):
     # model — `effort` errors on the pre-4.6 filter model.
     analysis_effort: str = "high"
 
+    # A hard ceiling on what one agent run may spend with the model, checked as
+    # each call's cost lands. A measured run over the ten-name watchlist costs
+    # $0.18-0.19, so this is about five times the expected figure: it exists to
+    # stop a runaway loop, not to shape ordinary spending. Crossing it fails the
+    # run, which closes the `agent_runs` row with the reason — an unbounded bill
+    # accumulating quietly is the outcome worth preventing.
+    #
+    # `gt=0` rather than treating 0 as "no ceiling": a guard that switches off
+    # at the value which reads like "spend nothing" is the wrong footgun to
+    # leave lying around. Raise it if you mean to spend more.
+    max_run_cost_usd: Decimal = Field(default=Decimal("1.00"), gt=0)
+
     # Alpaca. The paper host by default and nowhere else: the live host takes
     # the same credentials and the same request shapes, so a wrong base URL
     # would place real orders with no other symptom.

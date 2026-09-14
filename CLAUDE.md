@@ -504,6 +504,35 @@ at either rate is simply wrong — it read 30% high when the filter's Haiku
 tokens were priced as Sonnet ($0.566 against a true $0.434). The token columns
 still hold the mixed totals, which is fine because they are counts.
 
+**The model is shown its own recent decisions on the ticker.** Five of them,
+most recent first, with the engine's verdict and the resulting order's status —
+`repository.recent_decisions`, covered by the `ai_decisions_ticker_idx` that
+already existed. Without it nothing in the prompt lets the model know it has
+argued the same BUY four mornings running, or that every one was clamped to the
+same cap. The prompt says explicitly what the history does *not* mean: a
+refusal is a statement about the limits rather than about the reasoning, and an
+order's status is not its outcome. It is decision memory, not a score.
+
+The consequence is `prompt_context`, added by `006-decision-context.sql`. The
+history is an input to the decision that `portfolio_state` does not carry, so
+without a column for it the replayability claim on an `ai_decisions` row
+quietly stops being true. Structured rather than the rendered prompt text, for
+the reason the weekly review's proposals are: "has it asked for the same thing
+three days running?" stays a query. **Anything added to `_prompt()` needs the
+same treatment** — a new input with nowhere to be stored breaks the row's claim
+to be a complete record of what was asked.
+
+**One run's model spend is capped by `MAX_RUN_COST_USD`**, defaulting to $1.00
+against a measured $0.18–0.19. It is checked as each call's cost lands rather
+than once per stage, because the stage that can run away is the filter at one
+call per article/ticker pair — exactly the one a per-stage check would let
+finish first. Crossing it raises `BudgetExceeded`, which the existing handler
+closes the `agent_runs` row with, so the failure reads like any other. `gt=0`
+on the setting rather than "0 disables": a guard that switches off at the value
+which reads like "spend nothing" is the wrong footgun to leave lying around.
+Not wired through Terraform, because `DRY_RUN` is not either — the default
+applies to the deployed job and an override is an env var on the container.
+
 **"Submitted, no fill" is the normal outcome of a scheduled run.** The agent
 runs at 06:00 UTC and the US market opens at 14:30, so a market order sits
 `accepted` for eight hours. Consequences: `trades.quantity` had to become
@@ -805,7 +834,9 @@ queries `companies.is_benchmark`, so it would have failed outright on a
 database holding only `001` through `003`. This has already been forgotten once.
 The weekly review job is the same shape of dependency: it needs `005` for
 `weekly_reviews`, and its first Sunday run against a database without it fails
-on a missing relation.
+on a missing relation. `006-decision-context.sql` is the same again — the agent
+writes `ai_decisions.prompt_context` on every decision, so a deploy of that code
+against a database without it fails on the first analysis, not at start-up.
 
 `make deploy` is `apply` with `-var image_tag=$(IMAGE_TAG)`, so the tag built is
 the tag deployed and the two cannot drift. Neither passes `-auto-approve`.
