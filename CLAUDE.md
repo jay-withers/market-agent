@@ -952,7 +952,7 @@ Workflows are prefixed `ci-` (pull-request checks) or `cd-` (post-merge delivery
 
 - **ci-pre-commit**: runs all linters on PRs to `main` via the `pre-commit` job,
   which calls the reusable workflow
-  `jay-withers/template-pipelines/.github/workflows/pre-commit.yml` (pinned by
+  `jay-withers/workflows/.github/workflows/pre-commit.yml` (pinned by
   commit SHA, with the tag as a comment). Because it's a reusable-workflow call,
   the status check context it reports is `pre-commit / Pre-commit`
   (`<caller job id> / <reusable job name>`), not the bare `pre-commit` job id.
@@ -965,6 +965,18 @@ Workflows are prefixed `ci-` (pull-request checks) or `cd-` (post-merge delivery
   subscription. The `ci-terraform` gate job always runs and is the check to
   require in branch protection; path filtering is at the job level (not the
   workflow trigger) precisely so the required check always reports.
+- **ci-python**: runs `pytest` on every PR. Nothing in CI ran the suite before
+  it — `ci-pre-commit` lints with ruff and `ci-container-build` proves the
+  images compile, but neither executes a test, so the risk engine was guarded
+  only by whoever remembered `make test`. The sharp edge was Renovate:
+  `autoApprove` means a dependency bump reaches `main` with no human reading
+  it, so a `psycopg`, `pydantic` or `anthropic` release that broke the engine
+  or the request shapes would have merged green. Deliberately **not** path
+  filtered, unlike `ci-container-build`: the suite takes seconds, and a
+  required check skipped by a path filter never reports, which blocks a PR
+  instead of passing it. It pins Python to 3.14 to match the image's base, and
+  runs `uv run --locked` so a `pyproject.toml` edited without its lockfile
+  fails here rather than on someone's machine.
 - **ci-container-build**: builds `apps/investagent` and `apps/dashboard` on PRs
   touching `apps/**`, without pushing. The runner is natively amd64, which is
   what Container Apps runs, so this also proves the target architecture builds —

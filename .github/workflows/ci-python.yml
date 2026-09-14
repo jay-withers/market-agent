@@ -1,0 +1,48 @@
+name: ci-python
+
+# Runs the Python test suite on a pull request.
+#
+# Until this existed, nothing in CI ran pytest at all. ci-pre-commit lints the
+# code with ruff and ci-container-build proves the image compiles, but neither
+# executes a single test — so the risk engine, the one component deciding what
+# the agent is permitted to trade, was covered only by whoever remembered to
+# run `make test` before pushing.
+#
+# That gap matters most for the changes nobody reads: renovate.json sets
+# autoApprove, so a dependency bump reaches main without a human. A psycopg,
+# pydantic or anthropic release that broke the engine or the request shapes
+# would have merged green.
+#
+# Deliberately *not* filtered by path, unlike ci-container-build. The suite
+# takes seconds, so filtering saves nothing measurable — and a required status
+# check skipped by a path filter never reports, which blocks a pull request
+# rather than passing it. ci-terraform works around that same trap with an
+# always-running gate job; here it is cheaper to simply always run.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          # Matches the python:3.14 base in apps/investagent/Dockerfile, so a
+          # pass here is a pass on the interpreter the deployed image runs.
+          python-version: "3.14"
+          enable-cache: true
+          cache-dependency-glob: apps/investagent/uv.lock
+
+      # --locked, where the Makefile's `make test` runs plain: CI should fail on
+      # a pyproject.toml edited without its lockfile, which a developer's own
+      # machine quietly resolves around.
+      - name: Run the test suite
+        run: uv run --directory apps/investagent --locked pytest
