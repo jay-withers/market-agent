@@ -865,8 +865,24 @@ writes `ai_decisions.prompt_context` on every decision, so a deploy of that code
 against a database without it fails on the first analysis, not at start-up. So
 is `007-job-costs.sql`, which the summary and weekly jobs write to on every run.
 
-`make deploy` is `apply` with `-var image_tag=$(IMAGE_TAG)`, so the tag built is
-the tag deployed and the two cannot drift. Neither passes `-auto-approve`.
+**There is one image tag variable per image**, `investagent_image_tag` and
+`dashboard_image_tag`, not one shared between them. Both images are built and
+pushed under the same short SHA, so in the normal case the two hold the same
+value — `make deploy` sets both from one `IMAGE_TAG`, so the tag built is still
+the tag deployed and the two cannot drift. The split exists for the abnormal
+case: rolling the dashboard back to yesterday's release while the API stays on
+today's, without rebuilding either. `make deploy DASHBOARD_IMAGE_TAG=v0.3.3` is
+that, and `make deploy` on its own is unchanged. Neither passes `-auto-approve`.
+
+Both default to a **published release tag**, not a sentinel, so a bare
+`terraform apply` deploys something real. Mind the `v`: cd-publish pushes each
+image as `vX.Y.Z` *and* the commit's short SHA, so `0.4.0` is not a tag that
+exists — a default without the prefix fails at revision start-up on an image
+pull, long after plan and apply both reported success.
+
+`common_env`'s `IMAGE_TAG` carries the **investagent** tag specifically, since
+that is what the agent records on its `agent_runs` row and it has to name the
+image the code writing the row is running. The dashboard never reads it.
 
 `make test` runs the Python suite. There are no *Terraform* tests — those were
 removed at the user's request — and `make validate` is the credential-free

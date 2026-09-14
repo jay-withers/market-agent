@@ -69,14 +69,36 @@ variable "image_registry" {
   default     = "ghcr.io/jay-withers/market-agent"
 }
 
-variable "image_tag" {
-  description = "Immutable tag of the images to deploy, normally the short git SHA. Must not be `latest`: Container Apps creates a revision only when the template changes, so re-pushing a moving tag deploys nothing at all and reports success."
+# One tag per image rather than one shared between them. Both are built and
+# pushed under the same short SHA, so in the normal case they hold the same
+# value and `make deploy` sets both from one IMAGE_TAG — the point of splitting
+# them is the abnormal case: rolling the dashboard back to yesterday's release
+# while the API stays on today's, without rebuilding either.
+#
+# Defaults are a published release rather than a sentinel, so a bare
+# `terraform apply` deploys something real. Note the `v` prefix: cd-publish
+# pushes each image under the release tag `vX.Y.Z` and the commit's short SHA,
+# and `0.4.0` without it is not a tag that exists — the pull would fail at
+# revision start-up rather than at plan time.
+variable "investagent_image_tag" {
+  description = "Immutable tag of the investagent image — the API and all three jobs. Must not be `latest`: Container Apps creates a revision only when the template changes, so re-pushing a moving tag deploys nothing at all and reports success."
   type        = string
-  default     = "unset"
+  default     = "v0.4.0"
 
   validation {
-    condition     = !contains(["latest", "main", "unset"], var.image_tag)
-    error_message = "image_tag must be an immutable tag. A moving tag re-pushed under the same name changes no revision template, so Container Apps deploys nothing and reports success. Pass -var image_tag=$(git rev-parse --short HEAD)."
+    condition     = !contains(["latest", "main", "unset"], var.investagent_image_tag)
+    error_message = "investagent_image_tag must be an immutable tag. A moving tag re-pushed under the same name changes no revision template, so Container Apps deploys nothing and reports success. Pass -var investagent_image_tag=$(git rev-parse --short HEAD)."
+  }
+}
+
+variable "dashboard_image_tag" {
+  description = "Immutable tag of the dashboard image. Must not be `latest`, for the same reason as investagent_image_tag."
+  type        = string
+  default     = "v0.4.0"
+
+  validation {
+    condition     = !contains(["latest", "main", "unset"], var.dashboard_image_tag)
+    error_message = "dashboard_image_tag must be an immutable tag. A moving tag re-pushed under the same name changes no revision template, so Container Apps deploys nothing and reports success. Pass -var dashboard_image_tag=$(git rev-parse --short HEAD)."
   }
 }
 
