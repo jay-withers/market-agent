@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
 
 # Container Apps runs linux/amd64 only, and the dev host here is arm64 (Docker
 # Desktop on Apple Silicon). A native build produces an image that crash-loops
