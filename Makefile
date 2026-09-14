@@ -96,6 +96,13 @@ lint: ## Run all pre-commit hooks against every file
 IMAGE_TAG ?= $(shell git rev-parse --short HEAD)
 IMAGE_REGISTRY ?= ghcr.io/jay-withers/market-agent
 
+# Terraform holds one tag per image, but `make deploy` sets both from IMAGE_TAG
+# so the tag built stays the tag deployed and the two cannot drift. Override one
+# of these only to deploy the images at different versions — rolling the
+# dashboard back to yesterday's release while the API stays on today's, say.
+INVESTAGENT_IMAGE_TAG ?= $(IMAGE_TAG)
+DASHBOARD_IMAGE_TAG ?= $(IMAGE_TAG)
+
 build: ## Build both images for linux/amd64 (set IMAGE_TAG, default: git sha)
 	docker buildx build --platform linux/amd64 \
 	  -t $(IMAGE_REGISTRY)/investagent:$(IMAGE_TAG) \
@@ -113,11 +120,12 @@ push: ## Push both images to ghcr.io (needs write:packages)
 	docker push $(IMAGE_REGISTRY)/investagent:$(IMAGE_TAG)
 	docker push $(IMAGE_REGISTRY)/dashboard:$(IMAGE_TAG)
 
-deploy: ## terraform apply with the built image tag (set ENV, default dev)
+deploy: ## terraform apply with the built image tags (set ENV, default dev)
 	terraform -chdir=$(TF_DIR) init -reconfigure -backend-config=backends/$(ENV).hcl
 	terraform -chdir=$(TF_DIR) apply \
 	  -var-file=environments/$(ENV).tfvars \
-	  -var image_tag=$(IMAGE_TAG)
+	  -var investagent_image_tag=$(INVESTAGENT_IMAGE_TAG) \
+	  -var dashboard_image_tag=$(DASHBOARD_IMAGE_TAG)
 
 # --container is mandatory here, and it names the container inside the job
 # (`agent`), not the job itself. Streaming only works while an execution has a

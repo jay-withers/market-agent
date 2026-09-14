@@ -123,8 +123,12 @@ pull them.
 
 Never deploy a tag that already exists in the registry under different content.
 Container Apps creates a revision only when the template changes, so re-pushing
-a moving tag deploys nothing and reports success; `image_tag` rejects `latest`,
-`main` and `unset` for that reason.
+a moving tag deploys nothing and reports success; `investagent_image_tag` and
+`dashboard_image_tag` both reject `latest`, `main` and `unset` for that reason.
+
+The two images carry their own tag so one can be rolled back without the other
+— `make deploy DASHBOARD_IMAGE_TAG=v0.3.3` — but `make deploy` on its own sets
+both from the same `IMAGE_TAG`, which is the normal case.
 
 **Apply the SQL before deploying a change that needs it.** `make sql` is not run
 by the deploy, and the schema is not versioned with the image — a migration the
