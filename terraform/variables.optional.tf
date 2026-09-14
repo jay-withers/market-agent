@@ -83,7 +83,7 @@ variable "image_registry" {
 variable "investagent_image_tag" {
   description = "Immutable tag of the investagent image — the API and all three jobs. Must not be `latest`: Container Apps creates a revision only when the template changes, so re-pushing a moving tag deploys nothing at all and reports success."
   type        = string
-  default     = "v0.4.0"
+  default     = "v0.5.1"
 
   validation {
     condition     = !contains(["latest", "main", "unset"], var.investagent_image_tag)
@@ -94,7 +94,7 @@ variable "investagent_image_tag" {
 variable "dashboard_image_tag" {
   description = "Immutable tag of the dashboard image. Must not be `latest`, for the same reason as investagent_image_tag."
   type        = string
-  default     = "v0.4.0"
+  default     = "v0.5.1"
 
   validation {
     condition     = !contains(["latest", "main", "unset"], var.dashboard_image_tag)
