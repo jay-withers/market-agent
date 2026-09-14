@@ -41,8 +41,12 @@ jobs:
           enable-cache: true
           cache-dependency-glob: apps/investagent/uv.lock
 
-      # --locked, where the Makefile's `make test` runs plain: CI should fail on
-      # a pyproject.toml edited without its lockfile, which a developer's own
-      # machine quietly resolves around.
+      # --extra dev because pytest is an optional-dependency extra rather than a
+      # dependency group, and `uv run` installs groups but not extras. Locally
+      # it is `make install` that supplies it, which is why `make test` works on
+      # a machine that has run it and fails on a fresh clone.
+      #
+      # --locked so a pyproject.toml edited without its lockfile fails here
+      # rather than being quietly resolved around on a developer's machine.
       - name: Run the test suite
-        run: uv run --directory apps/investagent --locked pytest
+        run: uv run --directory apps/investagent --locked --extra dev pytest
