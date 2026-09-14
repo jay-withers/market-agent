@@ -1025,4 +1025,24 @@ Branch protection and other repo-level GitHub settings aren't templated as files
 here. This repo is managed centrally by
 [jay-withers/github-repos](https://github.com/jay-withers/github-repos)'s
 Terraform root module, which is the single source of truth for every jay-withers
-repo. The required status check should be `ci-terraform`.
+repo.
+
+The required status checks are **`pre-commit / Pre-commit`**, **`test / Test`**
+and **`ci-terraform`** — set in that repo's `terraform/terraform.tfvars`, where
+this entry sat at `required_status_checks = []` for as long as the CI existed,
+so nothing could actually block a merge. Two rules decide what belongs on that
+list:
+
+- **A reusable-workflow call reports as `<caller job id> / <reusable job
+  name>`**, not the bare job id. Hence `test / Test` rather than `test`. Read
+  the context off `gh pr checks` rather than inferring it from the workflow.
+- **Only require a check that always reports.** `ci-container-build` is
+  filtered on its *trigger* (`paths: apps/**`), so a Terraform-only PR never
+  runs it — requiring `build (investagent)` would leave every such PR pending
+  for ever rather than failing it. `ci-terraform` is safe for the opposite
+  reason: its filtering is at the job level, so its gate job always reports.
+
+Note that the ruleset sets `strict_required_status_checks_policy = true`, so a
+PR must be up to date with `main` before it can merge. And `github-repos` plans
+in CI but does not apply — a change there takes effect when someone runs
+`make apply` against remote state.
