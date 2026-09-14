@@ -12,7 +12,7 @@ from datetime import date
 from decimal import Decimal
 
 from investagent.benchmarks import CASH_SYMBOL, BenchmarkPoint
-from investagent.jobs.summary import _facts_table, _prompt
+from investagent.jobs.summary import _facts_table, _prompt, _spend_section
 from investagent.models import PortfolioState, Position
 
 D = Decimal
@@ -141,3 +141,108 @@ def test_the_prompt_carries_the_models_own_reasoning():
 
 def test_the_prompt_handles_a_day_with_no_decisions():
     assert "No decisions were taken." in _prompt("FACTS", _activity())
+
+
+# ---------------------------------------------------------------------------
+# Model spend and the credit runway
+# ---------------------------------------------------------------------------
+
+
+def _spend(**overrides) -> dict:
+    """A row as `repository.spend` returns it."""
+    defaults = dict(
+        today_usd=D("0.190000"),
+        last_7_days_usd=D("1.400000"),
+        to_date_usd=D("5.000000"),
+        known_from=date(2026, 8, 20),
+    )
+    return {**defaults, **overrides}
+
+
+def _spend_text(spend=None, credit=None) -> str:
+    return "\n".join(_spend_section(spend or _spend(), credit))
+
+
+def test_the_spend_figures_are_the_stored_ones():
+    text = _spend_text()
+    assert "$0.19" in text
+    assert "$1.40" in text
+    assert "$5.00" in text
+
+
+def test_the_daily_rate_is_the_last_seven_days_not_all_time():
+    # The question behind the figure is "how long does this last at the rate it
+    # is going now", which an average over the whole experiment answers wrongly.
+    assert "$0.20/day" in _spend_text()
+
+
+def test_no_credit_configured_reports_spend_and_no_runway():
+    text = _spend_text()
+    assert "Runway" not in text
+    assert "Credit remaining" not in text
+    assert "No starting credit is configured" in text
+
+
+def test_a_configured_credit_gives_what_is_left_and_a_runway():
+    text = _spend_text(credit=D("25.00"))
+    assert "$20.00 of $25.00" in text
+    # 20.00 remaining at 0.20/day.
+    assert "about 100 days" in text
+
+
+def test_the_runway_is_rounded_down_rather_than_up():
+    # A runway is a limit like any other here: rounding it up would promise a
+    # day that is not paid for.
+    # $5.00 left at $0.30/day is 16.67 days, and 16 is the honest half.
+    text = _spend_text(spend=_spend(last_7_days_usd=D("2.100000")), credit=D("10.000000"))
+    assert "about 16 days" in text
+
+
+def test_exhausted_credit_says_so_rather_than_reporting_zero_days():
+    text = _spend_text(spend=_spend(to_date_usd=D("30.000000")), credit=D("25.00"))
+    assert "none — the recorded spend has reached the credit" in text
+    assert "about" not in text
+
+
+def test_a_week_with_no_spend_reports_no_runway_rather_than_dividing_by_zero():
+    text = _spend_text(spend=_spend(last_7_days_usd=D("0")), credit=D("25.00"))
+    assert "not estimable" in text
+
+
+def test_the_scope_of_the_figures_is_stated_not_left_to_be_inferred():
+    # These figures cannot include the call that writes the email, and the
+    # credit is a number a human typed rather than anything checked against the
+    # account. Both have to be on the page, or the model may describe the
+    # figure as complete.
+    text = _spend_text(credit=D("25.00"))
+    assert "excludes the call that writes this email" in text
+    assert "no balance endpoint" in text
+    assert "from 2026-08-20 onwards" in text
+
+
+def test_a_database_with_no_recorded_spend_says_so():
+    text = _spend_text(spend=_spend(known_from=None))
+    assert "No spend has been recorded yet" in text
+
+
+def test_the_spend_section_is_omitted_when_the_caller_passes_none():
+    # The facts table is built by the weekly review's tests and by anything
+    # else that renders a day; a missing spend must not become "$0 spent".
+    assert "Model spend" not in _table()
+
+
+def test_the_facts_table_carries_the_spend_section_when_given_one():
+    table = _facts_table(
+        TODAY,
+        _state(),
+        D("500.0000"),
+        D("-0.0050"),
+        D("-0.0010"),
+        _points(),
+        0,
+        _activity(),
+        _spend(),
+        D("25.00"),
+    )
+    assert "## Model spend" in table
+    assert "Credit remaining" in table

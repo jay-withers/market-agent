@@ -120,6 +120,40 @@ def recent_decisions(conn: Any, ticker: str, limit: int) -> list[dict[str, Any]]
         ).fetchall()
 
 
+def spend(conn: Any, as_of: date) -> dict[str, Any]:
+    """What the experiment has spent with the model, from every job that spends.
+
+    Three tables because three jobs call the API — the agent per run, the
+    summary and the weekly review once each. Summing only `agent_runs` would
+    read low by a call a day and a call a week, and the gap grows for as long
+    as the experiment runs.
+
+    A row with a NULL cost is one written before the column existed, or a run
+    that failed before its first call. Excluded rather than counted as zero:
+    the totals are what is *known* to have been spent, and `known_from` says
+    since when, so an incomplete history reads as incomplete.
+    """
+    with conn.cursor(row_factory=dict_row) as cur:
+        return cur.execute(
+            "WITH all_spend AS ("
+            "   SELECT started_at::date AS on_date, cost_usd FROM agent_runs"
+            "     WHERE cost_usd IS NOT NULL"
+            "   UNION ALL"
+            "   SELECT as_of, cost_usd FROM daily_summaries WHERE cost_usd IS NOT NULL"
+            "   UNION ALL"
+            "   SELECT period_end, cost_usd FROM weekly_reviews WHERE cost_usd IS NOT NULL"
+            " )"
+            " SELECT"
+            "   coalesce(sum(cost_usd) FILTER (WHERE on_date = %(as_of)s), 0) AS today_usd,"
+            "   coalesce(sum(cost_usd) FILTER (WHERE on_date >= %(as_of)s - 6), 0)"
+            "     AS last_7_days_usd,"
+            "   coalesce(sum(cost_usd), 0) AS to_date_usd,"
+            "   min(on_date) AS known_from"
+            " FROM all_spend",
+            {"as_of": as_of},
+        ).fetchone()
+
+
 def build_state(
     conn: Any, pid: int, closes: dict[str, Bar], rate_gbp_usd: Decimal
 ) -> tuple[PortfolioState, list[str]]:
@@ -623,17 +657,19 @@ def save_summary(
     email_status: str,
     provider_id: str | None,
     error: str | None,
+    cost_usd: Decimal | None = None,
 ) -> int:
     row = conn.execute(
         "INSERT INTO daily_summaries (as_of, subject, body_markdown, body_html, model,"
-        "   prompt_version, email_status, email_provider_id, email_error, sent_at)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,"
+        "   prompt_version, email_status, email_provider_id, email_error, cost_usd, sent_at)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
         "         CASE WHEN %s = 'sent' THEN now() ELSE NULL END)"
         " ON CONFLICT (as_of) DO UPDATE SET"
         "   subject = EXCLUDED.subject, body_markdown = EXCLUDED.body_markdown,"
         "   body_html = EXCLUDED.body_html, email_status = EXCLUDED.email_status,"
         "   email_provider_id = EXCLUDED.email_provider_id,"
-        "   email_error = EXCLUDED.email_error, sent_at = EXCLUDED.sent_at"
+        "   email_error = EXCLUDED.email_error, cost_usd = EXCLUDED.cost_usd,"
+        "   sent_at = EXCLUDED.sent_at"
         " RETURNING id",
         (
             as_of,
@@ -645,6 +681,7 @@ def save_summary(
             email_status,
             provider_id,
             error,
+            cost_usd,
             email_status,
         ),
     ).fetchone()
@@ -831,12 +868,13 @@ def save_weekly_review(
     email_status: str,
     provider_id: str | None,
     error: str | None,
+    cost_usd: Decimal | None = None,
 ) -> int:
     row = conn.execute(
         "INSERT INTO weekly_reviews (period_start, period_end, subject, assessment,"
         "   body_markdown, body_html, metrics, recommendations, model, prompt_version,"
-        "   email_status, email_provider_id, email_error, sent_at)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
+        "   email_status, email_provider_id, email_error, cost_usd, sent_at)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
         "         CASE WHEN %s = 'sent' THEN now() ELSE NULL END)"
         # Re-running a week overwrites its review, so a retry after a mail
         # outage is safe — the same property the daily summary has.
@@ -848,7 +886,10 @@ def save_weekly_review(
         "   model = EXCLUDED.model, prompt_version = EXCLUDED.prompt_version,"
         "   email_status = EXCLUDED.email_status,"
         "   email_provider_id = EXCLUDED.email_provider_id,"
-        "   email_error = EXCLUDED.email_error, sent_at = EXCLUDED.sent_at"
+        # cost_usd is overwritten too: a re-run makes a fresh model call, so
+        # keeping the first run's figure would under-report what the week cost.
+        "   email_error = EXCLUDED.email_error, cost_usd = EXCLUDED.cost_usd,"
+        "   sent_at = EXCLUDED.sent_at"
         " RETURNING id",
         (
             period_start,
@@ -864,6 +905,7 @@ def save_weekly_review(
             email_status,
             provider_id,
             error,
+            cost_usd,
             email_status,
         ),
     ).fetchone()

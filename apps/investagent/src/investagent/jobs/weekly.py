@@ -105,6 +105,7 @@ def run(
             email_status=result.status,
             provider_id=result.provider_id,
             error=result.error,
+            cost_usd=review.cost_usd,
         )
         conn.commit()
 

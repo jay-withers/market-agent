@@ -15,7 +15,10 @@
     agent, Resend only for the daily summary), so there is no need to have them
     all to hand.
 
-    Not everything here is a secret. SUMMARY-EMAIL-TO is the daily summary's
+    Not everything here is a secret. ANTHROPIC-CREDIT-USD is the API credit the
+    experiment started with, in dollars — Anthropic publishes no balance
+    endpoint, so the daily summary's runway figure can only be that number minus
+    the spend the database recorded. SUMMARY-EMAIL-TO is the daily summary's
     recipient, and it lives in Key Vault for a different reason: this repository
     is public and so are terraform/environments/*.tfvars, so an address in
     either would be committed permanently. Reading it at runtime also means
@@ -68,6 +71,7 @@ param(
         'ALPACA-SECRET-KEY'
         'RESEND-API-KEY'
         'SUMMARY-EMAIL-TO'
+        'ANTHROPIC-CREDIT-USD'
     ),
 
     [switch]$Force
@@ -136,7 +140,7 @@ $expectedPrefixes = @{
 # that happens to live in Key Vault rather than credentials, and hiding them
 # only hides mistakes: a mistyped API key fails loudly on first use, whereas a
 # mistyped email address silently delivers nowhere.
-$plainText = @('SUMMARY-EMAIL-TO')
+$plainText = @('SUMMARY-EMAIL-TO', 'ANTHROPIC-CREDIT-USD')
 
 $set = 0
 $skipped = 0
@@ -197,6 +201,18 @@ foreach ($secretName in $Name) {
             Write-Warning "$secretName does not look like an email address: $($bad -join ', ')"
         }
         Write-Host "    note: Resend's shared sender only delivers to the address that owns the Resend account, until a domain is verified."
+    }
+
+    # Advisory too. The summary parses this with Decimal() and ignores a value
+    # it cannot read, so a typo costs the runway line rather than the email —
+    # but it does so silently a day later, which is worth a warning now. A bare
+    # number: a currency symbol or thousands separator is what a paste from a
+    # billing page carries.
+    if ($secretName -eq 'ANTHROPIC-CREDIT-USD') {
+        if ($value -notmatch '^[0-9]+(\.[0-9]+)?$') {
+            Write-Warning "$secretName should be a plain number of US dollars, e.g. 25 or 25.00 — '$value' will be ignored by the summary if it cannot be parsed."
+        }
+        Write-Host "    note: this is the credit you started with, not a live balance — Anthropic publishes no balance endpoint, so the summary subtracts its own recorded spend from it."
     }
 
     # --value puts the secret in this process's argument list, where anything

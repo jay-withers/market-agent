@@ -633,6 +633,32 @@ on a day three trades had executed. The table now states the day's trades
 first and spells out what `simulated` means. `tests/test_summary.py` is the
 regression.
 
+- **The email reports model spend, and there is no balance endpoint to check
+  it against.** Anthropic publishes usage and cost reports
+  (`/v1/organizations/usage_report/messages`, `/v1/organizations/cost_report`)
+  but nothing that returns a remaining prepaid credit balance — and both of
+  those need an Admin API key, which individual accounts cannot hold at all.
+  So the figure is built from our own ledger: `repository.spend()` sums
+  `agent_runs`, `daily_summaries` and `weekly_reviews`, and the email shows
+  today, the last seven days with a daily rate, and the total. `007-job-costs.sql`
+  exists because the other two jobs never recorded their own call — the weekly
+  review logged the figure and discarded it, the summary never looked — so a
+  total from `agent_runs` alone was low by a call a day and a call a week, and
+  the gap only grows.
+- **The runway needs a number a human supplies.** `optional_secret(
+  "ANTHROPIC-CREDIT-USD")` holds what the account started with; absent means
+  report spend and no runway, the same opt-in shape as `SUMMARY-EMAIL-TO` and
+  in Key Vault for the same reason — this repository is public. A value that
+  will not parse is warned about and ignored rather than fatal: a mistyped
+  credit figure must not cost the day its summary.
+- **The spend figures cannot include the call that writes the email**, because
+  the table is built before `narrate()` runs. The section says so in the text
+  rather than leaving it to be inferred, alongside the fact that the credit was
+  typed by hand and checked against nothing. Both are there so the model cannot
+  describe the figure as complete — the same discipline as the trades table.
+  The daily rate is over the last seven days, not all time, because the
+  question behind it is "how long at the current rate" and the first week of
+  manual runs answers a different one.
 - **Benchmarks live in `companies` with `is_benchmark = true`.** `prices.ticker`
   references `companies`, so storing a close for SPY, VT or EWU failed with a
   foreign key violation until they existed. A flag rather than reusing
@@ -836,7 +862,8 @@ The weekly review job is the same shape of dependency: it needs `005` for
 `weekly_reviews`, and its first Sunday run against a database without it fails
 on a missing relation. `006-decision-context.sql` is the same again — the agent
 writes `ai_decisions.prompt_context` on every decision, so a deploy of that code
-against a database without it fails on the first analysis, not at start-up.
+against a database without it fails on the first analysis, not at start-up. So
+is `007-job-costs.sql`, which the summary and weekly jobs write to on every run.
 
 `make deploy` is `apply` with `-var image_tag=$(IMAGE_TAG)`, so the tag built is
 the tag deployed and the two cannot drift. Neither passes `-auto-approve`.

@@ -30,11 +30,16 @@ from ..llm.base import PROMPT_VERSION, Llm
 from ..mailer import MailResult, send
 from ..marketdata import fetch_daily_bars, latest_close
 from ..models import money
-from ..settings import settings
+from ..settings import optional_secret, settings
 
 logger = logging.getLogger(__name__)
 
 PRICE_HISTORY_DAYS = 7
+
+# Cost columns are NUMERIC(18,6), because a single filter call costs a fraction
+# of a cent. That scale is right for the ledger and wrong for an email, where
+# "$0.190000" reads as a machine talking to itself.
+CENTS = Decimal("0.01")
 
 
 def run(
@@ -113,9 +118,12 @@ def run(
         repo.save_benchmarks(conn, points)
 
         activity = repo.day_activity(conn, pid, as_of)
+        spend = repo.spend(conn, as_of)
         conn.commit()
 
-    facts = _facts_table(as_of, state, initial, pnl, pnl_pct, points, filled, activity)
+    facts = _facts_table(
+        as_of, state, initial, pnl, pnl_pct, points, filled, activity, spend, _credit_usd()
+    )
     subject = f"InvestAgent {as_of}: £{total} ({'+' if pnl >= 0 else ''}{pnl_pct}%)"
 
     narrative = llm.narrate(_prompt(facts, activity))
@@ -137,6 +145,7 @@ def run(
             email_status=result.status,
             provider_id=result.provider_id,
             error=result.error,
+            cost_usd=narrative.cost_usd,
         )
         conn.commit()
 
@@ -190,7 +199,106 @@ def _reconcile(pid: int, broker: Broker) -> int:
     return filled
 
 
-def _facts_table(as_of, state, initial, pnl, pnl_pct, points, filled, activity) -> str:
+def _credit_usd() -> Decimal | None:
+    """The API credit the experiment started with, if anyone has said.
+
+    There is **no Anthropic endpoint that reports a remaining balance** — the
+    Usage and Cost Admin API reports spend, needs an Admin API key, and is not
+    available to individual accounts at all. So a runway figure can only come
+    from a starting number a human supplies plus the spend this database has
+    recorded itself.
+
+    In Key Vault rather than `common_env`, for the reason the email recipient
+    is: this repository and `terraform/environments/*.tfvars` are public, and
+    what someone has put on their account is theirs. Absent means report the
+    spend and no runway — opt-in, like the email.
+
+    A value that is not a number is ignored rather than fatal: a mistyped
+    credit figure must not cost the day its summary.
+    """
+    raw = optional_secret("ANTHROPIC-CREDIT-USD")
+    if not raw:
+        return None
+    try:
+        return Decimal(raw.strip().lstrip("$"))
+    except (ArithmeticError, ValueError):
+        logger.warning("ANTHROPIC-CREDIT-USD is not a number, ignoring it")
+        return None
+
+
+def _usd(value: Decimal) -> str:
+    """One dollar figure, for a human to read.
+
+    Display only — every calculation below works on the unrounded values, so
+    rounding here can never move the runway or the remaining balance.
+    """
+    return f"${value.quantize(CENTS)}"
+
+
+def _spend_section(spend: dict, credit: Decimal | None) -> list[str]:
+    """What the experiment has spent with the model, and what that leaves.
+
+    The scope is stated in the table rather than left to be inferred: these
+    figures cannot include the call that writes this email, because that call
+    has not happened when the table is built. Understating today's spend by one
+    Sonnet call is fine; letting the model describe the figure as complete is
+    not.
+
+    A daily average over the last seven days rather than over all time, because
+    the question behind it is "how long does this last at the rate it is going
+    now" and an average that includes the first week of manual runs answers a
+    different one.
+    """
+    to_date = spend["to_date_usd"]
+    daily = money(spend["last_7_days_usd"] / 7)
+
+    lines = [
+        "",
+        "## Model spend",
+        "",
+        "| | |",
+        "| --- | --- |",
+        f"| Spent today | {_usd(spend['today_usd'])} |",
+        f"| Last 7 days | {_usd(spend['last_7_days_usd'])} ({_usd(daily)}/day) |",
+        f"| Spent in total | {_usd(to_date)} |",
+    ]
+
+    if credit is not None:
+        remaining = credit - to_date
+        lines.append(f"| Credit remaining | {_usd(remaining)} of {_usd(credit)} |")
+        if remaining <= 0:
+            lines.append("| Runway | none — the recorded spend has reached the credit |")
+        elif daily > 0:
+            # Whole days, rounded towards zero by the int() — the same
+            # direction money() rounds, and the safe one for a runway.
+            lines.append(f"| Runway | about {int(remaining / daily)} days at that rate |")
+        else:
+            lines.append("| Runway | not estimable — nothing was spent in the last 7 days |")
+
+    known_from = spend["known_from"]
+    scope = (
+        f"Spend is what this database recorded, from {known_from} onwards"
+        if known_from
+        else "No spend has been recorded yet"
+    )
+    lines += [
+        "",
+        f"{scope}. It excludes the call that writes this email, which has not been "
+        "made when these figures are read, and anything else on the same API key. "
+        + (
+            "The credit figure is a number configured by hand: Anthropic publishes no "
+            "balance endpoint, so nothing here has checked it against the account."
+            if credit is not None
+            else "No starting credit is configured, so there is no runway to report."
+        ),
+        "",
+    ]
+    return lines
+
+
+def _facts_table(
+    as_of, state, initial, pnl, pnl_pct, points, filled, activity, spend=None, credit=None
+) -> str:
     """The figures, rendered deterministically. The model never touches these."""
     lines = [
         f"# InvestAgent — {as_of}",
@@ -254,6 +362,9 @@ def _facts_table(as_of, state, initial, pnl, pnl_pct, points, filled, activity) 
         for ticker, action, confidence, approved, _reasoning, binding in activity["decisions"]:
             amount = f"£{approved}" if approved is not None else "—"
             lines.append(f"| {ticker} | {action} | {confidence} | {amount} | {binding} |")
+
+    if spend is not None:
+        lines += _spend_section(spend, credit)
 
     return "\n".join(lines)
 
