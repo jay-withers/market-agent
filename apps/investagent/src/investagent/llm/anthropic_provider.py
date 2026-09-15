@@ -80,7 +80,12 @@ yourself, no totals. If a figure is not in the table, you do not know it.
 Write a few short paragraphs covering what the AI decided and why, anything the \
 risk engine refused or reduced, and what is worth watching tomorrow. Be plain \
 and specific. The reader is the person running the experiment, so no \
-salesmanship and no financial advice."""
+salesmanship and no financial advice.
+
+The "Agent run" table says whether the agent ran at all. If it failed, was \
+abandoned, or is absent, say so first and plainly: the empty sections below it \
+then mean the agent did not run, not that it chose to do nothing. Do not \
+reason about why it held positions on a day it never ran."""
 
 
 REVIEW_SYSTEM = f"""You review one week of an automated paper-trading \

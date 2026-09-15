@@ -9,7 +9,7 @@ can truthfully say.
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 import pytest
@@ -18,7 +18,13 @@ from investagent.benchmarks import CASH_SYMBOL, BenchmarkPoint
 from investagent.fetch import FetchError
 from investagent.fx import FxRate
 from investagent.jobs import summary
-from investagent.jobs.summary import _facts_table, _prompt, _spend_section
+from investagent.jobs.summary import (
+    _facts_table,
+    _prompt,
+    _run_alert,
+    _run_section,
+    _spend_section,
+)
 from investagent.models import PortfolioState, Position
 
 D = Decimal
@@ -46,8 +52,16 @@ def _points() -> list[BenchmarkPoint]:
     ]
 
 
-def _activity(trades=None, decisions=None, holdings=None) -> dict:
+def _run(status="succeeded", finished=datetime(2026, 9, 3, 6, 4), error=None, stale=False):
+    """One `agent_runs` row as `day_activity` returns it."""
+    return (datetime(2026, 9, 3, 6, 0), finished, status, "schedule", False, error, stale)
+
+
+def _activity(trades=None, decisions=None, holdings=None, runs=None) -> dict:
     return {
+        # A clean scheduled run by default, so every other test in this file
+        # goes on testing what it was written to test.
+        "runs": runs if runs is not None else [_run()],
         "trades": trades if trades is not None else [],
         "decisions": decisions if decisions is not None else [],
         "holdings": holdings if holdings is not None else [],
@@ -312,3 +326,100 @@ def test_an_fx_outage_with_nothing_stored_reports_the_original_failure(monkeypat
 
     with pytest.raises(FetchError, match="522"):
         summary._fx_rate(1)
+
+
+# ---------------------------------------------------------------------------
+# The agent run section: "no trades" and "never ran" must not read alike
+# ---------------------------------------------------------------------------
+
+
+def test_a_day_with_no_agent_run_says_the_agent_did_not_run():
+    """The gap this section exists for. `No trades were made.` is the same
+    sentence whether the model held every position or the 06:00 job died
+    before its first analysis, and every other section is silent in exactly
+    the same way — so nothing else in the email can tell the two apart."""
+    table = _table(runs=[])
+
+    assert "No agent run is recorded for today." in table
+    # And it must not be left to be inferred from the empty sections below it.
+    assert "did not run" in table
+
+
+def test_a_failed_run_is_reported_with_its_error():
+    table = _table(runs=[_run(status="failed", error="BudgetExceeded: $1.02 > $1.00")])
+
+    assert "| failed |" in table
+    assert "BudgetExceeded: $1.02 > $1.00" in table
+
+
+def test_a_run_still_running_past_the_job_timeout_reads_as_abandoned():
+    """SIGKILL cannot be caught, so the row is never closed and the replica is
+    long gone. Reporting it as `running` at 21:00 would claim work in progress
+    that Container Apps terminated fifteen hours earlier."""
+    table = _table(runs=[_run(status="running", finished=None, stale=True)])
+
+    assert "abandoned" in table
+    assert "| running |" not in table
+    # No finish time to report, and a blank cell would read as a missing value.
+    assert "| — |" in table
+
+
+def test_a_clean_run_is_reported_without_alarm():
+    table = _table(runs=[_run()])
+
+    assert "| succeeded |" in table
+    assert "No agent run is recorded" not in table
+
+
+def test_a_dry_run_is_marked_as_one():
+    started, finished, status, trigger, _dry, error, stale = _run()
+    table = _table(runs=[(started, finished, status, trigger, True, error, stale)])
+
+    assert "succeeded (dry run)" in table
+
+
+# ---------------------------------------------------------------------------
+# The subject line, which is the part that reaches a phone's lock screen
+# ---------------------------------------------------------------------------
+
+
+def test_a_clean_day_earns_no_subject_warning():
+    assert _run_alert([_run()]) is None
+
+
+def test_the_subject_warns_when_nothing_ran():
+    """A day the agent died still has a valuation, so the subject is otherwise
+    indistinguishable in an inbox from a day it worked."""
+    assert _run_alert([]) == "no agent run"
+
+
+def test_the_subject_warns_on_a_failed_run():
+    assert _run_alert([_run(status="failed", error="boom")]) == "agent run failed"
+
+
+def test_the_subject_warns_on_an_abandoned_run():
+    assert _run_alert([_run(status="running", finished=None, stale=True)]) == "agent run abandoned"
+
+
+def test_a_failure_outranks_a_success_on_the_same_day():
+    """A manual re-run that succeeded does not erase the scheduled one that
+    did not — the subject reports the worst outcome of the day, not the last."""
+    runs = [_run(status="failed", error="boom"), _run()]
+
+    assert _run_alert(runs) == "agent run failed"
+
+
+def test_the_run_section_reaches_the_model():
+    """The commentary is written from the facts table, so a failed run has to
+    be visible there or the model narrates a quiet day."""
+    prompt = _prompt(_table(runs=[]), _activity())
+
+    assert "No agent run is recorded for today." in prompt
+
+
+def test_every_run_of_the_day_is_listed():
+    """A scheduled run and a manual retry are two rows, and collapsing them
+    would hide either the failure or the recovery."""
+    section = "\n".join(_run_section([_run(status="failed", error="boom"), _run()]))
+
+    assert section.count("| 06:00 |") == 2

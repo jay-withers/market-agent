@@ -126,6 +126,11 @@ def run(
         as_of, state, initial, pnl, pnl_pct, points, filled, activity, spend, _credit_usd()
     )
     subject = f"InvestAgent {as_of}: £{total} ({'+' if pnl >= 0 else ''}{pnl_pct}%)"
+    # Built from stored figures, never by the model — and that is exactly why
+    # it has to carry this: a day the agent died still values the portfolio and
+    # would otherwise be indistinguishable in an inbox from a day it worked.
+    if alert := _run_alert(activity["runs"]):
+        subject += f" — {alert}"
 
     narrative = llm.narrate(_prompt(facts, activity))
     body_markdown = f"{facts}\n\n{narrative.value.body_markdown}"
@@ -350,6 +355,8 @@ def _facts_table(
         label = "Savings at 5%" if point.symbol == CASH_SYMBOL else f"{point.symbol} (proxy)"
         lines.append(f"| {label} | £{point.value_gbp} |")
 
+    lines += _run_section(activity["runs"])
+
     # Today's trades, stated before anything else the model might read as
     # "nothing happened". An earlier version showed only a reconciliation
     # count, which is zero on a dry run because a simulated trade never reaches
@@ -397,6 +404,79 @@ def _facts_table(
         lines += _spend_section(spend, credit)
 
     return "\n".join(lines)
+
+
+def _run_alert(runs) -> str | None:
+    """A few words for the subject line, or None when the day ran cleanly.
+
+    The subject is the only part of this email that survives being read on a
+    phone's lock screen, and it is built from stored figures precisely so the
+    model cannot influence it. A day the agent never ran still has a valuation
+    and still produces a perfectly ordinary-looking subject, which is the one
+    case where ordinary-looking is wrong.
+    """
+    if not runs:
+        return "no agent run"
+
+    statuses = [status for _started, _finished, status, *_rest in runs]
+    stale = [row[-1] for row in runs]
+
+    # Worst outcome of the day, not the last one: a manual retry that succeeded
+    # does not erase the scheduled run that did not.
+    if "failed" in statuses:
+        return "agent run failed"
+    if any(stale):
+        return "agent run abandoned"
+    return None
+
+
+def _run_section(runs) -> list[str]:
+    """Whether the agent ran, stated before anything it did or did not do.
+
+    `No trades were made.` is the same sentence on a day the model held every
+    position and on a day the 06:00 job died before reaching the first
+    analysis. The trades, decisions and holdings sections below are all silent
+    in exactly the same way, so nothing further down can distinguish them
+    either — this section is the only thing that can.
+    """
+    if not runs:
+        return [
+            "## Agent run",
+            "",
+            "**No agent run is recorded for today.** The job either did not "
+            "start or died before it could open a row. Nothing below describes "
+            "a decision the agent declined to take — it describes an agent "
+            "that did not run.",
+            "",
+        ]
+
+    lines = [
+        "## Agent run",
+        "",
+        "| Started (UTC) | Finished | Status | Trigger |",
+        "| --- | --- | --- | --- |",
+    ]
+    for started, finished, status, trigger, dry_run, _error, stale in runs:
+        # `stale` is a run still marked `running` past the job timeout: SIGKILL
+        # cannot be caught, so the row was never closed and the replica is long
+        # gone. Reported as abandoned rather than in progress.
+        state = "abandoned" if stale else status
+        if dry_run:
+            state += " (dry run)"
+        lines.append(f"| {_clock(started)} | {_clock(finished)} | {state} | {trigger} |")
+
+    errors = [error for *_head, error, _stale in runs if error]
+    if errors:
+        lines += ["", "The run reported: " + "; ".join(errors), ""]
+    else:
+        lines.append("")
+
+    return lines
+
+
+def _clock(value) -> str:
+    """A timestamp as HH:MM UTC, or an em dash for a run that never finished."""
+    return value.strftime("%H:%M") if value is not None else "—"
 
 
 def _prompt(facts: str, activity) -> str:
