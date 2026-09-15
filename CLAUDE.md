@@ -824,13 +824,21 @@ was started. The wrapper resolves the socket the same way that profile snippet
 does, then fails loudly if the daemon is still unreachable.
 
 **`actionlint` runs shellcheck over every `run:` block — but only if the
-shellcheck binary is on `PATH`, and silently skips it otherwise.** A dev
-container without shellcheck installed lints workflow shell not at all, so
-`make lint` passes and CI fails. It cost a round trip on a comment line that
-happened to wrap onto the word `shellcheck`: a comment opening `# shellcheck`
-is a *directive*, not prose, and the parse error (`SC1072: Expected '=' after
-directive key`) is reported against the whole `run:` block rather than the
-line. Install shellcheck before trusting a green local workflow lint.
+shellcheck binary is on `PATH`, and silently skips it otherwise.** No warning
+and no skipped-hook notice, so an environment without it lints workflow shell
+*not at all*: `make lint` passes and CI fails on the same commit. It cost a
+round trip on a comment line that happened to wrap onto the word `shellcheck`,
+because a comment opening `# shellcheck` is a *directive* rather than prose,
+and the parse error (`SC1072: Expected '=' after directive key`) is reported
+against the whole `run:` block rather than the line.
+
+The dev container carries shellcheck as of
+[dev-containers#67](https://github.com/jay-withers/dev-containers/pull/67), so
+this is handled here — but **rebuild the container if `command -v shellcheck`
+comes up empty**, and expect the trap anywhere else. Note that *having a
+shellcheck pre-commit hook does not help*: this repo has `shellcheck-py`, which
+installs into its own isolated hook environment and is not on `PATH` for the
+actionlint hook, and workflow shell was going unlinted regardless.
 
 **`ruff-format`'s upstream hook includes `markdown` in its `types_or`**, so it
 reformats Python code blocks inside `.md` files — it rewrote the aligned
