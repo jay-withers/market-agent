@@ -40,7 +40,7 @@ jobs:
     # The reusable workflow runs unfiltered by path, which is deliberate: the
     # suite takes seconds, and a required check skipped by a path filter never
     # reports, blocking a pull request rather than passing it.
-    uses: jay-withers/workflows/.github/workflows/python.yml@5eec529d83af378596be53c49610e3e36643a5c1 # v1.2.1
+    uses: jay-withers/workflows/.github/workflows/python.yml@49b6e82a5cc38ea03b0637e1e0775efa086000b2 # v1.3.0
     with:
       working-directory: apps/investagent
       python-version: "3.14"
@@ -62,3 +62,12 @@ jobs:
       # not invalidate the --locked run.
       coverage: investagent
       coverage-pr-comment: true
+      # repository.py and queries.py are hand-written SQL, and without a server
+      # for it to run against none of it was executed by anything but the
+      # deployed job at 06:00 UTC. The tests skip when POSTGRES_TEST_DSN is
+      # absent, which this input is what sets — so a clone with no Docker still
+      # runs `make test`, and CI runs the whole suite.
+      #
+      # 18-alpine matches docker/Dockerfile.db, so the local loop and CI apply
+      # the same migrations to the same major version.
+      postgres: "18-alpine"
