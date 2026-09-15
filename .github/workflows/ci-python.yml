@@ -21,6 +21,10 @@ on:
 
 permissions:
   contents: read
+  # For the coverage comment below. The reusable workflow declares no
+  # permissions of its own precisely so this is reachable — a called workflow
+  # can never hold more than its caller grants.
+  pull-requests: write
 
 jobs:
   test:
@@ -36,8 +40,25 @@ jobs:
     # The reusable workflow runs unfiltered by path, which is deliberate: the
     # suite takes seconds, and a required check skipped by a path filter never
     # reports, blocking a pull request rather than passing it.
-    uses: jay-withers/workflows/.github/workflows/python.yml@dbf2a8b8c8d0fac6ffa7e8f94974c9dbb1e9276c # v1.1.0
+    uses: jay-withers/workflows/.github/workflows/python.yml@5eec529d83af378596be53c49610e3e36643a5c1 # v1.2.1
     with:
       working-directory: apps/investagent
       python-version: "3.14"
       extras: dev
+      # Reported, never gated. The figure is bimodal: the pure modules — the
+      # risk engine, the models, the benchmark arithmetic — sit at 100%, while
+      # everything behind a psycopg connection sits far lower, because
+      # repository.py's SQL has no database to run against in CI. A
+      # --cov-fail-under over that mixture would be met by mocking the
+      # connection, which asserts the mock rather than the behaviour.
+      #
+      # The corollary is that it has to be *seen* instead, which is what the
+      # comment is for: a number nobody is shown and nothing enforces is not a
+      # signal. The job summary carries it too.
+      #
+      # pytest-cov is not in the dev extra and does not need to be — the
+      # reusable workflow injects it with `uv run --with`, an ephemeral overlay
+      # that costs this repo no dependency and no lockfile churn, and that does
+      # not invalidate the --locked run.
+      coverage: investagent
+      coverage-pr-comment: true

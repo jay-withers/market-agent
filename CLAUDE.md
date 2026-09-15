@@ -1005,6 +1005,43 @@ Workflows are prefixed `ci-` (pull-request checks) or `cd-` (post-merge delivery
   It is deliberately **not** path filtered, unlike `ci-container-build`: the
   suite takes seconds, and a required check skipped by a path filter never
   reports, which blocks a PR instead of passing it.
+
+  **Coverage is reported and never gated.** `coverage: investagent` and
+  `coverage-pr-comment: true` are inputs on the shared workflow, which puts the
+  table in the job summary and in one self-updating PR comment. It lives there
+  rather than in this repo because coverage reporting is generic Python CI
+  mechanics — an earlier version rode on the `command` input here, which worked
+  but meant anyone later wanting `command: pytest -x` would silently lose
+  coverage. **`pytest-cov` is deliberately not in the `dev` extra**: the
+  workflow injects it with `uv run --with`, an ephemeral overlay that needs no
+  dependency and no lockfile churn here and does not invalidate `--locked`.
+  Adding it back to `pyproject.toml` would be a no-op that has to be maintained.
+
+  The caller grants `pull-requests: write` for the comment, and that is load
+  bearing: a called workflow can never hold more than its caller, so the shared
+  workflow declares no permissions of its own. It did at first, and the comment
+  would have 403'd on every run.
+
+  There is no `--cov-fail-under` on purpose, because the figure is bimodal
+  rather than uniform: the pure modules are at 100% (`risk.py`,
+  `models.py`, `benchmarks.py`, `fx.py`, `mailer.py`, `risklimits.py`) and
+  everything behind a psycopg connection is far lower — `repository.py` at 27%,
+  with 28 of its 30 functions never named in a test, `queries.py` at 37%,
+  `jobs/agent.py`'s loop at 32%. That is not neglect; CI has no database, so
+  that SQL has nothing to run against. A threshold over the mixture would be
+  met by mocking the connection and the Entra token path, which asserts the
+  mock rather than the behaviour. **74% overall at 299 tests** is the figure to
+  compare against; treat a drop as something to read, not as a build failure.
+  Coverage that nothing enforces has to be visible instead, which is the whole
+  reason it is surfaced twice rather than left in the log.
+
+  Closing the real gap means a Postgres service container, and the blocker is
+  that the reusable `python.yml` exposes no `services` input (only
+  `working-directory`, `python-version`, `extras`, `command`, `locked` and
+  `runs-on`), and a workflow input cannot carry a service map. The route is a
+  second job here with its own `services:` block over a marked subset — which
+  would then need adding to the required checks in `github-repos`, since
+  `test / Test` would not cover it.
 - **ci-container-build**: builds `apps/investagent` and `apps/dashboard` on PRs
   touching `apps/**`, without pushing. The runner is natively amd64, which is
   what Container Apps runs, so this also proves the target architecture builds —
