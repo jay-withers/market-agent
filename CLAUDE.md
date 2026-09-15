@@ -1281,12 +1281,29 @@ in this repo (see the ci-terraform entry for why), so it needs a gate of its
 own or a failed plan could not block a merge. Dropping either one silently
 stops guarding half of the Terraform CI.
 
-**Renaming a required check is a two-repo change with an ordering hazard.**
-The old `ci-terraform` context no longer exists, and a required check that
-never reports leaves every PR pending rather than failing it. So the
-`github-repos` change has to be applied — by hand, `make apply`, since that
-repo plans in CI but does not apply — for merges here to work again. If PRs
-are stuck pending on `ci-terraform`, that apply is what is missing.
+**None of this is actually enforced yet, and that is worth knowing before
+relying on it.** The list above is what `github-repos`' tfvars *says*; the live
+ruleset on this repo is `required_status_checks = []`. `github-repos` plans in
+CI but applies by hand, and the apply has never been run, so a merge here is
+gated on nothing at all today. Read the live state with:
+
+```bash
+gh api repos/jay-withers/market-agent/rulesets --jq '.[].id' \
+  | xargs -I{} gh api repos/jay-withers/market-agent/rulesets/{} \
+    --jq '[.rules[]|select(.type=="required_status_checks")|.parameters.required_status_checks[].context]'
+```
+
+**The hazard is the apply, not the rename.** Applying a list that names a
+context nothing reports leaves every PR *pending* rather than failing it —
+which is precisely what has happened to `github-repos` itself: its live ruleset
+still requires `ci-terraform`, its CI now reports `terraform / Terraform`, and
+its own pull requests are blocked as a result. Its tfvars is already correct;
+only the apply is missing. So check the contexts in tfvars against
+`gh pr checks` output *before* applying, not after.
+
+Because `make apply` there reads local tfvars against remote state, it can be
+run from a checkout of the branch rather than after a merge — which is how a
+stale required check gets unstuck without an admin bypass.
 
 Note that the ruleset sets `strict_required_status_checks_policy = true`, so a
 PR must be up to date with `main` before it can merge. And `github-repos` plans
