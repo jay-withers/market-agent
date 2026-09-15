@@ -1235,6 +1235,24 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
   is that, and it is why `cd-tag` → `cd-publish` → `docker.yml` nests three
   deep (GitHub allows four).
 
+  **A green publish is not evidence the tags are right — check the registry.**
+  The first release through the shared workflow (`v0.6.2`) reported success
+  having pushed the short SHA and silently lost the version tag: `read` returns
+  non-zero on a final line with no trailing newline and does not run the loop
+  body for it, so a single-tag input was dropped whole, and the SHA tag alone
+  kept the "no tags resolved" guard from firing. Fixed in `docker.yml` at
+  v1.4.1, which now also errors when a non-empty `tags` parses to nothing. The
+  habit is still worth keeping after a release:
+
+  ```bash
+  gh api user/packages/container/market-agent%2Finvestagent/versions?per_page=3 \
+    --jq '.[] | "\(.updated_at) \(.metadata.container.tags|join(", "))"'
+  ```
+
+  A missing version tag does not need a new release: `cd-publish`'s
+  `workflow_dispatch` re-publishes an existing tag, and both tags are
+  content-addressed to the same image.
+
 ## Renovate
 
 `renovate.json` extends the shared presets from
