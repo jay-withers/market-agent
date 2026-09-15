@@ -56,7 +56,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    uses: jay-withers/workflows/.github/workflows/docker.yml@0a18e55d654e22fa54c4085547e4389896be6b7f # v1.4.0
+    uses: jay-withers/workflows/.github/workflows/docker.yml@e37b7fe5708196c79e0469510f5c50b26d157194 # v1.4.1
     with:
       images: |
         [{"name": "investagent", "context": "apps/investagent"},
