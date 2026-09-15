@@ -1,7 +1,7 @@
 name: cd-publish
 
-# Builds and pushes the application images to GHCR for a given tag. Invoked by
-# cd-tag after a version bump, or manually to (re)publish an existing tag.
+# Publishes the application images to GHCR for a given tag. Invoked by cd-tag
+# after a version bump, or manually to (re)publish an existing tag.
 #
 # This replaces `make build && make push` from a laptop as the release path.
 # That worked, but it published whatever was in the working tree, tagged with
@@ -10,8 +10,12 @@ name: cd-publish
 # source is an immutable tag, so what is published is exactly what was merged.
 # The Makefile targets stay for local iteration.
 #
-# Only linux/amd64 is built. Container Apps runs nothing else, and a manifest
-# list with one entry buys nothing.
+# The build itself is jay-withers/workflows' docker.yml, the same call
+# ci-container-build makes with `push` left false. This file is the release
+# entrypoint and nothing else: it exists as a workflow of its own rather than
+# folding into cd-tag because the workflow_dispatch trigger is the documented
+# way to re-publish an existing tag after a failed build, without minting a new
+# version.
 #
 # Two tags are pushed for each image, both immutable:
 #
@@ -39,81 +43,26 @@ on:
 
 permissions:
   contents: read
-  packages: write
-
-env:
-  REGISTRY: ghcr.io
 
 jobs:
+  # `ref` is the tag rather than the default checkout, and that is what makes
+  # tag-with-sha correct: on a workflow_call github.sha is this branch's head,
+  # not the tag, so resolving the short SHA from anything else would record a
+  # commit that was never built.
+  #
+  # packages: write has to be granted here — docker.yml declares no permissions
+  # of its own precisely so a caller can hand it more than read.
   publish:
-    strategy:
-      fail-fast: false
-      matrix:
-        image: [investagent, dashboard]
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout ${{ inputs.version }}
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ inputs.version }}
-
-      # The tag points at a commit, and that commit's short SHA is the tag the
-      # Makefile and Terraform already use — so resolve it here rather than
-      # using github.sha, which on a workflow_call is the branch head and would
-      # drift from the tag being published.
-      - name: Resolve the commit SHA
-        id: sha
-        run: echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
-
-      - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Two one-off things a package needs before this step can work, neither
-      # of which `packages: write` above can supply.
-      #
-      # GHCR defaults a new package to private regardless of repository
-      # visibility, and Container Apps pulls anonymously, so each package has
-      # to be flipped to public once. Pushing to an existing package keeps the
-      # setting.
-      #
-      # And GITHUB_TOKEN only has write access to a package that is *linked*
-      # to this repository. A package first pushed by hand (`make push`, a
-      # personal token) is user-scoped and unlinked, and this step then fails
-      # with `denied: permission_denied: write_package` — which reads like a
-      # missing permission rather than a missing link. The
-      # `org.opencontainers.image.source` label in both Dockerfiles is what
-      # establishes the link, but only from a push that is already permitted:
-      # for an already-unlinked package, either push once by hand with the
-      # label in place, or grant this repository Write under the package's
-      # "Manage Actions access".
-      - name: Build and push ${{ matrix.image }}
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
-        with:
-          context: apps/${{ matrix.image }}
-          platforms: linux/amd64
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${{ inputs.version }}
-            ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${{ steps.sha.outputs.short }}
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
-
-      - name: Summarise
-        run: |
-          {
-            echo "### ${{ matrix.image }}"
-            echo
-            echo '```'
-            echo "${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${{ inputs.version }}"
-            echo "${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${{ steps.sha.outputs.short }}"
-            echo '```'
-            echo
-            echo "Deploy with \`make deploy IMAGE_TAG=${{ inputs.version }}\`."
-          } >> "$GITHUB_STEP_SUMMARY"
+    permissions:
+      contents: read
+      packages: write
+    uses: jay-withers/workflows/.github/workflows/docker.yml@0a18e55d654e22fa54c4085547e4389896be6b7f # v1.4.0
+    with:
+      images: |
+        [{"name": "investagent", "context": "apps/investagent"},
+         {"name": "dashboard", "context": "apps/dashboard"}]
+      ref: ${{ inputs.version }}
+      push: true
+      tags: ${{ inputs.version }}
+      tag-with-sha: true
+      summary-note: Deploy with `make deploy IMAGE_TAG=${{ inputs.version }}`.

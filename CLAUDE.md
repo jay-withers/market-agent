@@ -823,6 +823,15 @@ run. It blocked a commit with a wall of JSON on nothing more than how the shell
 was started. The wrapper resolves the socket the same way that profile snippet
 does, then fails loudly if the daemon is still unreachable.
 
+**`actionlint` runs shellcheck over every `run:` block — but only if the
+shellcheck binary is on `PATH`, and silently skips it otherwise.** A dev
+container without shellcheck installed lints workflow shell not at all, so
+`make lint` passes and CI fails. It cost a round trip on a comment line that
+happened to wrap onto the word `shellcheck`: a comment opening `# shellcheck`
+is a *directive*, not prose, and the parse error (`SC1072: Expected '=' after
+directive key`) is reported against the whole `run:` block rather than the
+line. Install shellcheck before trusting a green local workflow lint.
+
 **`ruff-format`'s upstream hook includes `markdown` in its `types_or`**, so it
 reformats Python code blocks inside `.md` files — it rewrote the aligned
 comments in `docs/deployment-plan.md` on its first run. The hook is pinned to
@@ -1086,7 +1095,20 @@ rewrote the file; re-run and it passes.
 
 ## CI
 
-Workflows are prefixed `ci-` (pull-request checks) or `cd-` (post-merge delivery):
+Workflows are prefixed `ci-` (pull-request checks) or `cd-` (post-merge
+delivery). **Every one of them is a thin caller of a reusable workflow in
+[`jay-withers/workflows`](https://github.com/jay-withers/workflows)** — pinned
+by commit SHA with the tag as a comment, and holding only what is specific to
+this repo. A change to how a job *works* belongs in that repo so every
+consuming repo picks it up; only what is specific to market-agent stays here.
+
+The one deliberate exception is `ci-terraform`'s `plan` job, for the reason
+recorded under that entry.
+
+Because they are reusable-workflow calls, the status check contexts are
+namespaced `<caller job id> / <reusable job name>` rather than the bare job id
+— read them off `gh pr checks` rather than inferring them, and see
+"GitHub repo settings" for which ones branch protection requires.
 
 - **ci-pre-commit**: runs all linters on PRs to `main` via the `pre-commit` job,
   which calls the reusable workflow
@@ -1094,15 +1116,39 @@ Workflows are prefixed `ci-` (pull-request checks) or `cd-` (post-merge delivery
   commit SHA, with the tag as a comment). Because it's a reusable-workflow call,
   the status check context it reports is `pre-commit / Pre-commit`
   (`<caller job id> / <reusable job name>`), not the bare `pre-commit` job id.
-- **ci-terraform**: a `changes` job (dorny/paths-filter) gates a `validate` job
-  (`init -backend=false` + `validate`, no credentials) and a `plan` job (matrixed
-  over `environment: [dev, stg, prd]` via Azure OIDC). The plan job is
-  additionally gated on `if: vars.AZURE_CLIENT_ID != ''`, so it stays skipped
-  until the `AZURE_CLIENT_ID`/`AZURE_TENANT_ID`/`AZURE_SUBSCRIPTION_ID`
-  repository variables are set — all three matrix legs currently share one
-  subscription. The `ci-terraform` gate job always runs and is the check to
-  require in branch protection; path filtering is at the job level (not the
-  workflow trigger) precisely so the required check always reports.
+- **ci-terraform**: **the one workflow that is only half shared**, and the split
+  is the thing to understand. `validate` (`init -backend=false` + `validate`, no
+  credentials) comes from the shared `terraform.yml`, which reports
+  `terraform / Terraform`. The `plan` job stays in this repo.
+
+  That shared workflow **deliberately runs no plan job**, and the reason is
+  about the other repos that call it: in `azure-landingzone` and
+  `terraform-root-aks` the root modules resolve each other with data sources, so
+  a plan against a not-yet-applied dependency fails at plan time and reports a
+  CI failure for something that is not a defect. This configuration is a single
+  self-contained root module and plans cleanly, so the plan lives here rather
+  than pushing an exception into a workflow four repos share. Don't "finish the
+  migration" by moving it.
+
+  Two consequences of that split:
+
+  - **The plan job reuses the shared workflow's path filter** via its `changed`
+    output, rather than declaring a second `dorny/paths-filter` here that would
+    drift from it. The cost is ordering: `needs:` waits for the whole called
+    workflow, so `plan` starts after `validate` finishes instead of beside it.
+    It is not `always()` — if `validate` failed, `init` fails here for the same
+    reason and three legs of runner time buy nothing the required check has not
+    already reported.
+  - **`plan` needs its own always-reporting gate**, the `terraform-plan` job,
+    because `terraform / Terraform` only covers what runs *inside* the shared
+    workflow. Skipped counts as success there, so a PR touching no Terraform is
+    not blocked.
+
+  `plan` is matrixed over `environment: [dev, stg, prd]` via Azure OIDC and
+  additionally gated on `if: vars.AZURE_CLIENT_ID != ''`. That variable is
+  **not set today**, so the plan legs have never actually run — they stay
+  skipped until `AZURE_CLIENT_ID`/`AZURE_TENANT_ID`/`AZURE_SUBSCRIPTION_ID` are
+  set, and all three legs then share one subscription.
 - **ci-python**: runs `pytest` on every PR, by calling the reusable
   `jay-withers/workflows/.github/workflows/python.yml` (pinned by commit SHA
   with the tag as a comment, like `ci-pre-commit`). Nothing in CI ran the suite
@@ -1157,20 +1203,37 @@ Workflows are prefixed `ci-` (pull-request checks) or `cd-` (post-merge delivery
   Coverage that nothing enforces has to be visible instead, which is the whole
   reason it is surfaced twice rather than left in the log.
 - **ci-container-build**: builds `apps/investagent` and `apps/dashboard` on PRs
-  touching `apps/**`, without pushing. The runner is natively amd64, which is
+  touching `apps/**`, without pushing, by calling the shared `docker.yml` with
+  `push` left at its default of false. The runner is natively amd64, which is
   what Container Apps runs, so this also proves the target architecture builds —
   a local `make build` on Apple Silicon reaches amd64 only through QEMU. Nothing
   else in CI touches these images, so before this a broken Dockerfile surfaced
   only when someone next built by hand.
+
+  **It and cd-publish call the same shared workflow, and that is the point.**
+  As two hand-written workflows they were 90% the same file and could drift on
+  build context, platform or cache scope — at which point a green pull request
+  proves less about the release than it looks like it does. Now the only
+  difference between them is `push` and the tags.
 - **cd-tag**: auto-creates a semver tag on every merge to `main` (default bump:
   patch).
-- **cd-publish**: reusable (`workflow_call`) and manual (`workflow_dispatch`).
-  Builds both images for linux/amd64 and pushes each under two immutable tags —
-  the release `vX.Y.Z` and the commit's short SHA, which is what `IMAGE_TAG` and
-  the `agent_runs` rows already use. Neither tag is ever moved: Container Apps
+- **cd-publish**: reusable (`workflow_call`) and manual (`workflow_dispatch`),
+  delegating the build to the shared `docker.yml`. It stays a workflow of its
+  own rather than folding into cd-tag because `workflow_dispatch` is the
+  documented way to re-publish an existing tag after a failed build, without
+  minting a new version. Both images are pushed under two immutable tags — the
+  release `vX.Y.Z` and the commit's short SHA, which is what `IMAGE_TAG` and the
+  `agent_runs` rows already use. Neither tag is ever moved: Container Apps
   creates a revision only when the template changes, so a re-pushed moving tag
   would deploy nothing and report success. Only amd64 is built because Container
   Apps runs nothing else.
+
+  **`ref` is the tag, and that is what makes the SHA tag correct.** On a
+  `workflow_call` `github.sha` is the calling branch's head rather than the tag,
+  so resolving the short SHA from anything but the checkout would record a
+  commit that was never built. The shared workflow's `ref`/`tag-with-sha` pair
+  is that, and it is why `cd-tag` → `cd-publish` → `docker.yml` nests three
+  deep (GitHub allows four).
 
 ## Renovate
 
@@ -1194,20 +1257,53 @@ here. This repo is managed centrally by
 Terraform root module, which is the single source of truth for every jay-withers
 repo.
 
-The required status checks are **`pre-commit / Pre-commit`**, **`test / Test`**
-and **`ci-terraform`** — set in that repo's `terraform/terraform.tfvars`, where
-this entry sat at `required_status_checks = []` for as long as the CI existed,
-so nothing could actually block a merge. Two rules decide what belongs on that
-list:
+The required status checks are **`pre-commit / Pre-commit`**, **`test / Test`**,
+**`terraform / Terraform`** and **`terraform-plan`** — set in that repo's
+`terraform/terraform.tfvars`, where this entry sat at
+`required_status_checks = []` for as long as the CI existed, so nothing could
+actually block a merge. Two rules decide what belongs on that list:
 
 - **A reusable-workflow call reports as `<caller job id> / <reusable job
-  name>`**, not the bare job id. Hence `test / Test` rather than `test`. Read
-  the context off `gh pr checks` rather than inferring it from the workflow.
+  name>`**, not the bare job id. Hence `test / Test` rather than `test`, and
+  `terraform / Terraform` rather than `terraform`. Read the context off
+  `gh pr checks` rather than inferring it from the workflow.
 - **Only require a check that always reports.** `ci-container-build` is
   filtered on its *trigger* (`paths: apps/**`), so a Terraform-only PR never
   runs it — requiring `build (investagent)` would leave every such PR pending
-  for ever rather than failing it. `ci-terraform` is safe for the opposite
-  reason: its filtering is at the job level, so its gate job always reports.
+  for ever rather than failing it. The two Terraform checks are safe for the
+  opposite reason: the shared workflow filters at the job level so its gate
+  always reports, and `terraform-plan` is `if: always()` and treats skipped as
+  success.
+
+**Why Terraform takes two contexts rather than one.** `terraform / Terraform`
+is the shared workflow's gate and can only see the jobs inside it; `plan` lives
+in this repo (see the ci-terraform entry for why), so it needs a gate of its
+own or a failed plan could not block a merge. Dropping either one silently
+stops guarding half of the Terraform CI.
+
+**None of this is actually enforced yet, and that is worth knowing before
+relying on it.** The list above is what `github-repos`' tfvars *says*; the live
+ruleset on this repo is `required_status_checks = []`. `github-repos` plans in
+CI but applies by hand, and the apply has never been run, so a merge here is
+gated on nothing at all today. Read the live state with:
+
+```bash
+gh api repos/jay-withers/market-agent/rulesets --jq '.[].id' \
+  | xargs -I{} gh api repos/jay-withers/market-agent/rulesets/{} \
+    --jq '[.rules[]|select(.type=="required_status_checks")|.parameters.required_status_checks[].context]'
+```
+
+**The hazard is the apply, not the rename.** Applying a list that names a
+context nothing reports leaves every PR *pending* rather than failing it —
+which is precisely what has happened to `github-repos` itself: its live ruleset
+still requires `ci-terraform`, its CI now reports `terraform / Terraform`, and
+its own pull requests are blocked as a result. Its tfvars is already correct;
+only the apply is missing. So check the contexts in tfvars against
+`gh pr checks` output *before* applying, not after.
+
+Because `make apply` there reads local tfvars against remote state, it can be
+run from a checkout of the branch rather than after a merge — which is how a
+stale required check gets unstuck without an admin bypass.
 
 Note that the ruleset sets `strict_required_status_checks_policy = true`, so a
 PR must be up to date with `main` before it can merge. And `github-repos` plans

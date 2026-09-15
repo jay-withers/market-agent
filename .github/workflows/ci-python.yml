@@ -40,7 +40,7 @@ jobs:
     # The reusable workflow runs unfiltered by path, which is deliberate: the
     # suite takes seconds, and a required check skipped by a path filter never
     # reports, blocking a pull request rather than passing it.
-    uses: jay-withers/workflows/.github/workflows/python.yml@49b6e82a5cc38ea03b0637e1e0775efa086000b2 # v1.3.0
+    uses: jay-withers/workflows/.github/workflows/python.yml@0a18e55d654e22fa54c4085547e4389896be6b7f # v1.4.0
     with:
       working-directory: apps/investagent
       python-version: "3.14"
