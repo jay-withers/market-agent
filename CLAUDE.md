@@ -83,10 +83,11 @@ Two repo-specific conventions on top of that, both requested explicitly:
 
 Resource group, user-assigned managed identity, Log Analytics workspace,
 Application Insights (workspace-based), Key Vault (RBAC), Container Apps
-environment (Consumption-only), two container apps (`api`, `dashboard`), two
-scheduled container app jobs (`agent`, `daily-summary`, `weekly-review`), and a
-PostgreSQL
-Flexible Server plus database. Names come from `Azure/naming/azurerm`.
+environment (Consumption-only), two container apps (`api`, `dashboard`), three
+scheduled container app jobs (`agent`, `daily-summary`, `weekly-review`), a
+PostgreSQL Flexible Server plus database, and the alerting in `main.alerts.tf`
+(action group, five metric alerts, one log alert, a budget, two diagnostic
+settings). Names come from `Azure/naming/azurerm`.
 
 ### The cost constraint drives most of the design
 
@@ -829,6 +830,88 @@ comments in `docs/deployment-plan.md` on its first run. The hook is pinned to
 drop the override. Ruff's own config lives in `apps/investagent/pyproject.toml`
 and is found by walking up from each file, so nothing points at it from the
 pre-commit config.
+
+## Monitoring and alerting
+
+Two layers, and the split matters: the email reports what the application knows
+about itself, and the Azure alerts cover what it cannot know because it was
+never alive to find out.
+
+**The daily email states whether the agent ran, before anything it did.** This
+is the gap the whole `_run_section`/`_run_alert` pair exists to close:
+`No trades were made.` is the same sentence on a day the model held everything
+and on a day the 06:00 job died, and the trades, decisions and holdings sections
+are silent in exactly the same way, so nothing further down the email can tell
+the two apart. `day_activity` therefore returns `runs` alongside the rest, and
+the section renders before the trades table.
+
+- **A bad run also reaches the subject line** — `no agent run`, `agent run
+  failed` or `agent run abandoned`. The subject is built from stored figures and
+  never by the model, which is exactly why it is the right place for this: a day
+  the agent died still values the portfolio and would otherwise look completely
+  ordinary in an inbox.
+- **The worst outcome of the day wins**, not the last: a manual retry that
+  succeeded does not erase the scheduled run that did not. There is a test.
+- `JOB_TIMEOUT_SECONDS` moved from `queries.py` to `repository.py` because both
+  the API's run list and the summary now need the same line between a run in
+  progress and one killed hard enough never to close its own row (SIGKILL cannot
+  be caught). A run past it reads as `abandoned`, never `running`.
+- The narrative system prompt tells the model to lead with a failed run and not
+  to reason about why it held positions on a day it never ran. `PROMPT_VERSION`
+  went to `v3` for that change.
+
+**`Executions` is a gauge sampled per minute, not a counter.** This is the trap
+in `locals.alerts.tf` and it was verified against a real run rather than assumed:
+the metric reports how many executions are in each state *right now*, so at a
+5-minute grain the 06:00 agent job reported `Total` 16 for `Running` and 11 for
+`Succeeded` — minutes times executions, which means nothing. The alerts use
+`Maximum` over a 15-minute window with a threshold of `0`, which asks "was an
+execution in this state at all". A rule written against `Total` would fire
+constantly on success.
+
+**Alerts reach subscription Owners by role, not by address.** An
+`arm_role_receiver` needs no address in config or state, which is what makes it
+usable here — this repository is public and `terraform/environments/*.tfvars`
+are committed, the same constraint that put the summary recipient in Key Vault.
+Key Vault is *not* an option for this: a `data` source on the vault would fail
+the stg and prd plan legs in CI, which plan against resource groups that do not
+exist. `TF_VAR_alert_email_address` adds a specific address on top.
+
+**All five metric alerts are one `for_each` resource over `local.metric_alerts`.**
+They differ only in what they watch, so the name shape, action group and tags are
+written once in `main.alerts.tf` and every rule's settings — and the reason for
+each threshold — live beside each other in `locals.alerts.tf`. A sixth rule is an
+entry in that map, not another block to keep in step. The `dimension` key is
+`null` on the rules that filter nothing and a `dynamic` block turns a non-null one
+into a criteria dimension: an empty `dimension` block is not the same as no block
+and would match no time series. The budget's two `notification` blocks are left
+literal on purpose — two is not repetition, and a `dynamic` block over a
+two-element list reads worse than what it replaces.
+
+Other decisions worth not re-litigating:
+
+- **No availability tests.** A synthetic ping keeps a `min_replicas = 0` app
+  permanently warm, which costs more than the outage it would detect.
+- **No diagnostic setting on the Container Apps environment.** It already ships
+  console and system logs to the workspace via `log_analytics_workspace_id`;
+  adding one ingests every line a second time against a 0.15 GB/day cap.
+- **No `AllMetrics` anywhere.** Metrics are already in the platform metric
+  store, free to query and free to alert on. Routing them into Log Analytics
+  pays to store a second copy of what the metric alerts read for nothing.
+- **Postgres logs are `PostgreSQLLogs` only.** The query-store and session
+  categories are per-statement and per-session emissions — the one log shape
+  that could actually reach the cap on a database this small.
+- **The log quota alert is the expensive one**, because reaching
+  `daily_quota_gb` stops ingestion for the rest of the day and nothing in the
+  metric store reports it. Evaluated hourly for that reason. Measured ingestion
+  is ~0.0005 GB/day against a 0.15 cap, so it is watching for a runaway — a
+  crash-looping replica — not for growth. `local.log_daily_quota_gb` feeds both
+  the workspace and the threshold so they cannot drift.
+- **The budget notifies, it does not stop anything.** Azure budgets never do.
+  `budget_start_date` is under `ignore_changes` because Azure refuses a start
+  date in a past month on create but reports the stored one thereafter, so
+  leaving it tracked would make the first apply of each new month a spurious
+  replacement.
 
 ## Commands
 

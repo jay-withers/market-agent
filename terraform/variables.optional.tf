@@ -119,3 +119,40 @@ variable "weekly_review_cron_expression" {
   type        = string
   default     = "0 22 * * 0"
 }
+
+variable "alert_email_address" {
+  description = "Address added to the alert action group as an email receiver, alongside the ARM role receiver that reaches whoever holds `Owner` on the subscription. Committed deliberately: this repository is public, so the default is permanent in its history — an address is an identifier rather than a credential, the same reasoning that puts a named human's object ID and UPN in `main.database.tf`. Set it empty to send to the Owner role alone, or override with `TF_VAR_alert_email_address` to keep a different address out of git. Unlike this, the *summary* recipient stays in Key Vault: it is changed without a redeploy and is read at runtime."
+  type        = string
+  default     = "withersj888@outlook.com"
+
+  validation {
+    # Printable ASCII either side of the `@`, matching the check
+    # `Set-KeyVaultSecrets.ps1` applies to the summary recipient. A curly quote
+    # pasted from somewhere that autocorrects is invisible in most output and
+    # has already cost this project one day's summary.
+    condition     = var.alert_email_address == "" || can(regex("^[!-?A-~]+@[!-?A-~]+\\.[!-?A-~]+$", var.alert_email_address))
+    error_message = "alert_email_address must be empty or a plain-ASCII email address."
+  }
+}
+
+variable "monthly_budget_amount" {
+  description = "Monthly Azure spend, in the subscription's billing currency, above which the budget notifies. The deployment bills roughly 13/month, effectively all of it the PostgreSQL server; the default leaves room for a month of experimentation without alerting on normal operation. This governs notifications only — Azure budgets never stop anything spending."
+  type        = number
+  default     = 25
+
+  validation {
+    condition     = var.monthly_budget_amount > 0
+    error_message = "monthly_budget_amount must be greater than zero."
+  }
+}
+
+variable "budget_start_date" {
+  description = "First day of the budget's first period, which Azure requires to be the first of a month. Ignored after creation — see the `lifecycle` block in `main.alerts.tf` — so it only matters on a fresh apply, and a date in an already-past month is rejected on create."
+  type        = string
+  default     = "2026-09-01T00:00:00Z"
+
+  validation {
+    condition     = can(regex("^\\d{4}-\\d{2}-01T00:00:00Z$", var.budget_start_date))
+    error_message = "budget_start_date must be the first of a month, as YYYY-MM-01T00:00:00Z."
+  }
+}

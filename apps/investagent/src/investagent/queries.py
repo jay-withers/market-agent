@@ -19,6 +19,8 @@ from typing import Any
 
 from psycopg.rows import dict_row
 
+from .repository import JOB_TIMEOUT_SECONDS
+
 DEFAULT_PORTFOLIO = "default"
 
 
@@ -215,12 +217,6 @@ def trades(conn: Any, limit: int = 50) -> list[dict[str, Any]]:
         " FROM trades ORDER BY created_at DESC LIMIT %s",
         (limit,),
     )
-
-
-# Matches `replica_timeout_in_seconds` on the container app jobs. A run still
-# `running` past it cannot be alive: Container Apps has already terminated the
-# replica.
-JOB_TIMEOUT_SECONDS = 1800
 
 
 def runs(conn: Any, limit: int = 30) -> list[dict[str, Any]]:

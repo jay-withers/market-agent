@@ -26,7 +26,13 @@ both deployed and running — see [The application](#the-application) and
 | Container app `dashboard` | React dashboard on nginx, scales to zero |
 | Container app job `agent` | Scheduled: news → analysis → risk engine → simulated trade |
 | Container app job `daily-summary` | Scheduled: performance, benchmarks, email |
+| Container app job `weekly-review` | Scheduled Sunday: reviews the week, proposes changes |
 | PostgreSQL Flexible Server + database | Burstable B1ms, Entra-only authentication. The one resource that bills while idle |
+| Action group | Where alerts go — subscription Owners, by role rather than by address |
+| Metric alerts (5) | A failed execution of each job; the database down or near full |
+| Log alert | Log ingestion approaching the daily cap, past which logging stops |
+| Budget | Monthly Azure spend, notifying at 80% actual and 100% forecast |
+| Diagnostic settings (2) | PostgreSQL server logs and Key Vault audit events |
 
 Two departures from the original design:
 
@@ -166,6 +172,54 @@ called, and no response carries a secret, any PII, or real money. A shared
 bearer sits behind `API_REQUIRE_TOKEN` for when that changes; the proper fix is
 Container Apps EasyAuth with Entra, which `azurerm` does not expose.
 
+## Monitoring
+
+Nothing here watches continuously, because nothing here runs continuously. The
+apps scale to zero and the jobs run for four minutes a day, so every signal has
+to come from something that costs nothing while idle.
+
+**The daily email is the primary channel**, and it reports whether the agent ran
+before it reports anything the agent did. This matters more than it sounds:
+`No trades were made.` is the same sentence on a day the model held every
+position and on a day the 06:00 job died, and the trades, decisions and holdings
+sections are all silent in exactly the same way. An `Agent run` table states the
+day's runs, their status and any error; a failed, abandoned or absent run also
+lands in the **subject line**, which is the part that reaches a phone's lock
+screen. The subject is built from stored figures and never by the model, which is
+precisely why it can be trusted to carry the warning.
+
+**Azure alerts cover what the application cannot report about itself.** A replica
+killed before it opens its `agent_runs` row leaves no evidence at all, and a job
+that cannot reach the database may never get far enough to write down why:
+
+| Alert | Fires when | Severity |
+| --- | --- | --- |
+| `*-agent-failed`, `*-summary-failed`, `*-weekly-failed` | A job execution reports `Failed` | 1 |
+| `*-db-down` | The server stops reporting itself alive | 0 |
+| `*-db-storage` | Storage passes 80% of a figure that can never be reduced | 2 |
+| `msqa-*` | Log ingestion approaches the daily cap, past which logging stops | 2 |
+
+They reach whoever holds **Owner** on the subscription, via an ARM role receiver
+rather than an address — this repository is public and the tfvars files are
+committed, the same reason the summary recipient lives in Key Vault. Set
+`TF_VAR_alert_email_address` to add a specific address as well.
+
+Two things worth knowing before changing any of it:
+
+- **`Executions` is a gauge sampled per minute, not a counter.** It reports how
+  many executions are in each state right now, so `Total` is
+  minutes-times-executions and means nothing — verified against a real run,
+  where the 06:00 agent job reported a 5-minute `Total` of 16 for `Running` and
+  11 for `Succeeded`. The alerts use `Maximum` over a short window, which is why
+  the threshold is `0`.
+- **There are no availability tests**, deliberately. A synthetic ping every five
+  minutes would keep a `min_replicas = 0` app permanently warm, which costs more
+  than the outage it detects.
+
+`agent_runs` remains the ledger underneath all of this — every execution with its
+cost, tokens, image tag and error — and the dashboard shows a run still `running`
+past the job timeout as abandoned.
+
 ## Getting started
 
 Open the repository in the dev container (VS Code: **Reopen in Container**, or
@@ -238,6 +292,7 @@ and that is not a configuration mistake — see below.
 | Key Vault | Effectively £0 — priced per operation |
 | Log Analytics / App Insights | £0 up to the 5 GB/month free grant, which `daily_quota_gb = 0.15` keeps ingestion inside |
 | Managed identity, resource group | Free |
+| Alert rules | A few pence a month each; they read the platform metric store and need no agent or synthetic traffic |
 | PostgreSQL Flexible Server | **~£13/month, always** — ~£9.71 B1ms compute plus ~£3 storage |
 
 ### Why the database bills while idle
@@ -496,6 +551,9 @@ sql/                            # numbered, idempotent, applied by the runner
   002-trade-submission-fields.sql
   003-seed-watchlist.sql
   004-benchmark-companies.sql
+  005-weekly-reviews.sql
+  006-decision-context.sql
+  007-job-costs.sql
   grant-uai-access.sql          # Azure-only: pgaadauth lives in `postgres`
 docker/Dockerfile.db            # local Postgres with the schema baked in
 docker-compose.yml
@@ -503,12 +561,14 @@ docker-compose.yml
 terraform/
   main.tf                       # resource group
   main.identity.tf              # user-assigned managed identity
-  main.observability.tf         # Log Analytics + Application Insights
+  main.observability.tf         # Log Analytics, App Insights, diagnostic settings
+  main.alerts.tf                # action group, alert rules, budget
+                                #   (what each rule watches: locals.alerts.tf)
   main.key-vault.tf             # vault and RBAC (never the secret values)
   main.database.tf              # PostgreSQL Flexible Server + database
   main.container-apps-env.tf    # Container Apps environment
   main.container-apps.tf        # api and dashboard
-  main.container-apps-jobs.tf   # agent and daily-summary jobs
+  main.container-apps-jobs.tf   # agent, daily-summary and weekly-review jobs
   locals*.tf  variables*.tf  outputs.tf  data.tf  versions.tf
   README.md                     # generated by terraform-docs
   .tflint.hcl  .terraform-docs.yml
@@ -545,9 +605,6 @@ is not construction:
   — the API is read-only and no response carries a secret, PII or real money.
   The proper fix is Container Apps EasyAuth with Entra, which `azurerm` does
   not expose and which would need `azapi`.
-- **Monitoring alerts.** There are none. `agent_runs` records every execution
-  with its cost and error, and the dashboard shows a run abandoned past the job
-  timeout, but nothing tells you a run failed unless you look.
 - **Cheaper filtering, if it ever matters.** One filter call per
   article/ticker pair is about 110 calls a run. Batching would cut that to
   roughly six, but at the measured £4/month it is a latency argument rather

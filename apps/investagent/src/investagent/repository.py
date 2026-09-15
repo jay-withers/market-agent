@@ -271,6 +271,14 @@ def save_news_analysis(conn: Any, rows: list[dict[str, Any]]) -> int:
 # ---------------------------------------------------------------------------
 
 
+# Matches `replica_timeout_in_seconds` on the container app jobs. A run still
+# `running` past it cannot be alive: Container Apps has already terminated the
+# replica. Owned here rather than in `queries.py` because both the API's run
+# list and the daily summary have to draw the same line between a run in
+# progress and one that was killed hard enough never to close its own row.
+JOB_TIMEOUT_SECONDS = 1800
+
+
 def open_run(conn: Any, trigger: str, dry_run: bool, image_tag: str | None) -> int:
     """Open an `agent_runs` row before any work, so a crash leaves evidence."""
     row = conn.execute(
@@ -637,7 +645,21 @@ def save_benchmarks(conn: Any, points: list[Any]) -> int:
 
 
 def day_activity(conn: Any, pid: int, as_of: date) -> dict[str, Any]:
-    """What happened on `as_of`, as the narrative's raw material."""
+    """What happened on `as_of`, as the narrative's raw material.
+
+    `runs` is here because "no trades" and "the agent never ran" produce an
+    identical trades list, and the summary is the only thing that reaches a
+    human unprompted. Without it the email reports a quiet day on a day the
+    06:00 job died — see `_run_section`.
+    """
+    runs = conn.execute(
+        "SELECT started_at, finished_at, status, trigger, dry_run, error,"
+        "       (status = 'running'"
+        "        AND started_at < now() - make_interval(secs => %s)) AS stale"
+        " FROM agent_runs WHERE started_at::date = %s ORDER BY started_at",
+        (JOB_TIMEOUT_SECONDS, as_of),
+    ).fetchall()
+
     decisions = conn.execute(
         "SELECT ticker, action, confidence, approved_amount_gbp, reasoning,"
         "       risk_verdict->>'binding_constraint'"
@@ -661,7 +683,7 @@ def day_activity(conn: Any, pid: int, as_of: date) -> dict[str, Any]:
         (pid,),
     ).fetchall()
 
-    return {"decisions": decisions, "trades": trades, "holdings": holdings}
+    return {"runs": runs, "decisions": decisions, "trades": trades, "holdings": holdings}
 
 
 def save_summary(
