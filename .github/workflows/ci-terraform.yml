@@ -1,5 +1,18 @@
 name: ci-terraform
 
+# Terraform CI. `validate` comes from the shared workflow; `plan` stays here.
+#
+# The split is not arbitrary. jay-withers/workflows' terraform.yml deliberately
+# runs no plan job, and that decision holds for the repos it was written for:
+# in azure-landingzone and terraform-root-aks the root modules resolve each
+# other with data sources, so a plan against a not-yet-applied dependency fails
+# at plan time and reports a CI failure for something that is not a defect.
+# This configuration is a single self-contained root module and plans cleanly,
+# so the plan lives here rather than pushing an exception into a workflow four
+# repos share.
+#
+# Note stg and prd are planned but deliberately never applied — see
+# "Environments" in the README.
 on:
   pull_request:
     branches: [main]
@@ -8,70 +21,32 @@ permissions:
   contents: read
 
 jobs:
-  # Detects whether this PR touches Terraform. Path filtering lives here (not on
-  # the workflow trigger) so the workflow always runs and the required check
-  # below always reports — a workflow skipped by a top-level paths filter would
-  # leave a required check pending forever and block the merge.
-  changes:
-    runs-on: ubuntu-24.04
+  # Credential-free init and validate. pull-requests: read is what the shared
+  # workflow's own path filter needs; it runs inside that workflow, so the
+  # permission has to be granted from here.
+  terraform:
     permissions:
+      contents: read
       pull-requests: read
-    outputs:
-      terraform: ${{ steps.filter.outputs.terraform }}
-    steps:
-      - name: Detect Terraform changes
-        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
-        id: filter
-        with:
-          filters: |
-            terraform:
-              - 'terraform/**'
-              - '.terraform-version'
-              - '.github/workflows/ci-terraform.yml'
-
-  # Validates the configuration. Initialises without the state backend, so this
-  # needs no Azure credentials and stays green before Azure auth is wired up —
-  # unlike the plan job below, this always runs on a Terraform change.
-  validate:
-    needs: changes
-    if: needs.changes.outputs.terraform == 'true'
-    runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: terraform
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Resolve Terraform version
-        id: tfversion
-        run: echo "version=$(cat "$GITHUB_WORKSPACE/.terraform-version")" >> "$GITHUB_OUTPUT"
-
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
-        with:
-          terraform_version: ${{ steps.tfversion.outputs.version }}
-          terraform_wrapper: false
-
-      # The azurerm backend is configured partially (terraform/backends/), so a
-      # plain init would prompt for the missing values and fail under -input=false.
-      - name: Terraform init
-        run: terraform init -input=false -backend=false
-
-      - name: Terraform validate
-        run: terraform validate -no-color
+    uses: jay-withers/workflows/.github/workflows/terraform.yml@0a18e55d654e22fa54c4085547e4389896be6b7f # v1.4.0
 
   # Plans against Azure using GitHub OIDC, once per environment. Skipped until
   # the AZURE_CLIENT_ID repository variable is set (see README), so the check
-  # does not fail before Azure auth is configured. All three environments
-  # currently share one Azure subscription (ARM_SUBSCRIPTION_ID) — split
-  # per-environment credentials here if that changes.
+  # does not fail before Azure auth is configured — it is unset today, so these
+  # legs do not currently run. All three environments share one Azure
+  # subscription (ARM_SUBSCRIPTION_ID); split per-environment credentials here
+  # if that changes.
   #
-  # Note stg and prd are planned but deliberately never applied — see
-  # "Environments" in the README.
+  # The `changed` output reuses the shared workflow's path filter rather than
+  # declaring a second dorny/paths-filter here that would drift from it. The
+  # cost is ordering: `needs` waits for the whole called workflow, so this
+  # starts after validate rather than beside it. Deliberately not always(): if
+  # validate failed, init would fail here for the same reason and three legs of
+  # runner time would buy no information the required check has not already
+  # reported.
   plan:
-    needs: changes
-    if: needs.changes.outputs.terraform == 'true' && vars.AZURE_CLIENT_ID != ''
+    needs: terraform
+    if: needs.terraform.outputs.changed == 'true' && vars.AZURE_CLIENT_ID != ''
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -108,22 +83,25 @@ jobs:
       - name: Terraform plan
         run: terraform plan -input=false -no-color -var-file=environments/${{ matrix.environment }}.tfvars
 
-  # Single required status check for branch protection. Always runs, and fails
-  # only if validate or plan actually failed — skipped (no Terraform changes, or
-  # Azure auth not configured) counts as success, so non-Terraform PRs are not
-  # blocked. Mark this check ("ci-terraform") required in the ruleset.
-  ci-terraform:
-    needs: [validate, plan]
+  # Required status check for the plan job. The shared workflow's own gate
+  # ("terraform / Terraform") covers only what runs inside it, so plan needs an
+  # always-reporting job of its own or a failed plan could not block a merge.
+  #
+  # Skipped counts as success: a pull request touching no Terraform, and every
+  # pull request until AZURE_CLIENT_ID is set, must pass rather than hang. Mark
+  # this check ("terraform-plan") required in the ruleset alongside
+  # "terraform / Terraform".
+  terraform-plan:
+    needs: plan
     if: always()
     runs-on: ubuntu-24.04
     steps:
-      - name: Verify Terraform jobs
+      - name: Verify the plan job
         env:
-          VALIDATE_RESULT: ${{ needs.validate.result }}
           PLAN_RESULT: ${{ needs.plan.result }}
         run: |
-          echo "validate=$VALIDATE_RESULT plan=$PLAN_RESULT"
-          if [ "$VALIDATE_RESULT" = "failure" ] || [ "$PLAN_RESULT" = "failure" ]; then
-            echo "::error::A Terraform job failed."
+          echo "plan=$PLAN_RESULT"
+          if [ "$PLAN_RESULT" = "failure" ]; then
+            echo "::error::A Terraform plan leg failed."
             exit 1
           fi

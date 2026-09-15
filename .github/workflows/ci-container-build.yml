@@ -11,6 +11,12 @@ name: ci-container-build
 # native. A local `make build` on Apple Silicon has to emulate amd64 through
 # QEMU, which is both slow and a different code path — CI proving the image
 # builds on the target architecture is the point, not a side effect.
+#
+# The mechanics live in jay-withers/workflows' docker.yml, which cd-publish
+# also calls. That shared call is what keeps this honest: when the two were
+# separate hand-written workflows they could drift on context, platform or
+# cache scope, and a green pull request would then prove less about the release
+# than it looked like it did. Here the only difference is `push`.
 on:
   pull_request:
     branches: [main]
@@ -22,29 +28,14 @@ permissions:
   contents: read
 
 jobs:
+  # push is left at its default of false: a pull request must never publish an
+  # image, and a fork's GITHUB_TOKEN could not push anyway. The cache is shared
+  # with cd-publish by image name, so a merge usually reuses the PR's layers.
   build:
-    strategy:
-      # Both images are reported, rather than the first failure hiding whether
-      # the other one is also broken.
-      fail-fast: false
-      matrix:
-        image: [investagent, dashboard]
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
-
-      # push is false: a pull request must never publish an image, and the
-      # GITHUB_TOKEN on a fork PR could not push anyway. The cache is shared
-      # with cd-publish by scope, so a merge usually reuses the PR's layers.
-      - name: Build ${{ matrix.image }} for linux/amd64
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
-        with:
-          context: apps/${{ matrix.image }}
-          platforms: linux/amd64
-          push: false
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+    permissions:
+      contents: read
+    uses: jay-withers/workflows/.github/workflows/docker.yml@0a18e55d654e22fa54c4085547e4389896be6b7f # v1.4.0
+    with:
+      images: |
+        [{"name": "investagent", "context": "apps/investagent"},
+         {"name": "dashboard", "context": "apps/dashboard"}]
