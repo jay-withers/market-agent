@@ -884,6 +884,45 @@ pull, long after plan and apply both reported success.
 that is what the agent records on its `agent_runs` row and it has to name the
 image the code writing the row is running. The dashboard never reads it.
 
+### Testing the SQL
+
+`repository.py` and `queries.py` are hand-written SQL, and until
+`tests/test_repository.py` and `tests/test_queries.py` existed nothing executed
+any of it: the first run of a statement was the deployed job at 06:00 UTC.
+Both modules sat near 30%; they are now at 97% and 98%.
+
+- **A real Postgres, not a mocked connection.** The failures worth catching are
+  the ones only the server can raise — a column that does not exist, a foreign
+  key to a company nobody seeded, a CHECK constraint refusing a status string,
+  an `ON CONFLICT` naming the wrong index. A psycopg double accepts all four.
+  Writing these caught exactly that class of thing in the *tests* themselves:
+  `agent_runs.status` rejects `success` (the code correctly writes `succeeded`).
+- **`POSTGRES_TEST_DSN` gates them, and its absence skips rather than fails.**
+  `make test` therefore still works on a clone with no Docker — 299 pass and 68
+  skip — and `make test-db` runs the lot. Deliberately not `DATABASE_URL`: a
+  developer with that pointing somewhere real would have the fixtures create
+  and drop databases on it, which they do.
+- **The fixtures apply `sql/0*.sql` to a scratch database** created and dropped
+  per session, so a run never touches rows a developer was looking at. Lines
+  starting with `\` are stripped first — each migration ends with `\echo`
+  progress lines that the server cannot parse — which is what keeps the harness
+  free of a `psql` on PATH, worth having since psql has gone missing across a
+  dev container rebuild before.
+- **Isolation is per-test rollback on one session connection**, not a rebuilt
+  schema: no function in `repository.py` commits, since the caller owns the
+  transaction — that is what lets the agent put a decision and its trade in one
+  — so discarding the transaction discards the test. The whole database suite
+  runs in well under a second.
+- In CI the server comes from the shared workflow's `postgres` input, which
+  starts one with `docker run` and exports `POSTGRES_TEST_DSN`. It is `docker
+  run` rather than a `services:` block because a service cannot be made
+  conditional — an empty image is a workflow error — so a `services:` block
+  would impose Postgres on every repo calling that workflow.
+
+`jobs/agent.py` is the largest remaining gap at 32%: the loop itself, which
+needs the same database plus injected `llm` and `broker`. The pieces are now in
+place for it.
+
 `make test` runs the Python suite. There are no *Terraform* tests — those were
 removed at the user's request — and `make validate` is the credential-free
 Terraform check.
@@ -1022,7 +1061,7 @@ Workflows are prefixed `ci-` (pull-request checks) or `cd-` (post-merge delivery
   workflow declares no permissions of its own. It did at first, and the comment
   would have 403'd on every run.
 
-  There is no `--cov-fail-under` on purpose, because the figure is bimodal
+  There is no `--cov-fail-under` on purpose, because the figure was bimodal
   rather than uniform: the pure modules are at 100% (`risk.py`,
   `models.py`, `benchmarks.py`, `fx.py`, `mailer.py`, `risklimits.py`) and
   everything behind a psycopg connection is far lower — `repository.py` at 27%,
@@ -1030,18 +1069,10 @@ Workflows are prefixed `ci-` (pull-request checks) or `cd-` (post-merge delivery
   `jobs/agent.py`'s loop at 32%. That is not neglect; CI has no database, so
   that SQL has nothing to run against. A threshold over the mixture would be
   met by mocking the connection and the Entra token path, which asserts the
-  mock rather than the behaviour. **74% overall at 299 tests** is the figure to
+  mock rather than the behaviour. **83% overall at 367 tests** is the figure to
   compare against; treat a drop as something to read, not as a build failure.
   Coverage that nothing enforces has to be visible instead, which is the whole
   reason it is surfaced twice rather than left in the log.
-
-  Closing the real gap means a Postgres service container, and the blocker is
-  that the reusable `python.yml` exposes no `services` input (only
-  `working-directory`, `python-version`, `extras`, `command`, `locked` and
-  `runs-on`), and a workflow input cannot carry a service map. The route is a
-  second job here with its own `services:` block over a marked subset — which
-  would then need adding to the required checks in `github-repos`, since
-  `test / Test` would not cover it.
 - **ci-container-build**: builds `apps/investagent` and `apps/dashboard` on PRs
   touching `apps/**`, without pushing. The runner is natively amd64, which is
   what Container Apps runs, so this also proves the target architecture builds —
