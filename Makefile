@@ -11,7 +11,7 @@ KEY_VAULT_URI ?= https://kv-marketagent-dev.vault.azure.net/
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install lint test secrets sql up down logs run-agent run-weekly build push deploy logs-azure init fmt validate plan apply
+.PHONY: help install lint test test-db secrets sql up down logs run-agent run-weekly build push deploy logs-azure init fmt validate plan apply
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -30,6 +30,17 @@ test: ## Run the Python test suite
 	# --extra dev: pytest is an extra, not a dependency group, so `uv run` does
 	# not install it. Without this the target only works after `make install`.
 	uv run --directory $(APP_DIR) --extra dev pytest
+
+# The database tests skip without POSTGRES_TEST_DSN, so `make test` stays
+# runnable on a clone with no Docker and this is the target that adds them.
+#
+# host.docker.internal rather than localhost: the Docker daemon runs on the
+# *host* (docker-outside-of-docker), so compose publishes 5432 there and not
+# into this container. The suite creates and drops its own scratch database, so
+# it never touches rows the compose stack is holding.
+test-db: ## Run the Python test suite including the database tests (needs `make up`)
+	POSTGRES_TEST_DSN="postgresql://postgres:local@host.docker.internal:5432/postgres" \
+		uv run --directory $(APP_DIR) --extra dev pytest
 
 secrets: ## Prompt for the application secrets and store them in Key Vault
 	./scripts/Set-KeyVaultSecrets.ps1
