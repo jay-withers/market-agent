@@ -1269,7 +1269,27 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
   proves less about the release than it looks like it does. Now the only
   difference between them is `push` and the tags.
 - **cd-tag**: auto-creates a semver tag on every merge to `main` (default bump:
-  patch).
+  patch) via the shared `release.yml`, regardless of what changed — a
+  terraform-only or docs-only PR gets a version and a GitHub release the same
+  as an app change does. It only feeds `publish` a tag when the merge's
+  commits are release-worthy in the first place (feat/fix); anything else
+  bumps nothing, and there is no version to tag an image with.
+
+  **What `publish` does *not* do unconditionally is rebuild the images.** A
+  `changes` job sits between `tag` and `publish` and diffs `apps/` against the
+  previous release tag — found with `git describe --tags --abbrev=0 HEAD^`,
+  not this push's own `before`/`after` range. That distinction matters: a push
+  with no release-worthy commit gets no tag and never reaches `publish`
+  regardless of what it touched, so an `apps/` change riding along on an
+  unreleased, non-release-worthy push has to be picked up by whichever *later*
+  push finally does bump a version — diffing only that later push's own range
+  would silently miss it. Walking back to the actual previous tag instead
+  makes the diff cumulative and correct across any number of skipped
+  in-between pushes. `publish` is gated on both: a tag having been created
+  *and* `changes.outputs.apps == 'true'`. The net effect is that a release
+  version can exist with no image ever published under it — expected, not a
+  bug — and `cd-publish`'s `workflow_dispatch` is still there to publish one
+  by hand if that's ever wanted.
 - **cd-publish**: reusable (`workflow_call`) and manual (`workflow_dispatch`),
   delegating the build to the shared `docker.yml`. It stays a workflow of its
   own rather than folding into cd-tag because `workflow_dispatch` is the
