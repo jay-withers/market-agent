@@ -33,6 +33,21 @@ output "dashboard_fqdn" {
   value       = azurerm_container_app.dashboard.ingress[0].fqdn
 }
 
+# api_app_name and dashboard_app_name, alongside the three job names below, are
+# what `make deploy` resolves before calling `az containerapp update` /
+# `az containerapp job update` — the image and IMAGE_TAG on all five are
+# lifecycle.ignore_changes'd, so that az cli step is the only thing that
+# actually moves them.
+output "api_app_name" {
+  description = "Name of the API container app, for `az containerapp update`."
+  value       = azurerm_container_app.api.name
+}
+
+output "dashboard_app_name" {
+  description = "Name of the dashboard container app, for `az containerapp update`."
+  value       = azurerm_container_app.dashboard.name
+}
+
 # The three job names are the deploy targets: a scheduled job has to be started
 # by hand to test it, with `az containerapp job start --name <this>`.
 output "agent_job_name" {

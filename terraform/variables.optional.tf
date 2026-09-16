@@ -69,19 +69,25 @@ variable "image_registry" {
   default     = "ghcr.io/jay-withers/market-agent"
 }
 
-# One tag per image rather than one shared between them. Both are built and
-# pushed under the same short SHA, so in the normal case they hold the same
-# value and `make deploy` sets both from one IMAGE_TAG — the point of splitting
-# them is the abnormal case: rolling the dashboard back to yesterday's release
-# while the API stays on today's, without rebuilding either.
+# One tag per image rather than one shared between them, matching the
+# lifecycle.ignore_changes split in main.container-apps.tf and
+# main.container-apps-jobs.tf — see those for why.
+#
+# These now only seed the *first* revision, at `terraform apply` time on a
+# brand-new environment. Every deploy after that is `make deploy` (az cli),
+# which is why they're no longer wired through the Makefile's `deploy` target —
+# a plan against an existing environment reports no change here even when the
+# running image has moved on, because the container's actual image and env are
+# ignored. Don't read a stale-looking default as the deployed version; check
+# `az containerapp show` (or the dashboard's own reported build) instead.
 #
 # Defaults are a published release rather than a sentinel, so a bare
-# `terraform apply` deploys something real. Note the `v` prefix: cd-publish
-# pushes each image under the release tag `vX.Y.Z` and the commit's short SHA,
-# and `0.4.0` without it is not a tag that exists — the pull would fail at
-# revision start-up rather than at plan time.
+# `terraform apply` against a fresh environment deploys something real. Note
+# the `v` prefix: cd-publish pushes each image under the release tag `vX.Y.Z`
+# and the commit's short SHA, and `0.4.0` without it is not a tag that exists —
+# the pull would fail at revision start-up rather than at plan time.
 variable "investagent_image_tag" {
-  description = "Immutable tag of the investagent image — the API and all three jobs. Must not be `latest`: Container Apps creates a revision only when the template changes, so re-pushing a moving tag deploys nothing at all and reports success."
+  description = "Immutable tag of the investagent image — the API and all three jobs — used only to seed the first revision on create. `make deploy` (az cli) owns it on every environment after that; see lifecycle.ignore_changes on azurerm_container_app.api and the three azurerm_container_app_job resources. Must not be `latest`: Container Apps creates a revision only when the template changes, so re-pushing a moving tag deploys nothing at all and reports success."
   type        = string
   default     = "v0.5.1"
 
@@ -92,7 +98,7 @@ variable "investagent_image_tag" {
 }
 
 variable "dashboard_image_tag" {
-  description = "Immutable tag of the dashboard image. Must not be `latest`, for the same reason as investagent_image_tag."
+  description = "Immutable tag of the dashboard image, used only to seed the first revision on create. `make deploy` (az cli) owns it after that; see lifecycle.ignore_changes on azurerm_container_app.dashboard. Must not be `latest`, for the same reason as investagent_image_tag."
   type        = string
   default     = "v0.5.1"
 

@@ -79,6 +79,16 @@ resource "azurerm_container_app_job" "agent" {
   }
 
   tags = local.tags
+
+  # Same split as azurerm_container_app.api: `make deploy` (az cli) owns the
+  # image and IMAGE_TAG after the first revision. See that resource's comment
+  # for why the whole env list is ignored rather than just IMAGE_TAG's entry.
+  lifecycle {
+    ignore_changes = [
+      template[0].container[0].image,
+      template[0].container[0].env,
+    ]
+  }
 }
 
 # Performance, the day's trades, benchmark comparison, email.
@@ -123,6 +133,15 @@ resource "azurerm_container_app_job" "daily_summary" {
   }
 
   tags = local.tags
+
+  # See azurerm_container_app_job.agent above: `make deploy` owns image and
+  # IMAGE_TAG from the first revision onward.
+  lifecycle {
+    ignore_changes = [
+      template[0].container[0].image,
+      template[0].container[0].env,
+    ]
+  }
 }
 
 
@@ -173,4 +192,13 @@ resource "azurerm_container_app_job" "weekly_review" {
   }
 
   tags = local.tags
+
+  # See azurerm_container_app_job.agent above: `make deploy` owns image and
+  # IMAGE_TAG from the first revision onward.
+  lifecycle {
+    ignore_changes = [
+      template[0].container[0].image,
+      template[0].container[0].env,
+    ]
+  }
 }
