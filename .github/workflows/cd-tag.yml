@@ -12,16 +12,60 @@ jobs:
       contents: write
     uses: jay-withers/workflows/.github/workflows/release.yml@0a18e55d654e22fa54c4085547e4389896be6b7f # v1.4.0
 
+  # Whether the images actually need rebuilding. The shared release.yml's
+  # `default-bump` is left at "patch" here, so `tag` bumps *some* version for
+  # every push with a new commit — patch for anything without a `feat`/
+  # breaking commit, not skipped — regardless of whether that push touched
+  # apps/investagent or apps/dashboard. A terraform-only or docs-only change
+  # gets a version and a GitHub release the same as an app change does, and
+  # republishing both images for it would be a wasted build plus a moved
+  # IMAGE_TAG default with no code change behind it.
+  #
+  # Diffed against the previous *release tag*, not this push's own before/after
+  # range, so this is correct even in the one case `tag` genuinely produces no
+  # new version (default-bump set to false, or a push with no new commit at
+  # all): whatever apps/ change such a push carried is still unreleased, and
+  # gets picked up by whichever later push finally does bump a version.
+  # Diffing only that later push's own range would silently drop it, so this
+  # walks back to the actual previous tag instead.
+  changes:
+    needs: tag
+    if: needs.tag.outputs.tag != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      apps: ${{ steps.diff.outputs.apps }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - id: diff
+        run: |
+          prev_tag=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
+          if [ -z "$prev_tag" ]; then
+            echo "no previous release tag — publishing unconditionally"
+            echo "apps=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$prev_tag"..HEAD -- apps/; then
+            echo "apps=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "apps=true" >> "$GITHUB_OUTPUT"
+          fi
+
   # Publish runs as a reusable workflow so the same job can be re-triggered
   # manually (workflow_dispatch) against an existing tag if a build fails,
   # without minting a new version.
   #
-  # Guarded on a tag actually having been created: a merge whose commits carry
-  # no release-worthy change bumps nothing, and there would be no version to
-  # tag an image with.
+  # Guarded on both a tag actually having been created — true for nearly
+  # every push in practice, since default-bump is "patch" rather than false,
+  # but a push with no new commit or a future default-bump: false would
+  # produce no version to tag an image with — and on apps/ having actually
+  # changed since the previous release (see the `changes` job above).
   publish:
-    needs: tag
-    if: needs.tag.outputs.tag != ''
+    needs: [tag, changes]
+    if: needs.tag.outputs.tag != '' && needs.changes.outputs.apps == 'true'
     permissions:
       contents: read
       packages: write

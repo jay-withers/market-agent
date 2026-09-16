@@ -1268,8 +1268,33 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
   build context, platform or cache scope — at which point a green pull request
   proves less about the release than it looks like it does. Now the only
   difference between them is `push` and the tags.
-- **cd-tag**: auto-creates a semver tag on every merge to `main` (default bump:
-  patch).
+- **cd-tag**: auto-creates a semver tag on every merge to `main` via the shared
+  `release.yml`, regardless of what changed — a terraform-only or docs-only PR
+  gets a version and a GitHub release the same as an app change does. The bump
+  size comes purely from conventional-commit type, never from which files
+  changed: `feat:`/breaking commits bump minor/major, and everything else
+  falls back to `default-bump`, which this repo leaves at its default of
+  `patch` rather than `false`. That means `tag` produces a new version for
+  **essentially every push** — verified against this repo's actual history,
+  34 merged PRs against 34 tags with zero gaps, `chore(deps)` and `docs:`
+  merges included. `publish`'s `needs.tag.outputs.tag != ''` guard is real but
+  rarely the thing that fires: it only skips publish outright on a push with
+  no new commit, or if `default-bump` were ever set to `false`.
+
+  **What `publish` does *not* do unconditionally is rebuild the images.** A
+  `changes` job sits between `tag` and `publish` and diffs `apps/` against the
+  previous release tag — found with `git describe --tags --abbrev=0 HEAD^`,
+  not this push's own `before`/`after` range. That distinction is what makes
+  it correct in the rare case `tag` genuinely produces no version: whatever
+  `apps/` change such a push carried is still unreleased, and gets picked up
+  by whichever *later* push finally does bump one — diffing only that later
+  push's own range would silently miss it. Walking back to the actual
+  previous tag instead makes the diff cumulative and correct across any
+  number of skipped in-between pushes. `publish` is gated on both: a tag
+  having been created *and* `changes.outputs.apps == 'true'`. The net effect
+  is that a release version can exist with no image ever published under it —
+  expected, not a bug — and `cd-publish`'s `workflow_dispatch` is still there
+  to publish one by hand if that's ever wanted.
 - **cd-publish**: reusable (`workflow_call`) and manual (`workflow_dispatch`),
   delegating the build to the shared `docker.yml`. It stays a workflow of its
   own rather than folding into cd-tag because `workflow_dispatch` is the
