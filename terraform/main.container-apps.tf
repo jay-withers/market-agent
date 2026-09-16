@@ -101,6 +101,22 @@ resource "azurerm_container_app" "api" {
   }
 
   tags = local.tags
+
+  # investagent_image_tag only seeds this container's first revision; `make
+  # deploy` (az cli, `az containerapp update --image ... --set-env-vars
+  # IMAGE_TAG=...`) owns the running image and IMAGE_TAG on every environment
+  # after that. Ignoring the whole `env` list, not just IMAGE_TAG's one entry,
+  # sidesteps indexing into a map-driven `dynamic` block by a position that
+  # would silently shift if common_env ever gains or loses a key — the
+  # trade-off is that a future change to any of common_env's other values
+  # (KEY_VAULT_URI, POSTGRES_HOST, ...) needs a `make deploy` to actually land,
+  # not just `terraform apply`.
+  lifecycle {
+    ignore_changes = [
+      template[0].container[0].image,
+      template[0].container[0].env,
+    ]
+  }
 }
 
 resource "azurerm_container_app" "dashboard" {
@@ -166,4 +182,12 @@ resource "azurerm_container_app" "dashboard" {
   }
 
   tags = local.tags
+
+  # Same split as the api app: dashboard_image_tag only seeds the first
+  # revision, and `make deploy` (az cli) owns the running image after that.
+  # API_ORIGIN isn't ignored — the deploy script never touches it, so it stays
+  # fully terraform-managed and follows the api app's fqdn if that ever moves.
+  lifecycle {
+    ignore_changes = [template[0].container[0].image]
+  }
 }

@@ -107,12 +107,22 @@ lint: ## Run all pre-commit hooks against every file
 IMAGE_TAG ?= $(shell git rev-parse --short HEAD)
 IMAGE_REGISTRY ?= ghcr.io/jay-withers/market-agent
 
-# Terraform holds one tag per image, but `make deploy` sets both from IMAGE_TAG
-# so the tag built stays the tag deployed and the two cannot drift. Override one
-# of these only to deploy the images at different versions — rolling the
-# dashboard back to yesterday's release while the API stays on today's, say.
+# `make deploy` sets both from IMAGE_TAG by default, so the tag built stays the
+# tag deployed and the two cannot drift. Override one of these only to deploy
+# the images at different versions — rolling the dashboard back to yesterday's
+# release while the API stays on today's, say.
 INVESTAGENT_IMAGE_TAG ?= $(IMAGE_TAG)
 DASHBOARD_IMAGE_TAG ?= $(IMAGE_TAG)
+
+# Whether each tag was actually passed by the caller (command line or
+# environment) rather than falling back to its `?=` default — `origin` reports
+# "file" only for the latter. `deploy` requires this: unlike `build`/`push`,
+# where the local git SHA is exactly what you want to iterate fast, silently
+# deploying whatever commit happens to be checked out is how a stale or
+# never-pushed local SHA ends up rolled out to Container Apps.
+IMAGE_TAG_EXPLICIT := $(filter-out file,$(origin IMAGE_TAG))
+INVESTAGENT_TAG_EXPLICIT := $(filter-out file,$(origin INVESTAGENT_IMAGE_TAG))
+DASHBOARD_TAG_EXPLICIT := $(filter-out file,$(origin DASHBOARD_IMAGE_TAG))
 
 build: ## Build both images for linux/amd64 (set IMAGE_TAG, default: git sha)
 	docker buildx build --platform linux/amd64 \
@@ -131,12 +141,51 @@ push: ## Push both images to ghcr.io (needs write:packages)
 	docker push $(IMAGE_REGISTRY)/investagent:$(IMAGE_TAG)
 	docker push $(IMAGE_REGISTRY)/dashboard:$(IMAGE_TAG)
 
-deploy: ## terraform apply with the built image tags (set ENV, default dev)
+# Deploys via az cli, not terraform apply: the image and IMAGE_TAG on every
+# container app and job are lifecycle.ignore_changes'd in Terraform (see
+# main.container-apps.tf / main.container-apps-jobs.tf), specifically so this
+# can move independently of a plan/apply cycle. `make apply` still seeds the
+# *first* revision of a brand-new environment from investagent_image_tag /
+# dashboard_image_tag; every deploy after that is this target.
+#
+# --set-env-vars only adds/updates the name(s) given — it does not touch any
+# other environment variable already on the container (unlike
+# --replace-env-vars) — so IMAGE_TAG moves without disturbing KEY_VAULT_URI,
+# POSTGRES_HOST and the rest of common_env.
+#
+# Same immutable-tag guard as the (now-unused-for-this-path) Terraform
+# validation: a `latest`/`main`/`unset` tag would report success here while
+# Container Apps creates no new revision at all, because the template hasn't
+# changed from its perspective.
+deploy: ## Deploy built images to Container Apps via az cli (needs IMAGE_TAG=vX.Y.Z; set ENV, default dev)
+	@if [ -z "$(IMAGE_TAG_EXPLICIT)" ] && { [ -z "$(INVESTAGENT_TAG_EXPLICIT)" ] || [ -z "$(DASHBOARD_TAG_EXPLICIT)" ]; }; then \
+	  echo "error: make deploy needs an explicit tag — pass IMAGE_TAG=vX.Y.Z (or INVESTAGENT_IMAGE_TAG=... and DASHBOARD_IMAGE_TAG=... to deploy them separately), not the git-SHA default" >&2; \
+	  exit 1; \
+	fi
+	@for tag in "$(INVESTAGENT_IMAGE_TAG)" "$(DASHBOARD_IMAGE_TAG)"; do \
+	  case "$$tag" in \
+	    latest|main|unset) \
+	      echo "error: image tag must be immutable, got '$$tag' — pass IMAGE_TAG=\$$(git rev-parse --short HEAD) or a release tag" >&2; \
+	      exit 1;; \
+	  esac; \
+	done
 	terraform -chdir=$(TF_DIR) init -reconfigure -backend-config=backends/$(ENV).hcl
-	terraform -chdir=$(TF_DIR) apply \
-	  -var-file=environments/$(ENV).tfvars \
-	  -var investagent_image_tag=$(INVESTAGENT_IMAGE_TAG) \
-	  -var dashboard_image_tag=$(DASHBOARD_IMAGE_TAG)
+	RG=$$(terraform -chdir=$(TF_DIR) output -raw resource_group_name); \
+	API=$$(terraform -chdir=$(TF_DIR) output -raw api_app_name); \
+	DASHBOARD=$$(terraform -chdir=$(TF_DIR) output -raw dashboard_app_name); \
+	AGENT=$$(terraform -chdir=$(TF_DIR) output -raw agent_job_name); \
+	SUMMARY=$$(terraform -chdir=$(TF_DIR) output -raw summary_job_name); \
+	WEEKLY=$$(terraform -chdir=$(TF_DIR) output -raw weekly_review_job_name); \
+	az containerapp update --name $$API --resource-group $$RG \
+	  --image $(IMAGE_REGISTRY)/investagent:$(INVESTAGENT_IMAGE_TAG) \
+	  --set-env-vars IMAGE_TAG=$(INVESTAGENT_IMAGE_TAG); \
+	az containerapp update --name $$DASHBOARD --resource-group $$RG \
+	  --image $(IMAGE_REGISTRY)/dashboard:$(DASHBOARD_IMAGE_TAG); \
+	for JOB in $$AGENT $$SUMMARY $$WEEKLY; do \
+	  az containerapp job update --name $$JOB --resource-group $$RG \
+	    --image $(IMAGE_REGISTRY)/investagent:$(INVESTAGENT_IMAGE_TAG) \
+	    --set-env-vars IMAGE_TAG=$(INVESTAGENT_IMAGE_TAG); \
+	done
 
 # --container is mandatory here, and it names the container inside the job
 # (`agent`), not the job itself. Streaming only works while an execution has a

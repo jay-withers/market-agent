@@ -945,7 +945,7 @@ make run-agent         # one agent run against the local stack
 make run-weekly        # one weekly review against the local stack
 make build             # both images for linux/amd64, tagged with the git SHA
 make push              # both images to ghcr.io (needs write:packages)
-make deploy            # terraform apply with that same image tag
+make deploy            # az cli: roll that image tag onto every app and job
 make logs-azure        # tail the deployed agent job's logs
 make fmt               # terraform fmt -recursive
 make validate          # terraform init + validate (no Azure credentials)
@@ -965,24 +965,69 @@ writes `ai_decisions.prompt_context` on every decision, so a deploy of that code
 against a database without it fails on the first analysis, not at start-up. So
 is `007-job-costs.sql`, which the summary and weekly jobs write to on every run.
 
-**There is one image tag variable per image**, `investagent_image_tag` and
-`dashboard_image_tag`, not one shared between them. Both images are built and
-pushed under the same short SHA, so in the normal case the two hold the same
-value — `make deploy` sets both from one `IMAGE_TAG`, so the tag built is still
-the tag deployed and the two cannot drift. The split exists for the abnormal
-case: rolling the dashboard back to yesterday's release while the API stays on
-today's, without rebuilding either. `make deploy DASHBOARD_IMAGE_TAG=v0.3.3` is
-that, and `make deploy` on its own is unchanged. Neither passes `-auto-approve`.
+**`make deploy` is `az cli`, not `terraform apply`.** The image and the
+`IMAGE_TAG` env var on the API app and all three jobs carry
+`lifecycle { ignore_changes = [...] }` in `main.container-apps.tf` and
+`main.container-apps-jobs.tf`, specifically so a deploy can move independently
+of a plan/apply cycle — no state lock, no plan of unrelated infra drift, no
+risk of a stale local `.tfvars` rolling the image backwards. `investagent_image_tag`
+/ `dashboard_image_tag` (the Terraform variables) only seed the *first*
+revision on a brand-new environment; every deploy after that is `make deploy`,
+which resolves the app/job names and resource group from `terraform output`
+(`api_app_name`, `dashboard_app_name`, `agent_job_name`, `summary_job_name`,
+`weekly_review_job_name`, `resource_group_name`) and calls
+`az containerapp update` / `az containerapp job update --image ... --set-env-vars
+IMAGE_TAG=...` against each. `--set-env-vars` adds/updates only the name given
+and leaves every other env var alone, which is what lets `IMAGE_TAG` move
+without disturbing `KEY_VAULT_URI`, `POSTGRES_HOST` and the rest of
+`common_env`.
 
-Both default to a **published release tag**, not a sentinel, so a bare
-`terraform apply` deploys something real. Mind the `v`: cd-publish pushes each
-image as `vX.Y.Z` *and* the commit's short SHA, so `0.4.0` is not a tag that
-exists — a default without the prefix fails at revision start-up on an image
-pull, long after plan and apply both reported success.
+The trade-off of ignoring the whole `env` list rather than indexing into
+`IMAGE_TAG`'s one entry: a future change to any of `common_env`'s *other*
+values needs a `make deploy` to actually land on a running revision, not just
+`terraform apply` — a `terraform plan` after such a change will report no diff
+on the container even though the value it computes has moved. Indexing into
+the map-driven `dynamic "env"` block by position was the alternative and was
+rejected — that index would silently shift if `common_env` ever gained or lost
+a key, ignoring the wrong entry with no error.
+
+**There is one image tag variable per image**, `investagent_image_tag` and
+`dashboard_image_tag`, not one shared between them, and the same split carries
+through to `make deploy`'s `INVESTAGENT_IMAGE_TAG`/`DASHBOARD_IMAGE_TAG`. Both
+images are built and pushed under the same short SHA, so in the normal case the
+two hold the same value — `make deploy` sets both from one `IMAGE_TAG`, so the
+tag built is still the tag deployed and the two cannot drift. The split exists
+for the abnormal case: rolling the dashboard back to yesterday's release while
+the API stays on today's, without rebuilding either.
+`make deploy INVESTAGENT_IMAGE_TAG=v0.4.0 DASHBOARD_IMAGE_TAG=v0.3.3` is that.
+`make deploy` guards against `latest`/`main`/`unset` the same way the Terraform
+variable validation does — the Terraform validation only fires on
+`terraform apply` now, which no longer runs on the day-to-day deploy path.
+
+**`make deploy` on its own — no tag argument — is a hard error, unlike
+`build`/`push`.** Those two default `IMAGE_TAG` to the local git SHA, which is
+exactly what you want when iterating: build, push, and the tag you just built
+is right there. Deploying is different — a bare `make deploy` would silently
+roll Container Apps onto whatever commit happens to be checked out, which may
+never have been pushed to ghcr.io at all, or may be stale relative to what CI
+last published. `IMAGE_TAG_EXPLICIT`/`INVESTAGENT_TAG_EXPLICIT`/
+`DASHBOARD_TAG_EXPLICIT` check `$(origin ...)` for each — `file` means the `?=`
+default fired rather than the caller — and `deploy` refuses to run unless
+`IMAGE_TAG` was passed, or both of the per-image variables were (passing only
+one still errors, since the other would silently fall back to the git-SHA
+default). `build`/`push` are untouched: the default there is the point.
+
+Both Terraform variables default to a **published release tag**, not a
+sentinel, so a bare `terraform apply` against a brand-new environment deploys
+something real. Mind the `v`: cd-publish pushes each image as `vX.Y.Z` *and*
+the commit's short SHA, so `0.4.0` is not a tag that exists — a default without
+the prefix fails at revision start-up on an image pull, long after plan and
+apply both reported success.
 
 `common_env`'s `IMAGE_TAG` carries the **investagent** tag specifically, since
 that is what the agent records on its `agent_runs` row and it has to name the
-image the code writing the row is running. The dashboard never reads it.
+image the code writing the row is running. The dashboard never reads it, and
+`make deploy` only sets it on the API app and the three jobs.
 
 ### Testing the SQL
 
