@@ -115,6 +115,12 @@ variable "dashboard_image_tag" {
   }
 }
 
+variable "dashboard_custom_domain_name" {
+  description = "Custom hostname to bind to the dashboard container app, e.g. `marketagent.jaywithers.uk`, with a free Azure-managed certificate. Empty (the default) creates neither the managed certificate nor the binding — used to keep the domain, which is globally bound to one environment, off the stg/prd plan legs while only dev is applied. Requires the CNAME (to the dashboard's default `*.azurecontainerapps.io` FQDN) and the `asuid.<name>` TXT (domain verification ID) records to already exist at the DNS provider before apply, since Azure validates both during certificate issuance."
+  type        = string
+  default     = ""
+}
+
 variable "agent_cron_expression" {
   description = "Schedule for the AI trading agent job, as a 5-field cron expression evaluated in UTC."
   type        = string

@@ -33,6 +33,11 @@ output "dashboard_fqdn" {
   value       = azurerm_container_app.dashboard.ingress[0].fqdn
 }
 
+output "dashboard_custom_domain_url" {
+  description = "The dashboard's bound custom domain, if var.dashboard_custom_domain_name is set. Empty otherwise — the azurecontainerapps.io URL above always works regardless."
+  value       = var.dashboard_custom_domain_name != "" ? "https://${var.dashboard_custom_domain_name}" : ""
+}
+
 # api_app_name and dashboard_app_name, alongside the three job names below, are
 # what `make deploy` resolves before calling `az containerapp update` /
 # `az containerapp job update` — the image and IMAGE_TAG on all five are
