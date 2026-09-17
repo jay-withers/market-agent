@@ -281,3 +281,56 @@ resource "azurerm_container_app" "dashboard" {
     ignore_changes = [template[0].container[0].image]
   }
 }
+
+# Both guarded by the same count, driven by var.dashboard_custom_domain_name:
+# a custom hostname is bound to one specific environment, so applying it
+# unconditionally would make the stg/prd plan legs claim the same domain dev
+# already holds, the moment either of those is ever applied for real.
+#
+# The managed certificate's CNAME domain-control-validation and this app's
+# domain-verification TXT record both have to resolve *before* apply — Azure
+# checks both during issuance/binding, so the DNS records at the registrar
+# come first, not after.
+resource "azurerm_container_app_environment_managed_certificate" "dashboard" {
+  count = var.dashboard_custom_domain_name != "" ? 1 : 0
+
+  name                         = "dashboard-${replace(var.dashboard_custom_domain_name, ".", "-")}"
+  container_app_environment_id = azurerm_container_app_environment.this.id
+  subject_name                 = var.dashboard_custom_domain_name
+  domain_control_validation    = "CNAME"
+}
+
+resource "azurerm_container_app_custom_domain" "dashboard" {
+  count = var.dashboard_custom_domain_name != "" ? 1 : 0
+
+  name                     = var.dashboard_custom_domain_name
+  container_app_id         = azurerm_container_app.dashboard.id
+  certificate_binding_type = "SniEnabled"
+
+  # container_app_environment_certificate_id deliberately unset: that field is
+  # for a bring-your-own (azurerm_container_app_environment_certificate) cert
+  # only, and setting it to the managed certificate's own ID 400s the plan —
+  # its resource ID uses a `managedCertificates` segment the provider's parser
+  # here only accepts a `certificates` one for
+  # (hashicorp/terraform-provider-azurerm#25788, still open for this exact
+  # resource as of azurerm 5.4.0's SDK).
+  #
+  # This resource cannot actually finish the bind for a managed certificate —
+  # confirmed live: apply reports certificate_binding_type = "SniEnabled" with
+  # no error, but `az containerapp hostname list` still shows BindingType
+  # Disabled, because ARM's actual bind operation needs the certificate ID in
+  # the request and there is no field here the provider will accept it in
+  # (hashicorp/terraform-provider-azurerm#27362, open, no fix). The real bind
+  # is one manual step after every apply that (re)creates this resource or the
+  # certificate:
+  #
+  #   az containerapp hostname bind --hostname <name> \
+  #     -g <resource_group_name> -n <dashboard_app_name> \
+  #     --environment <container_app_environment_name> --validation-method CNAME
+  #
+  # Same shape as API_REQUIRE_TOKEN and pgaadauth_create_principal elsewhere in
+  # this repo: something `azurerm` cannot express, pushed by hand once. A
+  # subsequent plan reports no diff — the CLI bind updates the same
+  # certificate_binding_type this resource already declares.
+  depends_on = [azurerm_container_app_environment_managed_certificate.dashboard]
+}
