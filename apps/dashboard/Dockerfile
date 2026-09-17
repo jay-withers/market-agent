@@ -23,7 +23,7 @@ FROM nginxinc/nginx-unprivileged:1.31-alpine@sha256:aa8c9087d36d93e9d650c5365f88
 
 # Connects the pushed package to this repository, which is what gives a
 # workflow's GITHUB_TOKEN write access to it — see the same label in
-# apps/investagent/Dockerfile.
+# apps/marketagent/Dockerfile.
 LABEL org.opencontainers.image.source="https://github.com/jay-withers/market-agent"
 
 # The unprivileged image already runs as uid 101 and listens above 1024, which

@@ -65,7 +65,7 @@ resource "azurerm_container_app_job" "agent" {
 
       # `schedule`, not the CLI's `manual` default, so `agent_runs.trigger`
       # distinguishes a cron firing from someone running it by hand.
-      command = ["investagent"]
+      command = ["marketagent"]
       args    = ["agent", "--trigger", "schedule"]
 
       dynamic "env" {
@@ -119,7 +119,7 @@ resource "azurerm_container_app_job" "daily_summary" {
       cpu    = local.container_cpu
       memory = local.container_memory
 
-      command = ["investagent"]
+      command = ["marketagent"]
       args    = ["summary"]
 
       dynamic "env" {
@@ -178,7 +178,7 @@ resource "azurerm_container_app_job" "weekly_review" {
       cpu    = local.container_cpu
       memory = local.container_memory
 
-      command = ["investagent"]
+      command = ["marketagent"]
       args    = ["weekly"]
 
       dynamic "env" {

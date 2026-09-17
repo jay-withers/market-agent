@@ -1,4 +1,4 @@
--- InvestAgent relational schema.
+-- MarketAgent relational schema.
 --
 -- Self-contained and idempotent: every object is CREATE ... IF NOT EXISTS, so
 -- re-running is a no-op rather than an error. There are no down-migrations —

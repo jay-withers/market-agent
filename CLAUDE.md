@@ -4,14 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo does
 
-Azure infrastructure for **InvestAgent**, an AI paper-trading and investment
+Azure infrastructure for **MarketAgent**, an AI paper-trading and investment
 research platform: an LLM recommends BUY/SELL/HOLD from news and market data, a
 deterministic risk engine decides what's actually permitted, and simulated trades
 run against a paper-trading broker. No real money, ever — the experiment is
 whether the AI beats a passive index or a savings account over 3–6 months with a
 notional £500.
 
-**The application is written, deployed and working.** `apps/investagent/` is the
+**The application is written, deployed and working.** `apps/marketagent/` is the
 Python package (API, agent job, summary job) and `apps/dashboard/` is the React
 front end; both run in Container Apps from public ghcr.io images, and
 `docker-compose.yml` runs the same code locally. All eight steps of
@@ -373,7 +373,7 @@ rule.
 
 ## The application package
 
-`apps/investagent/` is one Python package, one image, four entrypoints
+`apps/marketagent/` is one Python package, one image, four entrypoints
 (`api`, `agent`, `summary`, `weekly`). They share the risk engine, the database
 layer, the broker client and the LLM client, so splitting them into four images
 would mean four builds of near-identical layers. Deviates from the brief's suggested
@@ -852,10 +852,10 @@ Azure server — as an initdb script it would fail the whole initialisation.
 
 **`uv sync` installs the project editable by default**, which produces a `.pth`
 pointing at `/app/src`. The runtime stage copies only the virtualenv, so the
-image failed with a bare `No module named 'investagent'` from a venv that looked
+image failed with a bare `No module named 'marketagent'` from a venv that looked
 complete. `--no-editable` on both syncs is the fix.
 
-The image runs as **uid 10001, numerically** — `USER investagent` trips
+The image runs as **uid 10001, numerically** — `USER marketagent` trips
 hadolint's DL3066, and a runtime enforcing `runAsNonRoot` has to resolve the
 user before the container starts without being able to read the image's
 `/etc/passwd`.
@@ -889,7 +889,7 @@ actionlint hook, and workflow shell was going unlinted regardless.
 reformats Python code blocks inside `.md` files — it rewrote the aligned
 comments in `docs/deployment-plan.md` on its first run. The hook is pinned to
 `types_or: [python, pyi]` in `.pre-commit-config.yaml` for that reason; don't
-drop the override. Ruff's own config lives in `apps/investagent/pyproject.toml`
+drop the override. Ruff's own config lives in `apps/marketagent/pyproject.toml`
 and is found by walking up from each file, so nothing points at it from the
 pre-commit config.
 
@@ -1015,7 +1015,7 @@ is `007-job-costs.sql`, which the summary and weekly jobs write to on every run.
 `lifecycle { ignore_changes = [...] }` in `main.container-apps.tf` and
 `main.container-apps-jobs.tf`, specifically so a deploy can move independently
 of a plan/apply cycle — no state lock, no plan of unrelated infra drift, no
-risk of a stale local `.tfvars` rolling the image backwards. `investagent_image_tag`
+risk of a stale local `.tfvars` rolling the image backwards. `marketagent_image_tag`
 / `dashboard_image_tag` (the Terraform variables) only seed the *first*
 revision on a brand-new environment; every deploy after that is `make deploy`,
 which resolves the app/job names and resource group from `terraform output`
@@ -1036,15 +1036,15 @@ the map-driven `dynamic "env"` block by position was the alternative and was
 rejected — that index would silently shift if `common_env` ever gained or lost
 a key, ignoring the wrong entry with no error.
 
-**There is one image tag variable per image**, `investagent_image_tag` and
+**There is one image tag variable per image**, `marketagent_image_tag` and
 `dashboard_image_tag`, not one shared between them, and the same split carries
-through to `make deploy`'s `INVESTAGENT_IMAGE_TAG`/`DASHBOARD_IMAGE_TAG`. Both
+through to `make deploy`'s `MARKETAGENT_IMAGE_TAG`/`DASHBOARD_IMAGE_TAG`. Both
 images are built and pushed under the same short SHA, so in the normal case the
 two hold the same value — `make deploy` sets both from one `IMAGE_TAG`, so the
 tag built is still the tag deployed and the two cannot drift. The split exists
 for the abnormal case: rolling the dashboard back to yesterday's release while
 the API stays on today's, without rebuilding either.
-`make deploy INVESTAGENT_IMAGE_TAG=v0.4.0 DASHBOARD_IMAGE_TAG=v0.3.3` is that.
+`make deploy MARKETAGENT_IMAGE_TAG=v0.4.0 DASHBOARD_IMAGE_TAG=v0.3.3` is that.
 `make deploy` guards against `latest`/`main`/`unset` the same way the Terraform
 variable validation does — the Terraform validation only fires on
 `terraform apply` now, which no longer runs on the day-to-day deploy path.
@@ -1055,7 +1055,7 @@ exactly what you want when iterating: build, push, and the tag you just built
 is right there. Deploying is different — a bare `make deploy` would silently
 roll Container Apps onto whatever commit happens to be checked out, which may
 never have been pushed to ghcr.io at all, or may be stale relative to what CI
-last published. `IMAGE_TAG_EXPLICIT`/`INVESTAGENT_TAG_EXPLICIT`/
+last published. `IMAGE_TAG_EXPLICIT`/`MARKETAGENT_TAG_EXPLICIT`/
 `DASHBOARD_TAG_EXPLICIT` check `$(origin ...)` for each — `file` means the `?=`
 default fired rather than the caller — and `deploy` refuses to run unless
 `IMAGE_TAG` was passed, or both of the per-image variables were (passing only
@@ -1069,7 +1069,7 @@ the commit's short SHA, so `0.4.0` is not a tag that exists — a default withou
 the prefix fails at revision start-up on an image pull, long after plan and
 apply both reported success.
 
-`common_env`'s `IMAGE_TAG` carries the **investagent** tag specifically, since
+`common_env`'s `IMAGE_TAG` carries the **marketagent** tag specifically, since
 that is what the agent records on its `agent_runs` row and it has to name the
 image the code writing the row is running. The dashboard never reads it, and
 `make deploy` only sets it on the API app and the three jobs.
@@ -1272,7 +1272,7 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
   suite takes seconds, and a required check skipped by a path filter never
   reports, which blocks a PR instead of passing it.
 
-  **Coverage is reported and never gated.** `coverage: investagent` and
+  **Coverage is reported and never gated.** `coverage: marketagent` and
   `coverage-pr-comment: true` are inputs on the shared workflow, which puts the
   table in the job summary and in one self-updating PR comment. It lives there
   rather than in this repo because coverage reporting is generic Python CI
@@ -1300,7 +1300,7 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
   compare against; treat a drop as something to read, not as a build failure.
   Coverage that nothing enforces has to be visible instead, which is the whole
   reason it is surfaced twice rather than left in the log.
-- **ci-container-build**: builds `apps/investagent` and `apps/dashboard` on PRs
+- **ci-container-build**: builds `apps/marketagent` and `apps/dashboard` on PRs
   touching `apps/**`, without pushing, by calling the shared `docker.yml` with
   `push` left at its default of false. The runner is natively amd64, which is
   what Container Apps runs, so this also proves the target architecture builds —
@@ -1368,7 +1368,7 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
   habit is still worth keeping after a release:
 
   ```bash
-  gh api user/packages/container/market-agent%2Finvestagent/versions?per_page=3 \
+  gh api user/packages/container/market-agent%2Fmarketagent/versions?per_page=3 \
     --jq '.[] | "\(.updated_at) \(.metadata.container.tags|join(", "))"'
   ```
 
@@ -1410,7 +1410,7 @@ actually block a merge. Two rules decide what belongs on that list:
   `gh pr checks` rather than inferring it from the workflow.
 - **Only require a check that always reports.** `ci-container-build` is
   filtered on its *trigger* (`paths: apps/**`), so a Terraform-only PR never
-  runs it — requiring `build (investagent)` would leave every such PR pending
+  runs it — requiring `build (marketagent)` would leave every such PR pending
   for ever rather than failing it. The two Terraform checks are safe for the
   opposite reason: the shared workflow filters at the job level so its gate
   always reports, and `terraform-plan` is `if: always()` and treats skipped as

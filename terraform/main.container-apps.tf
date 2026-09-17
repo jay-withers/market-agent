@@ -48,7 +48,15 @@ resource "azurerm_container_app" "api" {
       memory = local.container_memory
 
       # One image, three entrypoints: the console script picks the workload.
-      command = ["investagent"]
+      #
+      # DEPLOY ORDER MATTERS if this ever changes again: `image` is under
+      # lifecycle.ignore_changes below but `command` is not, so a plain
+      # `terraform apply` pushes a command change straight to the live
+      # container while it is still running whatever image is currently
+      # deployed. Build and `make deploy` a new image with the matching
+      # console-script name *before* applying a `command` change here, or the
+      # container starts with a command the running image does not have.
+      command = ["marketagent"]
       args    = ["api"]
 
       dynamic "env" {
@@ -114,7 +122,7 @@ resource "azurerm_container_app" "api" {
 
   tags = local.tags
 
-  # investagent_image_tag only seeds this container's first revision; `make
+  # marketagent_image_tag only seeds this container's first revision; `make
   # deploy` (az cli, `az containerapp update --image ... --set-env-vars
   # IMAGE_TAG=...`) owns the running image and IMAGE_TAG on every environment
   # after that. Ignoring the whole `env` list, not just IMAGE_TAG's one entry,
