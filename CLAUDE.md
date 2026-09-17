@@ -609,6 +609,33 @@ process cannot bind below 1024.
   is the value of the same notional £500.
 - A benchmark with no data is omitted rather than drawn flat at the notional,
   matching the summary job.
+- **The dashboard is gated behind HTTP Basic Auth, credentials in
+  `DASHBOARD-USERNAME`/`DASHBOARD-PASSWORD`.** This sits beside, not instead
+  of, the "both apps are public and unauthenticated" design further up: the
+  data is still non-sensitive, so the goal here is keeping casual bots and
+  scanners off a public URL, not defending against a determined attacker —
+  and it needed to work for people with no Microsoft account, which ruled out
+  Entra/EasyAuth despite that being the properly "correct" fix. Because nginx
+  has no application code to call Key Vault itself, the two secrets are wired
+  in as a native Container Apps Key Vault secret reference
+  (`main.container-apps.tf`) rather than read at runtime the way every other
+  secret in this repo is — which means, unlike those, **both must exist in
+  Key Vault before the `terraform apply` that first adds them**, or the
+  dashboard revision fails to resolve them; see `Set-KeyVaultSecrets.ps1`.
+  There is no htpasswd file: nginx's Alpine base is musl, whose `crypt()`
+  support for `$apr1$`/`$1$` varies by version and the image carries neither
+  `openssl` nor `htpasswd` to hash a password portably, so the entrypoint
+  instead precomputes the whole `Authorization: Basic <base64>` header value
+  with `base64` (always present via busybox) and an nginx `if` compares it
+  verbatim — exactly as strong as Basic Auth ever is, since the credential
+  crosses the wire as that same base64 rather than a hash. Absent means open,
+  which is what keeps `docker compose up` serving the dashboard with no
+  credential configured. The check is `include`d explicitly into each
+  protected `location` (`/`, `/assets/`, `= /config.json`) rather than placed
+  once at `server` level, to avoid relying on how `if` inherits into sibling
+  locations; `= /healthz` deliberately has no such include, for the same
+  reason the API's own health endpoints sit outside its bearer gate — a
+  Container Apps liveness probe cannot present a credential.
 - `shellcheck`'s SC2016 fires on `envsubst '${API_ORIGIN}'`, where the single
   quotes are the point — expanding them would substitute the value into the
   variable *list* and leave the template untouched. Suppressed inline with that
@@ -761,9 +788,27 @@ model those figures, and stores an assessment plus structured proposals.
 jobs,
 so this process cannot place a trade or alter a decision however it is called —
 which is most of why it is comfortable being publicly reachable. `/api/*` is
-guarded by an optional shared bearer (`API_REQUIRE_TOKEN`, off by default); the
-real fix is Container Apps EasyAuth with Entra, which `azurerm` does not expose.
+guarded by a shared bearer (`API_REQUIRE_TOKEN`, off by default in application
+code but on in Terraform for this deployment — see below); the real fix is
+Container Apps EasyAuth with Entra, which `azurerm` does not expose.
 
+- **`API_REQUIRE_TOKEN` is set in Terraform, not left at its off-by-default.**
+  This closes the gap the dashboard's own Basic Auth cannot: the dashboard is
+  just a browser-side client of this app's public FQDN, so gating the
+  dashboard alone would still leave every `/api/*` route reachable directly by
+  anyone who finds that FQDN. The token itself, `API-BEARER-TOKEN`, is one
+  secret shared with the dashboard — read lazily via `secret()` here, the same
+  as every other application secret, but also wired into the dashboard
+  container as a Key Vault secret reference and rendered into its
+  `config.json` (`apiToken`) so the browser can forward it as
+  `Authorization: Bearer <token>`. Anyone who has already cleared the
+  dashboard's Basic Auth can read that token out of `config.json` and call the
+  API directly forever afterwards — an accepted boundary given the data is
+  non-sensitive, not a gap. On an already-existing API app this needs pushing
+  by hand once with `az containerapp update --set-env-vars
+  API_REQUIRE_TOKEN=true`: the whole `env` list on that resource is under
+  `lifecycle { ignore_changes }` for `IMAGE_TAG`'s sake, so a plain
+  `terraform apply` reports no diff (see `main.container-apps.tf`).
 - **`/healthz` must not touch the database and `/readyz` must.** Container Apps
   restarts a container on a failed liveness probe, so a database blip that
   failed `/healthz` would restart every replica and turn an outage into a crash

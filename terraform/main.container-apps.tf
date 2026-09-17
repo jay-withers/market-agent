@@ -59,6 +59,18 @@ resource "azurerm_container_app" "api" {
         }
       }
 
+      # Off by default in application code (deps.py's require_token), on here
+      # deliberately: this is what actually closes the gap the dashboard's own
+      # Basic Auth cannot — a bot that finds this app's own public FQDN could
+      # otherwise read every /api/* route directly, bypassing the dashboard
+      # entirely. Not a secret, so it needs no Key Vault reference; the token
+      # it requires is read lazily by settings.secret("API-BEARER-TOKEN") the
+      # same way every other application secret is.
+      env {
+        name  = "API_REQUIRE_TOKEN"
+        value = "true"
+      }
+
       # Liveness deliberately hits /healthz, which does **not** touch the
       # database. A failed liveness probe restarts the container, so a probe
       # that depended on PostgreSQL would turn a database blip into a
@@ -111,6 +123,12 @@ resource "azurerm_container_app" "api" {
   # trade-off is that a future change to any of common_env's other values
   # (KEY_VAULT_URI, POSTGRES_HOST, ...) needs a `make deploy` to actually land,
   # not just `terraform apply`.
+  #
+  # API_REQUIRE_TOKEN, added above, is caught by the same ignore: on an
+  # already-existing API app, `terraform apply` alone reports no diff. Push it
+  # by hand once with `az containerapp update --name <api_app_name>
+  # --resource-group <resource_group_name> --set-env-vars
+  # API_REQUIRE_TOKEN=true`.
   lifecycle {
     ignore_changes = [
       template[0].container[0].image,
@@ -130,6 +148,42 @@ resource "azurerm_container_app" "dashboard" {
     identity_ids = [azurerm_user_assigned_identity.this.id]
   }
 
+  # Gates the dashboard behind HTTP Basic Auth, credentials in Key Vault —
+  # opt-in from the container's point of view (an unset pair disables the
+  # check in the entrypoint) but *not* from Terraform's: unlike every other
+  # secret in this repo, these are resolved by the Container Apps platform at
+  # revision creation rather than lazily by application code, so both must
+  # already exist in Key Vault before the first `terraform apply` that adds
+  # this block — see Set-KeyVaultSecrets.ps1. No `data` source is used to look
+  # them up first, for the same reason the alerting config avoids one: it
+  # would fail the stg/prd plan legs in CI, which plan against a vault that
+  # does not exist yet. `versionless_id` (built by hand, not read) is what
+  # lets a secret rotation take effect on the next revision with no Terraform
+  # change at all.
+  secret {
+    name                = "dashboard-username"
+    key_vault_secret_id = "${trimsuffix(azurerm_key_vault.this.vault_uri, "/")}/secrets/DASHBOARD-USERNAME"
+    identity            = azurerm_user_assigned_identity.this.id
+  }
+
+  secret {
+    name                = "dashboard-password"
+    key_vault_secret_id = "${trimsuffix(azurerm_key_vault.this.vault_uri, "/")}/secrets/DASHBOARD-PASSWORD"
+    identity            = azurerm_user_assigned_identity.this.id
+  }
+
+  # The same secret the API reads via settings.secret("API-BEARER-TOKEN") — one
+  # token, not two, so there is nothing to keep in sync. The browser needs it
+  # verbatim to call the API directly, so it is rendered into config.json
+  # exactly like API_ORIGIN; anyone who has already cleared this app's own
+  # Basic Auth can read it from that response regardless; that is an accepted
+  # boundary, not a gap, given the data behind both apps is non-sensitive.
+  secret {
+    name                = "api-bearer-token"
+    key_vault_secret_id = "${trimsuffix(azurerm_key_vault.this.vault_uri, "/")}/secrets/API-BEARER-TOKEN"
+    identity            = azurerm_user_assigned_identity.this.id
+  }
+
   template {
     min_replicas = 0
     max_replicas = 1
@@ -140,10 +194,10 @@ resource "azurerm_container_app" "dashboard" {
       cpu    = local.container_cpu
       memory = local.container_memory
 
-      # API_ORIGIN and nothing else. The dashboard is nginx serving static
-      # files: it holds no credential, touches no database, and passing it
-      # `common_env` would put the database host and the vault URI into a
-      # container that has no use for either.
+      # API_ORIGIN plus the two basic-auth secrets, and nothing else. The
+      # dashboard is nginx serving static files: it holds no database
+      # credential, and passing it `common_env` would put the database host
+      # and the vault URI into a container that has no use for either.
       #
       # The browser talks to the API directly, so this has to be an address the
       # *browser* can reach — the API's public ingress, not an internal name.
@@ -152,6 +206,25 @@ resource "azurerm_container_app" "dashboard" {
       env {
         name  = "API_ORIGIN"
         value = "https://${azurerm_container_app.api.ingress[0].fqdn}"
+      }
+
+      # Read by the entrypoint to render (or, if either is absent, skip) the
+      # nginx basic-auth check. Absent is what keeps `docker compose up`
+      # working with the dashboard wide open, matching every other opt-in
+      # secret in this repo.
+      env {
+        name        = "DASHBOARD_USERNAME"
+        secret_name = "dashboard-username"
+      }
+
+      env {
+        name        = "DASHBOARD_PASSWORD"
+        secret_name = "dashboard-password"
+      }
+
+      env {
+        name        = "API_TOKEN"
+        secret_name = "api-bearer-token"
       }
 
       # nginx answers this from memory, without reaching the API. A dashboard

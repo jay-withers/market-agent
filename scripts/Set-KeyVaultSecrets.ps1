@@ -26,6 +26,27 @@
     because a masked prompt hides a typo and a mistyped recipient sends the
     summary nowhere — or to a stranger.
 
+    DASHBOARD-USERNAME and DASHBOARD-PASSWORD gate the dashboard behind HTTP
+    Basic Auth and are read differently from the rest: Terraform wires them
+    into the dashboard container app as a native Key Vault secret reference
+    (main.container-apps.tf), because the dashboard is static nginx with no
+    application code to call Key Vault itself. That means — unlike every other
+    secret this script sets — both must exist **before** the `terraform apply`
+    that first adds those secret blocks, or the dashboard revision fails to
+    resolve them. Set these first on a fresh environment.
+
+    API-BEARER-TOKEN is the one secret two apps share. The API reads it lazily
+    via settings.secret(), same as every other application secret, and gates
+    every /api/* route behind it once API_REQUIRE_TOKEN is set — but the
+    dashboard needs the same value to call the API on the browser's behalf, so
+    it is *also* wired into the dashboard container as a Key Vault secret
+    reference, the same way as the two DASHBOARD- secrets above, and carries
+    the same before-apply requirement on a fresh environment. Generate it as a
+    plain random string (`openssl rand -hex 32` or similar) rather than typing
+    one: it is embedded verbatim inside a JSON string in the dashboard's
+    rendered config.json, and a quote or backslash in it would break that
+    file.
+
     Existing secrets are left alone unless you say otherwise, because Key Vault
     versions every write and re-setting an unchanged value just adds noise.
 
@@ -33,7 +54,7 @@
     Officer` on the vault — which whoever ran `terraform apply` already has.
 
 .PARAMETER Name
-    Which values to prompt for. Defaults to all five the application uses.
+    Which values to prompt for. Defaults to all eight the application uses.
 
 .PARAMETER Force
     Overwrite an existing secret without asking.
@@ -41,7 +62,7 @@
 .EXAMPLE
     ./scripts/Set-KeyVaultSecrets.ps1
 
-    Prompts for each of the five, skipping any that already exist.
+    Prompts for each of the eight, skipping any that already exist.
 
 .EXAMPLE
     ./scripts/Set-KeyVaultSecrets.ps1 -Name ANTHROPIC-API-KEY -Force
@@ -54,6 +75,21 @@
     Switches the daily summary email on, or points it somewhere else. Takes
     effect on the next scheduled run — no redeploy, because the value is read
     at runtime.
+
+.EXAMPLE
+    ./scripts/Set-KeyVaultSecrets.ps1 -Name DASHBOARD-USERNAME, DASHBOARD-PASSWORD
+
+    Switches dashboard Basic Auth on, or rotates the credential. Unlike the
+    other secrets, this needs a `terraform apply` afterwards (or on a fresh
+    environment, beforehand) — see the description above.
+
+.EXAMPLE
+    ./scripts/Set-KeyVaultSecrets.ps1 -Name API-BEARER-TOKEN -Force
+
+    Rotates the token both the API and the dashboard use. Takes effect for the
+    API on its next revision (API_REQUIRE_TOKEN is set separately in
+    Terraform); the dashboard also needs a `terraform apply` to pick it up,
+    same as the two DASHBOARD- secrets.
 #>
 [CmdletBinding()]
 param(
@@ -72,6 +108,9 @@ param(
         'RESEND-API-KEY'
         'SUMMARY-EMAIL-TO'
         'ANTHROPIC-CREDIT-USD'
+        'DASHBOARD-USERNAME'
+        'DASHBOARD-PASSWORD'
+        'API-BEARER-TOKEN'
     ),
 
     [switch]$Force
@@ -213,6 +252,14 @@ foreach ($secretName in $Name) {
             Write-Warning "$secretName should be a plain number of US dollars, e.g. 25 or 25.00 — '$value' will be ignored by the summary if it cannot be parsed."
         }
         Write-Host "    note: this is the credit you started with, not a live balance — Anthropic publishes no balance endpoint, so the summary subtracts its own recorded spend from it."
+    }
+
+    # Advisory. This value lands inside a JSON string literal in the
+    # dashboard's rendered config.json (docker-entrypoint.sh does no escaping,
+    # matching how API_ORIGIN is substituted there already), so a quote or
+    # backslash breaks that file rather than the token.
+    if ($secretName -eq 'API-BEARER-TOKEN' -and $value -match '["\\]') {
+        Write-Warning "$secretName contains a quote or backslash, which will break the dashboard's config.json — use a plain alphanumeric token, e.g. from 'openssl rand -hex 32'."
     }
 
     # --value puts the secret in this process's argument list, where anything
