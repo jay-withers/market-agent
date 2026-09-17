@@ -57,7 +57,7 @@ repos:
 
   # ruff replaces both a linter and a formatter (black/isort/flake8). The
   # config, including the rule selection, lives in
-  # apps/investagent/pyproject.toml — ruff walks up from each file to find it,
+  # apps/marketagent/pyproject.toml — ruff walks up from each file to find it,
   # so nothing needs pointing at it from here.
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: 321478e58f4938179c6b86e4ddfa923d1547a49b # frozen: v0.16.6

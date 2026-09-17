@@ -1,4 +1,4 @@
-# Deploy the InvestAgent application from local
+# Deploy the MarketAgent application from local
 
 ## Context
 
@@ -37,10 +37,10 @@ reached through the host daemon via a devcontainer feature.
 
 ```
 apps/
-  investagent/            # one Python package, one image, four entrypoints
+  marketagent/            # one Python package, one image, four entrypoints
     pyproject.toml
     Dockerfile
-    src/investagent/
+    src/marketagent/
       settings.py         # env-first, Key Vault fallback
       db.py               # psycopg pool with Entra token auth
       models.py           # pydantic domain + LLM output models
@@ -50,7 +50,7 @@ apps/
       broker/base.py  broker/alpaca.py
       api/main.py  api/routers/*.py
       jobs/agent.py  jobs/summary.py
-      cli.py              # `investagent api|agent|summary`
+      cli.py              # `marketagent api|agent|summary`
     tests/
   dashboard/              # React + TS + Vite -> nginx
     package.json  Dockerfile  nginx/default.conf  public/config.json.template
@@ -80,7 +80,7 @@ applies — new `locals`/`variable`/`output` blocks go in matching files.
   `dashboard_target_port = 8080`; add `POSTGRES_USER` (the UAI name — the DB role
   name) and `POSTGRES_PORT` to `common_env`, which today omits both.
 - **`main.container-apps.tf`** — `target_port` from locals instead of hardcoded
-  80; `command = ["investagent"]` with `args = ["api"]`; a liveness and readiness
+  80; `command = ["marketagent"]` with `args = ["api"]`; a liveness and readiness
   probe on `/healthz`; the dashboard gets `API_ORIGIN` pointing at the API's
   ingress FQDN.
 - **`main.container-apps-jobs.tf`** — `args = ["agent"]` / `["summary"]`. No
@@ -317,7 +317,7 @@ These block a working deploy and I can't do them for you:
 
 ## Verification
 
-- `pytest apps/investagent` — risk engine first, including the brief's £50→£20 case.
+- `pytest apps/marketagent` — risk engine first, including the brief's £50→£20 case.
 - `docker compose up` — full stack against local Postgres, no Azure. Load the
   dashboard, confirm every panel renders from real API responses.
 - `make sql` then `psql` the server and check the tables and `schema_migrations`.

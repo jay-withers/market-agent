@@ -80,7 +80,7 @@ export default function App() {
     <div className="app">
       <header className="masthead">
         <div>
-          <h1>InvestAgent</h1>
+          <h1>MarketAgent</h1>
           <div className="subtitle">
             An AI paper-trading experiment. No real money is ever connected.
           </div>

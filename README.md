@@ -1,6 +1,6 @@
-# InvestAgent — infrastructure
+# MarketAgent — infrastructure
 
-Azure infrastructure for **InvestAgent**, an AI paper-trading and investment
+Azure infrastructure for **MarketAgent**, an AI paper-trading and investment
 research platform: an LLM analyses financial news and market data and recommends
 BUY/SELL/HOLD, a deterministic risk engine decides what is actually permitted,
 and the resulting simulated trades run against a paper-trading broker. No real
@@ -49,7 +49,7 @@ Two departures from the original design:
 
 ## The application
 
-`apps/investagent/` is one Python package with four entrypoints (`api`, `agent`,
+`apps/marketagent/` is one Python package with four entrypoints (`api`, `agent`,
 `summary`, `weekly`) sharing one image: they have the risk engine, the database
 layer, the broker client and the LLM client in common, so four images would mean
 four builds of near-identical layers. The dashboard is genuinely separate and gets
@@ -129,7 +129,7 @@ pull them.
 
 Never deploy a tag that already exists in the registry under different content.
 Container Apps creates a revision only when the template changes, so re-pushing
-a moving tag deploys nothing and reports success; `investagent_image_tag` and
+a moving tag deploys nothing and reports success; `marketagent_image_tag` and
 `dashboard_image_tag` both reject `latest`, `main` and `unset` for that reason.
 
 The two images carry their own tag so one can be rolled back without the other
@@ -519,8 +519,8 @@ always runs and aggregates the validate and plan jobs.
 
 ```
 apps/
-  investagent/                  # one Python package, four entrypoints, one image
-    src/investagent/
+  marketagent/                  # one Python package, four entrypoints, one image
+    src/marketagent/
       settings.py               # config; secrets from env, then Key Vault
       db.py                     # psycopg pool, Entra token or password auth
       models.py                 # domain, risk config, the LLM's output types
@@ -535,7 +535,7 @@ apps/
       repository.py             # the writes, sharing a caller's transaction
       telemetry.py              # App Insights; off without a connection string
       queries.py                # the API's reads
-      cli.py                    # investagent api|agent|summary
+      cli.py                    # marketagent api|agent|summary
       llm/base.py  llm/anthropic_provider.py
       broker/base.py  broker/alpaca.py  broker/dryrun.py
       jobs/agent.py  jobs/summary.py

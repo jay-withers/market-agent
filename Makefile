@@ -1,5 +1,5 @@
 TF_DIR := terraform
-APP_DIR := apps/investagent
+APP_DIR := apps/marketagent
 ENV ?= dev
 
 # How many log lines logs-azure-history pulls back.
@@ -111,7 +111,7 @@ IMAGE_REGISTRY ?= ghcr.io/jay-withers/market-agent
 # tag deployed and the two cannot drift. Override one of these only to deploy
 # the images at different versions — rolling the dashboard back to yesterday's
 # release while the API stays on today's, say.
-INVESTAGENT_IMAGE_TAG ?= $(IMAGE_TAG)
+MARKETAGENT_IMAGE_TAG ?= $(IMAGE_TAG)
 DASHBOARD_IMAGE_TAG ?= $(IMAGE_TAG)
 
 # Whether each tag was actually passed by the caller (command line or
@@ -121,13 +121,13 @@ DASHBOARD_IMAGE_TAG ?= $(IMAGE_TAG)
 # deploying whatever commit happens to be checked out is how a stale or
 # never-pushed local SHA ends up rolled out to Container Apps.
 IMAGE_TAG_EXPLICIT := $(filter-out file,$(origin IMAGE_TAG))
-INVESTAGENT_TAG_EXPLICIT := $(filter-out file,$(origin INVESTAGENT_IMAGE_TAG))
+MARKETAGENT_TAG_EXPLICIT := $(filter-out file,$(origin MARKETAGENT_IMAGE_TAG))
 DASHBOARD_TAG_EXPLICIT := $(filter-out file,$(origin DASHBOARD_IMAGE_TAG))
 
 build: ## Build both images for linux/amd64 (set IMAGE_TAG, default: git sha)
 	docker buildx build --platform linux/amd64 \
-	  -t $(IMAGE_REGISTRY)/investagent:$(IMAGE_TAG) \
-	  --load ./apps/investagent
+	  -t $(IMAGE_REGISTRY)/marketagent:$(IMAGE_TAG) \
+	  --load ./apps/marketagent
 	docker buildx build --platform linux/amd64 \
 	  -t $(IMAGE_REGISTRY)/dashboard:$(IMAGE_TAG) \
 	  --load ./apps/dashboard
@@ -138,14 +138,14 @@ build: ## Build both images for linux/amd64 (set IMAGE_TAG, default: git sha)
 # cannot pull them.
 push: ## Push both images to ghcr.io (needs write:packages)
 	gh auth token | docker login ghcr.io -u $$(gh api user --jq .login) --password-stdin
-	docker push $(IMAGE_REGISTRY)/investagent:$(IMAGE_TAG)
+	docker push $(IMAGE_REGISTRY)/marketagent:$(IMAGE_TAG)
 	docker push $(IMAGE_REGISTRY)/dashboard:$(IMAGE_TAG)
 
 # Deploys via az cli, not terraform apply: the image and IMAGE_TAG on every
 # container app and job are lifecycle.ignore_changes'd in Terraform (see
 # main.container-apps.tf / main.container-apps-jobs.tf), specifically so this
 # can move independently of a plan/apply cycle. `make apply` still seeds the
-# *first* revision of a brand-new environment from investagent_image_tag /
+# *first* revision of a brand-new environment from marketagent_image_tag /
 # dashboard_image_tag; every deploy after that is this target.
 #
 # --set-env-vars only adds/updates the name(s) given — it does not touch any
@@ -158,11 +158,11 @@ push: ## Push both images to ghcr.io (needs write:packages)
 # Container Apps creates no new revision at all, because the template hasn't
 # changed from its perspective.
 deploy: ## Deploy built images to Container Apps via az cli (needs IMAGE_TAG=vX.Y.Z; set ENV, default dev)
-	@if [ -z "$(IMAGE_TAG_EXPLICIT)" ] && { [ -z "$(INVESTAGENT_TAG_EXPLICIT)" ] || [ -z "$(DASHBOARD_TAG_EXPLICIT)" ]; }; then \
-	  echo "error: make deploy needs an explicit tag — pass IMAGE_TAG=vX.Y.Z (or INVESTAGENT_IMAGE_TAG=... and DASHBOARD_IMAGE_TAG=... to deploy them separately), not the git-SHA default" >&2; \
+	@if [ -z "$(IMAGE_TAG_EXPLICIT)" ] && { [ -z "$(MARKETAGENT_TAG_EXPLICIT)" ] || [ -z "$(DASHBOARD_TAG_EXPLICIT)" ]; }; then \
+	  echo "error: make deploy needs an explicit tag — pass IMAGE_TAG=vX.Y.Z (or MARKETAGENT_IMAGE_TAG=... and DASHBOARD_IMAGE_TAG=... to deploy them separately), not the git-SHA default" >&2; \
 	  exit 1; \
 	fi
-	@for tag in "$(INVESTAGENT_IMAGE_TAG)" "$(DASHBOARD_IMAGE_TAG)"; do \
+	@for tag in "$(MARKETAGENT_IMAGE_TAG)" "$(DASHBOARD_IMAGE_TAG)"; do \
 	  case "$$tag" in \
 	    latest|main|unset) \
 	      echo "error: image tag must be immutable, got '$$tag' — pass IMAGE_TAG=\$$(git rev-parse --short HEAD) or a release tag" >&2; \
@@ -177,14 +177,14 @@ deploy: ## Deploy built images to Container Apps via az cli (needs IMAGE_TAG=vX.
 	SUMMARY=$$(terraform -chdir=$(TF_DIR) output -raw summary_job_name); \
 	WEEKLY=$$(terraform -chdir=$(TF_DIR) output -raw weekly_review_job_name); \
 	az containerapp update --name $$API --resource-group $$RG \
-	  --image $(IMAGE_REGISTRY)/investagent:$(INVESTAGENT_IMAGE_TAG) \
-	  --set-env-vars IMAGE_TAG=$(INVESTAGENT_IMAGE_TAG); \
+	  --image $(IMAGE_REGISTRY)/marketagent:$(MARKETAGENT_IMAGE_TAG) \
+	  --set-env-vars IMAGE_TAG=$(MARKETAGENT_IMAGE_TAG); \
 	az containerapp update --name $$DASHBOARD --resource-group $$RG \
 	  --image $(IMAGE_REGISTRY)/dashboard:$(DASHBOARD_IMAGE_TAG); \
 	for JOB in $$AGENT $$SUMMARY $$WEEKLY; do \
 	  az containerapp job update --name $$JOB --resource-group $$RG \
-	    --image $(IMAGE_REGISTRY)/investagent:$(INVESTAGENT_IMAGE_TAG) \
-	    --set-env-vars IMAGE_TAG=$(INVESTAGENT_IMAGE_TAG); \
+	    --image $(IMAGE_REGISTRY)/marketagent:$(MARKETAGENT_IMAGE_TAG) \
+	    --set-env-vars IMAGE_TAG=$(MARKETAGENT_IMAGE_TAG); \
 	done
 
 # --container is mandatory here, and it names the container inside the job

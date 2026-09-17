@@ -29,7 +29,7 @@
 # must be linux/amd64 (see the Dockerfile), but forcing that here would run
 # every local container under emulation for no benefit.
 
-name: investagent
+name: marketagent
 
 services:
   db:
@@ -41,7 +41,7 @@ services:
       dockerfile: docker/Dockerfile.db
     environment:
       POSTGRES_PASSWORD: local
-      POSTGRES_DB: investagent
+      POSTGRES_DB: marketagent
     ports:
       # Published on the *host*. From inside the dev container reach it at the
       # container's bridge IP, or at host.docker.internal:5432.
@@ -49,19 +49,19 @@ services:
     volumes:
       - db-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d investagent"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d marketagent"]
       interval: 5s
       timeout: 3s
       retries: 10
 
   api:
     build:
-      context: ./apps/investagent
+      context: ./apps/marketagent
     command: ["api"]
     environment:
       ENVIRONMENT: local
       POSTGRES_HOST: db
-      POSTGRES_DATABASE: investagent
+      POSTGRES_DATABASE: marketagent
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: local
       DRY_RUN: "true"
@@ -107,13 +107,13 @@ services:
   # trade repeatedly.
   agent:
     build:
-      context: ./apps/investagent
+      context: ./apps/marketagent
     command: ["agent", "--trigger", "manual"]
     profiles: ["jobs"]
     environment:
       ENVIRONMENT: local
       POSTGRES_HOST: db
-      POSTGRES_DATABASE: investagent
+      POSTGRES_DATABASE: marketagent
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: local
       DRY_RUN: "true"
@@ -130,13 +130,13 @@ services:
   # data, no broker — so the one thing it costs is a single Sonnet call.
   weekly:
     build:
-      context: ./apps/investagent
+      context: ./apps/marketagent
     command: ["weekly"]
     profiles: ["jobs"]
     environment:
       ENVIRONMENT: local
       POSTGRES_HOST: db
-      POSTGRES_DATABASE: investagent
+      POSTGRES_DATABASE: marketagent
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: local
       KEY_VAULT_URI: "${KEY_VAULT_URI:-}"

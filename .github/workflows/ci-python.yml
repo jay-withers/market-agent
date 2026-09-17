@@ -34,7 +34,7 @@ jobs:
     # pytest" after a successful-looking install — and only in CI, because
     # locally `make install` has already put it in the venv.
     #
-    # python-version matches the python:3.14 base in apps/investagent/Dockerfile,
+    # python-version matches the python:3.14 base in apps/marketagent/Dockerfile,
     # so a pass here is a pass on the interpreter Container Apps runs.
     #
     # The reusable workflow runs unfiltered by path, which is deliberate: the
@@ -42,7 +42,7 @@ jobs:
     # reports, blocking a pull request rather than passing it.
     uses: jay-withers/workflows/.github/workflows/python.yml@0a18e55d654e22fa54c4085547e4389896be6b7f # v1.4.0
     with:
-      working-directory: apps/investagent
+      working-directory: apps/marketagent
       python-version: "3.14"
       extras: dev
       # Reported, never gated. The figure is bimodal: the pure modules — the
@@ -60,7 +60,7 @@ jobs:
       # reusable workflow injects it with `uv run --with`, an ephemeral overlay
       # that costs this repo no dependency and no lockfile churn, and that does
       # not invalidate the --locked run.
-      coverage: investagent
+      coverage: marketagent
       coverage-pr-comment: true
       # repository.py and queries.py are hand-written SQL, and without a server
       # for it to run against none of it was executed by anything but the

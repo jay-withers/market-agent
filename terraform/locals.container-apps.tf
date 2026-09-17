@@ -5,7 +5,7 @@ locals {
   #
   # No `registry` block and no pull secret anywhere below, which is the whole
   # point of the packages being public.
-  app_image       = "${var.image_registry}/investagent:${var.investagent_image_tag}"
+  app_image       = "${var.image_registry}/marketagent:${var.marketagent_image_tag}"
   dashboard_image = "${var.image_registry}/dashboard:${var.dashboard_image_tag}"
 
   # uvicorn binds 8000; the dashboard's nginx runs unprivileged and so cannot
@@ -32,9 +32,9 @@ locals {
     POSTGRES_USER                         = azurerm_user_assigned_identity.this.name
     APPLICATIONINSIGHTS_CONNECTION_STRING = azurerm_application_insights.this.connection_string
     ENVIRONMENT                           = var.environment
-    # The investagent tag specifically, not a shared one: this is what the agent
+    # The marketagent tag specifically, not a shared one: this is what the agent
     # records on its `agent_runs` row, so it has to name the image the code
     # writing that row is actually running. The dashboard never reads it.
-    IMAGE_TAG = var.investagent_image_tag
+    IMAGE_TAG = var.marketagent_image_tag
   }
 }
