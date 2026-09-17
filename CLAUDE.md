@@ -1422,11 +1422,9 @@ in this repo (see the ci-terraform entry for why), so it needs a gate of its
 own or a failed plan could not block a merge. Dropping either one silently
 stops guarding half of the Terraform CI.
 
-**None of this is actually enforced yet, and that is worth knowing before
-relying on it.** The list above is what `github-repos`' tfvars *says*; the live
-ruleset on this repo is `required_status_checks = []`. `github-repos` plans in
-CI but applies by hand, and the apply has never been run, so a merge here is
-gated on nothing at all today. Read the live state with:
+**This is now enforced — confirmed live on 2026-09-17.** All four contexts
+above are present on this repo's ruleset, so `github-repos`' `make apply` has
+since been run against it. Read the live state with:
 
 ```bash
 gh api repos/jay-withers/market-agent/rulesets --jq '.[].id' \
@@ -1434,13 +1432,13 @@ gh api repos/jay-withers/market-agent/rulesets --jq '.[].id' \
     --jq '[.rules[]|select(.type=="required_status_checks")|.parameters.required_status_checks[].context]'
 ```
 
-**The hazard is the apply, not the rename.** Applying a list that names a
-context nothing reports leaves every PR *pending* rather than failing it —
-which is precisely what has happened to `github-repos` itself: its live ruleset
-still requires `ci-terraform`, its CI now reports `terraform / Terraform`, and
-its own pull requests are blocked as a result. Its tfvars is already correct;
-only the apply is missing. So check the contexts in tfvars against
-`gh pr checks` output *before* applying, not after.
+**The hazard, if this list is ever changed, is the apply, not the rename.**
+Applying a list that names a context nothing reports leaves every PR *pending*
+rather than failing it — which is precisely what happened to `github-repos`
+itself at one point: its live ruleset required `ci-terraform` while its own CI
+reported `terraform / Terraform`, blocking its own pull requests until its
+tfvars (already correct) was actually applied. So check the contexts in tfvars
+against `gh pr checks` output *before* applying, not after.
 
 Because `make apply` there reads local tfvars against remote state, it can be
 run from a checkout of the branch rather than after a merge — which is how a
