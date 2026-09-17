@@ -47,7 +47,10 @@ services:
       # container's bridge IP, or at host.docker.internal:5432.
       - "5432:5432"
     volumes:
-      - db-data:/var/lib/postgresql/data
+      # A single mount at the parent directory, not .../data: postgres 18's
+      # image refuses to start against the old data path, wanting a
+      # major-version-specific subdirectory of this one instead.
+      - db-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d marketagent"]
       interval: 5s
