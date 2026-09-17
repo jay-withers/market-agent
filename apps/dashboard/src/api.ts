@@ -1,10 +1,10 @@
-/* Talking to the API, and finding out where it is.
+/* Talking to the API: finding out where it is, and how to authenticate to it.
  *
- * The address is learned at *runtime*, not baked in at build time: nginx
- * renders config.json from $API_ORIGIN when the container starts, and this
- * fetches it on boot. That is what lets one image serve every environment —
- * the alternative, a VITE_API_URL compiled in, means a rebuild per environment
- * and an image that is only correct where it was built.
+ * Both are learned at *runtime*, not baked in at build time: nginx renders
+ * config.json from $API_ORIGIN and $API_TOKEN when the container starts, and
+ * this fetches it on boot. That is what lets one image serve every
+ * environment — the alternative, a VITE_API_URL compiled in, means a rebuild
+ * per environment and an image that is only correct where it was built.
  */
 
 export type Overview = {
@@ -122,30 +122,43 @@ export type Run = {
 };
 
 let origin: string | null = null;
+let token: string | null = null;
 
-async function apiOrigin(): Promise<string> {
-  if (origin !== null) return origin;
+// The value the API's own require_token dependency checks, when
+// API_REQUIRE_TOKEN is on. It rides in config.json next to apiOrigin — both
+// are rendered by the same container-start entrypoint from an env var — so a
+// bot that finds the API's own public FQDN cannot call it directly without
+// first clearing this app's Basic Auth to read the token out of config.json.
+// Empty (unset, or still the unsubstituted placeholder) means the API is not
+// guarded, and no Authorization header is sent.
+async function apiCredentials(): Promise<{ origin: string; token: string }> {
+  if (origin !== null && token !== null) return { origin, token };
   try {
     const response = await fetch("/config.json", { cache: "no-store" });
-    const config = (await response.json()) as { apiOrigin?: string };
+    const config = (await response.json()) as { apiOrigin?: string; apiToken?: string };
     // An unsubstituted template still contains the placeholder; treating that
     // as an origin produces a confusing CORS error rather than an obvious
     // misconfiguration.
-    const value = config.apiOrigin ?? "";
-    origin = value && !value.includes("${") ? value.replace(/\/$/, "") : "";
+    const originValue = config.apiOrigin ?? "";
+    origin = originValue && !originValue.includes("${") ? originValue.replace(/\/$/, "") : "";
+    const tokenValue = config.apiToken ?? "";
+    token = tokenValue && !tokenValue.includes("${") ? tokenValue : "";
   } catch {
     // Same-origin is the right fallback for `vite dev` behind a proxy and for
     // any deployment where the API is served from the same host.
     origin = "";
+    token = "";
   }
-  return origin;
+  return { origin, token };
+}
+
+function authHeaders(token: string): HeadersInit {
+  return token ? { accept: "application/json", authorization: `Bearer ${token}` } : { accept: "application/json" };
 }
 
 export async function get<T>(path: string): Promise<T> {
-  const base = await apiOrigin();
-  const response = await fetch(`${base}${path}`, {
-    headers: { accept: "application/json" },
-  });
+  const { origin: base, token } = await apiCredentials();
+  const response = await fetch(`${base}${path}`, { headers: authHeaders(token) });
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText} from ${path}`);
   }
@@ -210,10 +223,8 @@ export type Review = {
  * blank the whole page over a section that is merely not ready yet. Anything
  * other than a 404 still throws. */
 export async function getOptional<T>(path: string): Promise<T | null> {
-  const base = await apiOrigin();
-  const response = await fetch(`${base}${path}`, {
-    headers: { accept: "application/json" },
-  });
+  const { origin: base, token } = await apiCredentials();
+  const response = await fetch(`${base}${path}`, { headers: authHeaders(token) });
   if (response.status === 404) return null;
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText} from ${path}`);

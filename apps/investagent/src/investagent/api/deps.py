@@ -27,9 +27,12 @@ def require_token(authorization: str | None = Header(default=None)) -> None:
     The hook exists so that turning authentication on is configuration rather
     than a code change, but it is **not** the real answer: the proper fix is
     Container Apps EasyAuth with Entra, which `azurerm` does not expose and
-    would need `azapi`. Until then both apps are publicly reachable, which is
-    a deliberate, documented position — the data is paper-trading positions and
-    AI reasoning, with no PII, no money, and no secret in any response.
+    would need `azapi`. Off here by default because the data is paper-trading
+    positions and AI reasoning, with no PII, no money, and no secret in any
+    response — a deliberate, documented position that both apps can be
+    publicly reachable. Terraform turns this on for the deployed API anyway,
+    to close the gap the dashboard's own Basic Auth cannot: the dashboard
+    forwards the same token it reads out of its own config.
     """
     if not settings().api_require_token:
         return
