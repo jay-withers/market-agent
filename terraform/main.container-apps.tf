@@ -48,14 +48,17 @@ resource "azurerm_container_app" "api" {
       memory = local.container_memory
 
       # One image, three entrypoints: the console script picks the workload.
-      #
-      # DEPLOY ORDER MATTERS if this ever changes again: `image` is under
-      # lifecycle.ignore_changes below but `command` is not, so a plain
-      # `terraform apply` pushes a command change straight to the live
-      # container while it is still running whatever image is currently
-      # deployed. Build and `make deploy` a new image with the matching
-      # console-script name *before* applying a `command` change here, or the
-      # container starts with a command the running image does not have.
+      # Under lifecycle.ignore_changes below alongside image and env, and for
+      # the same reason: without that, a plain `terraform apply` would push a
+      # command change straight to the live container while it is still
+      # running whatever image is currently deployed, which starts the
+      # container with a command that image's console script does not have.
+      # This bit the InvestAgent -> MarketAgent rename directly — see that PR.
+      # A real command change (rare — this only moves if the console-script
+      # name itself changes again) needs a matching image built and pushed
+      # first, then a manual `az containerapp update --name <api_app_name>
+      # --resource-group <resource_group_name> --command marketagent` (and the
+      # equivalent `az containerapp job update` for each of the three jobs).
       command = ["marketagent"]
       args    = ["api"]
 
@@ -137,10 +140,16 @@ resource "azurerm_container_app" "api" {
   # by hand once with `az containerapp update --name <api_app_name>
   # --resource-group <resource_group_name> --set-env-vars
   # API_REQUIRE_TOKEN=true`.
+  #
+  # `command` joined this list after the InvestAgent -> MarketAgent rename
+  # showed the alternative: with image ignored but command not, a plain
+  # `terraform apply` of a command change lands on whatever image happens to
+  # be running, not the one the new command actually needs.
   lifecycle {
     ignore_changes = [
       template[0].container[0].image,
       template[0].container[0].env,
+      template[0].container[0].command,
     ]
   }
 }

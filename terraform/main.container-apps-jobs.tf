@@ -87,6 +87,7 @@ resource "azurerm_container_app_job" "agent" {
     ignore_changes = [
       template[0].container[0].image,
       template[0].container[0].env,
+      template[0].container[0].command,
     ]
   }
 }
@@ -140,6 +141,7 @@ resource "azurerm_container_app_job" "daily_summary" {
     ignore_changes = [
       template[0].container[0].image,
       template[0].container[0].env,
+      template[0].container[0].command,
     ]
   }
 }
@@ -199,6 +201,7 @@ resource "azurerm_container_app_job" "weekly_review" {
     ignore_changes = [
       template[0].container[0].image,
       template[0].container[0].env,
+      template[0].container[0].command,
     ]
   }
 }
