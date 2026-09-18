@@ -10,39 +10,16 @@ locals {
   # rather than by three separate interpolations remembering to.
   alert_name_prefix = "${var.project_name}-${var.environment}"
 
-  alerted_jobs = {
-    agent   = azurerm_container_app_job.agent.id
-    summary = azurerm_container_app_job.daily_summary.id
-    weekly  = azurerm_container_app_job.weekly_review.id
-  }
-
-  # `Executions` is a **gauge sampled per minute**, not a counter: it reports how
-  # many executions are in each state right now. Verified against a real run —
-  # at a 5-minute grain the 06:00 agent run reported Total 16 for `Running` and
-  # 11 for `Succeeded`, which is minutes-times-executions and means nothing.
-  # `Maximum` over a short window is the signal that an execution was in the
-  # state at all, which is why the threshold is 0 rather than a count.
-  #
-  # The daily summary is the job whose failure hurts most: it is where a fill
-  # becomes known, cash and positions move, and the day gets its valuation. A
-  # missed one cannot be recovered by the next day's run.
-  job_alerts = {
-    for name, id in local.alerted_jobs : "${name}-failed" => {
-      scope       = id
-      description = "A ${name} job execution reported Failed."
-      severity    = 1
-      namespace   = "Microsoft.App/jobs"
-      metric      = "Executions"
-      aggregation = "Maximum"
-      operator    = "GreaterThan"
-      threshold   = 0
-      # A 15-minute window against a 5-minute evaluation, so a Failed sample
-      # cannot fall between two evaluations of a job that runs once a day.
-      frequency = "PT5M"
-      window    = "PT15M"
-      dimension = { name = "state", values = ["Failed"] }
-    }
-  }
+  # Job failures are alerted via a log query (`azurerm_monitor_scheduled_query_rules_alert_v2.job_failed`
+  # in main.alerts.tf) rather than this metric, after the metric alert was
+  # verified live on 2026-09-18 to never fire: a deliberately-triggered failed
+  # execution held `Executions{state=Failed}` at 1 for several minutes,
+  # comfortably inside a 15-minute window, and `Microsoft.AlertsManagement/alerts`
+  # still showed nothing days later. The rule was correct by every check
+  # Terraform can express — scope, dimension, threshold — so this reads as a
+  # platform-side gap in alerting on this metric/resource combination, not a
+  # config mistake. `ContainerAppSystemLogs_CL` ingests the same crash reliably
+  # and is what the investigation actually used to find the failure.
 
   database_alerts = {
     # The one resource here that is always on, and the only one that can fail in
@@ -92,8 +69,10 @@ locals {
   }
 
   # Every metric alert as one table, because they differ only in what they watch.
-  # The scope, action group, name and tags are identical on all five and are
-  # written once in `main.alerts.tf`; adding a sixth rule is an entry here rather
-  # than another twenty-five-line block to keep in step with the others.
-  metric_alerts = merge(local.job_alerts, local.database_alerts)
+  # The scope, action group, name and tags are identical on both and are
+  # written once in `main.alerts.tf`; adding another rule is an entry here
+  # rather than another twenty-five-line block to keep in step with the others.
+  # Job failures used to live here too — see the comment above database_alerts
+  # for why they moved to a log alert instead.
+  metric_alerts = local.database_alerts
 }
