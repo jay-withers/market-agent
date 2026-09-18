@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>jay-withers/template-renovate"],
+  "extends": ["github>jay-withers/renovate"],
   "autoApprove": true,
   "regexManagers": [
     {
