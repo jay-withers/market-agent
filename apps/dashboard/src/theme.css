@@ -138,9 +138,13 @@ h1 {
 
 /* Stat tiles: a hero number needs no plot, so these carry no chart and no
  * tooltip. */
+/* 150px, not 160: at 160 two tiles plus the gap need 332px, which is four
+   pixels more than a 360px phone has after the page gutter — so the whole row
+   collapsed to one tile each and four cards stood between the masthead and any
+   content. 150 fits two up from 360px wide. */
 .tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 12px;
   margin-bottom: 20px;
 }
@@ -247,6 +251,16 @@ button.toggle:hover {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+/* The heading block sets the wrap point, and it needs a flex-basis to do it.
+   A flex item shrinks before the container wraps, so without this the controls
+   beside it (which must not shrink — they are fixed-width buttons) pushed the
+   text down to a column two words wide on a phone rather than taking their own
+   row. 18rem is roughly the narrowest the hint stays readable at. */
+.row-between > :first-child {
+  flex: 1 1 18rem;
 }
 
 .state {
