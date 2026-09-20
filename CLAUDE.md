@@ -818,6 +818,55 @@ model those figures, and stores an assessment plus structured proposals.
 - `--as-of YYYY-MM-DD` reviews a past week. Cheap to offer, because the job
   reads only stored rows, and the first run wants last week rather than today.
 
+#### The data integrity checks
+
+`repository.week_integrity` runs six deterministic checks and the review
+renders them as a pass/fail table, with the count of failures appended to the
+**subject line**. Every one exists because the failure it catches is *silent*.
+The week of 2026-09-14 lost the whole of the 09-17 `daily_performance` row and
+the whole of the 09-18 agent run, and nothing said so — the chart drew a
+straight line across the gap and the next email reported a total that had
+moved for no stated reason. That is the class of fault these catch.
+
+- `missing_valuations`, `missing_runs`, `failed_runs` — a day with no
+  valuation, a day with no agent run, and a run that failed or was abandoned
+  past `JOB_TIMEOUT_SECONDS`. The agent cron is daily including weekends, so
+  there is no trading calendar to reason about.
+- `stale_prices` — a holding whose newest bar is over `STALE_PRICE_DAYS` (4)
+  old. This is the one that silently moves the reported total: `build_state`
+  **drops** an unpriced holding from the valuation rather than carrying it
+  forward, so the total understates and then rebounds when the price returns,
+  with no trade behind either move.
+- `price_spike` — a held ticker moving more than `SPIKE_PCT` (25%) in a day.
+  Bars are fetched with `adjustment=all`, which restates the close across a
+  split while `positions.quantity` stays exactly as it was, so a split moves
+  the reported value with no trade behind it. 25% is deliberately well clear
+  of a real move — AMD did +9.2% in a day in September 2026 and must not fire
+  it. A check that cries wolf is ignored within a month.
+- `cash_drift` — `cash_gbp` reproduced from the trade log alone. This is what
+  would catch an `apply_fill` regression: a fill applied twice, or one that
+  moved the position without the cash.
+
+Three things not to undo:
+
+- **The checks are computed and rendered by us, never summarised by the
+  model** — the same discipline as the daily email's subject line. A failure
+  the model could smooth over in prose is not a check. `REVIEW_SYSTEM`'s point
+  5 tells it to lead with a failure and not to explain a move a broken record
+  may have invented; `PROMPT_VERSION` went to `v4` for that.
+- **Every check reports, pass or fail.** A section that appears only on a bad
+  week is one nobody learns to read, and its absence then looks identical to
+  the job having skipped it.
+- **`week_integrity` is called after the no-runs short-circuit**, not before.
+  A week with no runs at all is not reviewed, so there is nowhere to report a
+  check — note the consequence, which is that the loudest possible failure
+  (the agent never ran once all week) leaves this job silent, and the daily
+  email is what covers it one day at a time.
+
+It assumes the window has closed, which the 22:00-after-21:00 ordering
+guarantees. A manual run earlier in the day reports today as a missing
+valuation, which is true rather than spurious — that week has not finished.
+
 ### The API and the local stack
 
 `api/` is **read-only**. Every mutation belongs to the agent, summary and weekly

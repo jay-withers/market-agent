@@ -921,3 +921,212 @@ def test_re_analysing_with_the_same_prompt_adds_nothing(conn):
 
 def test_analysing_nothing_is_not_an_error(conn):
     assert repo.save_news_analysis(conn, []) == 0
+
+
+# ---------------------------------------------------------------------------
+# week_integrity
+#
+# These checks exist to catch failures that are silent, so a test that only
+# proved they run would miss the point entirely: each one below breaks the
+# thing the check watches and asserts it actually fires. The week of
+# 2026-09-14 lost a daily_performance row and an agent run and nothing said so.
+# ---------------------------------------------------------------------------
+
+
+def _week(conn, pid: int, start: date, end: date) -> dict[str, dict]:
+    """week_integrity keyed by check name, for readable assertions."""
+    return {c["check"]: c for c in repo.week_integrity(conn, pid, start, end)}
+
+
+def _valuation(conn, pid: int, day: date) -> None:
+    repo.save_daily_performance(
+        conn,
+        pid,
+        day,
+        cash_gbp=D("500.0000"),
+        positions_value_gbp=D("0.0000"),
+        total_value_gbp=D("500.0000"),
+        pnl_gbp=D("0.0000"),
+        pnl_pct=D("0.0000"),
+        fx_rate=D("1.300000"),
+        fx_rate_as_of=day,
+    )
+
+
+def _clean_week(conn, pid: int, start: date, end: date) -> None:
+    """A week with nothing wrong with it: a valuation and a run every day."""
+    day = start
+    while day <= end:
+        _valuation(conn, pid, day)
+        conn.execute(
+            "INSERT INTO agent_runs (started_at, finished_at, status) VALUES (%s, %s, 'succeeded')",
+            (datetime.combine(day, datetime.min.time(), UTC), datetime.now(UTC)),
+        )
+        day += timedelta(days=1)
+
+
+def test_an_intact_week_passes_every_check(conn):
+    pid = repo.portfolio_id(conn)
+    end = date.today()
+    start = end - timedelta(days=6)
+    _clean_week(conn, pid, start, end)
+
+    checks = _week(conn, pid, start, end)
+
+    # Every check reports, pass or fail: a section that appears only on a bad
+    # week is one nobody learns to read.
+    assert set(checks) == set(repo.INTEGRITY_CHECKS)
+    assert all(c["ok"] for c in checks.values()), checks
+
+
+def test_a_missing_valuation_is_caught_and_named(conn):
+    pid = repo.portfolio_id(conn)
+    end = date.today()
+    start = end - timedelta(days=6)
+    _clean_week(conn, pid, start, end)
+    gap = start + timedelta(days=3)
+    conn.execute("DELETE FROM daily_performance WHERE portfolio_id = %s AND as_of = %s", (pid, gap))
+
+    check = _week(conn, pid, start, end)["missing_valuations"]
+
+    assert not check["ok"]
+    assert check["count"] == 1
+    # Named, not just counted: "one day is missing" sends you to the database.
+    assert str(gap) in check["detail"]
+
+
+def test_a_day_with_no_agent_run_is_caught(conn):
+    pid = repo.portfolio_id(conn)
+    end = date.today()
+    start = end - timedelta(days=6)
+    _clean_week(conn, pid, start, end)
+    gap = start + timedelta(days=2)
+    conn.execute("DELETE FROM agent_runs WHERE started_at::date = %s", (gap,))
+
+    check = _week(conn, pid, start, end)["missing_runs"]
+
+    assert not check["ok"]
+    assert str(gap) in check["detail"]
+
+
+def test_a_failed_run_is_caught(conn):
+    pid = repo.portfolio_id(conn)
+    end = date.today()
+    start = end - timedelta(days=6)
+    _clean_week(conn, pid, start, end)
+    conn.execute(
+        "UPDATE agent_runs SET status = 'failed' WHERE started_at::date = %s",
+        (start + timedelta(days=1),),
+    )
+
+    check = _week(conn, pid, start, end)["failed_runs"]
+
+    assert not check["ok"]
+    assert "failed" in check["detail"]
+
+
+def test_a_run_abandoned_past_the_timeout_is_caught_as_well_as_a_failure(conn):
+    """SIGKILL cannot be caught, so the row stays 'running' for ever."""
+    pid = repo.portfolio_id(conn)
+    end = date.today()
+    start = end - timedelta(days=6)
+    _clean_week(conn, pid, start, end)
+    conn.execute(
+        "UPDATE agent_runs SET status = 'running', finished_at = NULL WHERE started_at::date = %s",
+        (start,),
+    )
+
+    check = _week(conn, pid, start, end)["failed_runs"]
+
+    assert not check["ok"]
+    assert "abandoned" in check["detail"]
+
+
+def test_a_holding_that_has_stopped_being_priced_is_caught(conn):
+    """The silent one: build_state drops an unpriced holding from the total."""
+    pid = repo.portfolio_id(conn)
+    end = date.today()
+    start = end - timedelta(days=6)
+    _clean_week(conn, pid, start, end)
+    repo.apply_fill(
+        conn, pid, TICKER, "BUY", D("1.000000"), D("50.0000"), D("100.0000"), D("50.0000")
+    )
+    repo.save_prices(conn, [_bar(day=end - timedelta(days=30))])
+
+    check = _week(conn, pid, start, end)["stale_prices"]
+
+    assert not check["ok"]
+    assert TICKER in check["detail"]
+
+
+def test_a_holding_priced_today_is_not_reported_stale(conn):
+    pid = repo.portfolio_id(conn)
+    end = date.today()
+    start = end - timedelta(days=6)
+    _clean_week(conn, pid, start, end)
+    repo.apply_fill(
+        conn, pid, TICKER, "BUY", D("1.000000"), D("50.0000"), D("100.0000"), D("50.0000")
+    )
+    repo.save_prices(conn, [_bar(day=end)])
+
+    assert _week(conn, pid, start, end)["stale_prices"]["ok"]
+
+
+def test_a_split_sized_price_move_is_caught(conn):
+    """adjustment=all restates closes across a split; our quantity does not."""
+    pid = repo.portfolio_id(conn)
+    end = date.today()
+    start = end - timedelta(days=6)
+    _clean_week(conn, pid, start, end)
+    repo.apply_fill(
+        conn, pid, TICKER, "BUY", D("1.000000"), D("50.0000"), D("100.0000"), D("50.0000")
+    )
+    repo.save_prices(
+        conn,
+        [
+            _bar(day=end - timedelta(days=1), close="400.0000"),
+            _bar(day=end, close="100.0000"),
+        ],
+    )
+
+    check = _week(conn, pid, start, end)["price_spike"]
+
+    assert not check["ok"]
+    assert TICKER in check["detail"]
+
+
+def test_an_ordinary_large_move_does_not_fire_the_split_check(conn):
+    """AMD moved 9% in a day this month. A check that cries wolf is ignored."""
+    pid = repo.portfolio_id(conn)
+    end = date.today()
+    start = end - timedelta(days=6)
+    _clean_week(conn, pid, start, end)
+    repo.apply_fill(
+        conn, pid, TICKER, "BUY", D("1.000000"), D("50.0000"), D("100.0000"), D("50.0000")
+    )
+    repo.save_prices(
+        conn,
+        [
+            _bar(day=end - timedelta(days=1), close="100.0000"),
+            _bar(day=end, close="109.0000"),
+        ],
+    )
+
+    assert _week(conn, pid, start, end)["price_spike"]["ok"]
+
+
+def test_cash_that_disagrees_with_the_trade_log_is_caught(conn):
+    """What an apply_fill regression would look like from outside."""
+    pid = repo.portfolio_id(conn)
+    end = date.today()
+    start = end - timedelta(days=6)
+    _clean_week(conn, pid, start, end)
+    assert _week(conn, pid, start, end)["cash_drift"]["ok"]
+
+    # Cash moved without a trade behind it.
+    conn.execute("UPDATE portfolio SET cash_gbp = cash_gbp - 25 WHERE id = %s", (pid,))
+
+    check = _week(conn, pid, start, end)["cash_drift"]
+
+    assert not check["ok"]
+    assert "25" in check["detail"]

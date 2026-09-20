@@ -73,6 +73,17 @@ def run(
         logger.info("no agent runs between %s and %s, nothing to review", start, as_of)
         return None
 
+    # After the short-circuit, not before: a week with no runs at all is not
+    # reviewed, so there is nowhere to report a check and nothing to spend the
+    # query on. (That week is itself the loudest possible failure and this job
+    # stays silent through it — the daily email is what covers it, one day at
+    # a time.)
+    #
+    # Stored alongside the rest, so "has this fired three weeks running" is a
+    # query against weekly_reviews.metrics rather than a re-read of the prose.
+    with pool().connection() as conn:
+        metrics["integrity"] = repo.week_integrity(conn, pid, start, as_of)
+
     # The limits the engine itself would build, not a second read of the same
     # environment variables: the table has to show what actually bounded the
     # week's decisions, and two readers of one config can drift.
@@ -130,15 +141,24 @@ def _subject(as_of: date, metrics: dict[str, Any], proposals: list[ProposedChang
     valuation = metrics["valuation"]
     count = f"{len(proposals)} proposal{'' if len(proposals) == 1 else 's'}"
     if valuation is None:
-        return f"MarketAgent week to {as_of}: no valuation recorded, {count}"
+        subject = f"MarketAgent week to {as_of}: no valuation recorded, {count}"
+    else:
+        change, change_pct = _week_change(metrics)
+        if change is None:
+            subject = f"MarketAgent week to {as_of}: £{valuation['total_value_gbp']}, {count}"
+        else:
+            subject = (
+                f"MarketAgent week to {as_of}: £{valuation['total_value_gbp']} "
+                f"({'+' if change >= 0 else ''}{change_pct}% this week), {count}"
+            )
 
-    change, change_pct = _week_change(metrics)
-    if change is None:
-        return f"MarketAgent week to {as_of}: £{valuation['total_value_gbp']}, {count}"
-    return (
-        f"MarketAgent week to {as_of}: £{valuation['total_value_gbp']} "
-        f"({'+' if change >= 0 else ''}{change_pct}% this week), {count}"
-    )
+    # Appended last so it survives every branch above. A week that lost a day's
+    # valuation still produces a perfectly ordinary-looking subject otherwise,
+    # which is the one case where ordinary-looking is wrong — the same reason
+    # the daily email carries `no agent run`.
+    if failed := [c for c in metrics.get("integrity") or [] if not c["ok"]]:
+        subject += f" — {len(failed)} data check{'' if len(failed) == 1 else 's'} failed"
+    return subject
 
 
 def _week_change(metrics: dict[str, Any]) -> tuple[Decimal | None, Decimal | None]:
@@ -208,8 +228,49 @@ def _facts_table(
     lines += _trades_section(metrics)
     lines += _watchlist_section(metrics)
     lines += _reporting_section(metrics)
+    # Last, and deliberately after every figure above: these say whether the
+    # figures above can be believed, which only means something once they have
+    # been stated.
+    lines += _integrity_section(metrics)
 
     return "\n".join(lines)
+
+
+def _integrity_section(metrics: dict[str, Any]) -> list[str]:
+    """Whether the week's record is intact, stated as pass or fail per check.
+
+    Every check is listed even when it passes. A section that appears only on
+    a bad week is one nobody learns to read, and its absence is then
+    indistinguishable from the job having skipped it.
+    """
+    checks = metrics.get("integrity") or []
+    if not checks:
+        return []
+
+    failed = [c for c in checks if not c["ok"]]
+    lines = [
+        "",
+        "## Data integrity",
+        "",
+    ]
+    if failed:
+        # Stated before the table, in the same spirit as the run section in the
+        # daily email: the reader should not have to scan a list of ticks to
+        # discover that one of them is a cross.
+        lines += [
+            f"**{len(failed)} of {len(checks)} checks failed.** The figures above "
+            "are reported as stored; where a check below failed, what is stored "
+            "may not be what happened.",
+            "",
+        ]
+    lines += ["| Check | Result |", "| --- | --- |"]
+    for check in checks:
+        # A word, not a colour or a symbol alone — this is read in an email
+        # client whose rendering we do not control.
+        state = "OK" if check["ok"] else "FAILED"
+        lines.append(f"| {check['check']} | **{state}** — {check['detail']} |")
+    lines.append("")
+    return lines
 
 
 def _benchmark_section(metrics: dict[str, Any], change_pct: Decimal | None) -> list[str]:
