@@ -26,21 +26,32 @@
     because a masked prompt hides a typo and a mistyped recipient sends the
     summary nowhere — or to a stranger.
 
-    DASHBOARD-USERNAME and DASHBOARD-PASSWORD gate the dashboard behind HTTP
-    Basic Auth and are read differently from the rest: Terraform wires them
-    into the dashboard container app as a native Key Vault secret reference
+    DASHBOARD-PASSCODE gates the dashboard, and is the one secret here this
+    script will **generate** for you: press Enter at its prompt and it writes
+    a random 12-character passcode and prints it once. Nothing else in this
+    repo generates a secret — in particular Terraform does not, because it
+    creates no `azurerm_key_vault_secret` at all and a generated one would
+    live in Terraform state.
+
+    It is also read differently from the rest: Terraform wires it into the
+    dashboard container app as a native Key Vault secret reference
     (main.container-apps.tf), because the dashboard is static nginx with no
     application code to call Key Vault itself. That means — unlike every other
-    secret this script sets — both must exist **before** the `terraform apply`
-    that first adds those secret blocks, or the dashboard revision fails to
-    resolve them. Set these first on a fresh environment.
+    secret this script sets — it must exist **before** the `terraform apply`
+    that first adds that secret block, or the dashboard revision fails to
+    resolve it. Set it first on a fresh environment.
+
+    It replaced a DASHBOARD-USERNAME/DASHBOARD-PASSWORD pair: the browser's
+    Basic Auth dialog always asks for a username, there was only ever one
+    account, and a passcode is one field to type on a phone. Delete the two
+    old secrets once the new revision is up.
 
     API-BEARER-TOKEN is the one secret two apps share. The API reads it lazily
     via settings.secret(), same as every other application secret, and gates
     every /api/* route behind it once API_REQUIRE_TOKEN is set — but the
     dashboard needs the same value to call the API on the browser's behalf, so
     it is *also* wired into the dashboard container as a Key Vault secret
-    reference, the same way as the two DASHBOARD- secrets above, and carries
+    reference, the same way as DASHBOARD-PASSCODE above, and carries
     the same before-apply requirement on a fresh environment. Generate it as a
     plain random string (`openssl rand -hex 32` or similar) rather than typing
     one: it is embedded verbatim inside a JSON string in the dashboard's
@@ -77,11 +88,11 @@
     at runtime.
 
 .EXAMPLE
-    ./scripts/Set-KeyVaultSecrets.ps1 -Name DASHBOARD-USERNAME, DASHBOARD-PASSWORD
+    ./scripts/Set-KeyVaultSecrets.ps1 -Name DASHBOARD-PASSCODE -Force
 
-    Switches dashboard Basic Auth on, or rotates the credential. Unlike the
-    other secrets, this needs a `terraform apply` afterwards (or on a fresh
-    environment, beforehand) — see the description above.
+    Rotates the dashboard passcode. Press Enter to have one generated; it is
+    printed once. Every browser holding the old one is logged out on the next
+    revision, which is the intended way to revoke access.
 
 .EXAMPLE
     ./scripts/Set-KeyVaultSecrets.ps1 -Name API-BEARER-TOKEN -Force
@@ -89,7 +100,7 @@
     Rotates the token both the API and the dashboard use. Takes effect for the
     API on its next revision (API_REQUIRE_TOKEN is set separately in
     Terraform); the dashboard also needs a `terraform apply` to pick it up,
-    same as the two DASHBOARD- secrets.
+    same as DASHBOARD-PASSCODE.
 #>
 [CmdletBinding()]
 param(
@@ -108,8 +119,7 @@ param(
         'RESEND-API-KEY'
         'SUMMARY-EMAIL-TO'
         'ANTHROPIC-CREDIT-USD'
-        'DASHBOARD-USERNAME'
-        'DASHBOARD-PASSWORD'
+        'DASHBOARD-PASSCODE'
         'API-BEARER-TOKEN'
     ),
 
@@ -181,6 +191,48 @@ $expectedPrefixes = @{
 # mistyped email address silently delivers nowhere.
 $plainText = @('SUMMARY-EMAIL-TO', 'ANTHROPIC-CREDIT-USD')
 
+# Offered as a generated value rather than prompted for blind. A passcode
+# nobody chose is a passcode nobody reuses from somewhere else, and there is
+# no reason for a human to invent one.
+$generated = @('DASHBOARD-PASSCODE')
+
+function New-Passcode {
+    <#
+    .SYNOPSIS
+        A random passcode that is safe to put in a cookie and read aloud.
+
+    .DESCRIPTION
+        The alphabet is doing real work in three directions:
+
+        - It excludes `;` `,` `"` `\` and whitespace. The passcode travels as a
+          cookie value, where a semicolon or comma ends it, and nginx compares
+          it inside a quoted string in a generated config, where a quote or a
+          backslash ends that. docker-entrypoint.sh refuses to start on any of
+          them; generating from an alphabet that cannot produce one means that
+          guard never fires on our own output.
+        - It excludes 0/O and 1/I/L, which are the characters someone
+          mistypes reading a code off another screen.
+        - It is upper case only, so the login field can autocapitalise without
+          fighting the person typing.
+
+        30 characters over 12 positions is about 59 bits, which is far more
+        than a rate-unlimited single-user gate needs and still short enough to
+        type on a phone.
+
+        RandomNumberGenerator.GetInt32 rather than Get-Random: the latter is a
+        deterministic PRNG seeded from the clock and is documented as unsuitable
+        for anything security-bearing.
+    #>
+    $alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
+    $chars = foreach ($i in 1..12) {
+        $alphabet[[System.Security.Cryptography.RandomNumberGenerator]::GetInt32($alphabet.Length)]
+    }
+    # Grouped, because a 12-character run is read back wrong far more often
+    # than three groups of four. The hyphens are part of the passcode.
+    $joined = -join $chars
+    "$($joined.Substring(0, 4))-$($joined.Substring(4, 4))-$($joined.Substring(8, 4))"
+}
+
 $set = 0
 $skipped = 0
 
@@ -200,7 +252,19 @@ foreach ($secretName in $Name) {
     $isSecret = $plainText -notcontains $secretName
     $secure = $null
 
-    if ($isSecret) {
+    if ($generated -contains $secretName) {
+        # Enter generates. Typing one is still allowed — a passcode being read
+        # down a phone to someone is a real case, and "MARKET-AGENT-2026" is
+        # their risk to take.
+        $typed = (Read-Host "$secretName (Enter to generate one, or type your own)").Trim()
+        if ($typed) {
+            $value = $typed
+        }
+        else {
+            $value = New-Passcode
+        }
+    }
+    elseif ($isSecret) {
         $secure = Read-Host "$secretName (Enter to skip, read as `$$envVar locally)" -AsSecureString
 
         # NetworkCredential is the tidy cross-platform way back to plaintext;
@@ -262,6 +326,18 @@ foreach ($secretName in $Name) {
         Write-Warning "$secretName contains a quote or backslash, which will break the dashboard's config.json — use a plain alphanumeric token, e.g. from 'openssl rand -hex 32'."
     }
 
+    # A refusal, not a warning, and the only one in this script. The dashboard
+    # entrypoint exits non-zero on any of these characters, so storing one
+    # would not produce a weak gate — it would produce a container that will
+    # not start, discovered as a failed revision some time after this script
+    # said it had succeeded. A generated passcode can never contain one; this
+    # only ever fires on a hand-typed value.
+    if ($secretName -eq 'DASHBOARD-PASSCODE' -and $value -match '[;,"\\\s]') {
+        Write-Warning "$secretName cannot contain a space, quote, backslash, comma or semicolon — the cookie and the nginx config both end at one, and the dashboard refuses to start. Not stored."
+        $skipped++
+        continue
+    }
+
     # --value puts the secret in this process's argument list, where anything
     # running as the same user could read it for the lifetime of the call. The
     # alternative, --file, writes it to disk instead, which is worse. In a
@@ -271,7 +347,19 @@ foreach ($secretName in $Name) {
 
     # The value itself for a non-secret, which is the only way to spot a typo;
     # a length only, for a secret.
-    if ($isSecret) {
+    if ($generated -contains $secretName) {
+        # Shown in full, deliberately, and it is the one secret here that must
+        # be: it was generated a moment ago, nobody has seen it, and Key Vault
+        # is the only other copy. Printed on its own lines because this is the
+        # one line in the run worth copying somewhere.
+        Write-Host ''
+        Write-Host "    $secretName is:  $value"
+        Write-Host '    Write it down now — this is the only time it is displayed.'
+        Write-Host '    The dashboard picks it up on its next revision:'
+        Write-Host '      make deploy IMAGE_TAG=<tag>   (or `az containerapp revision restart`)'
+        Write-Host ''
+    }
+    elseif ($isSecret) {
         Write-Host "    set $secretName ($($value.Length) characters)"
     }
     else {
