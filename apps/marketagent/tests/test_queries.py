@@ -250,6 +250,41 @@ def test_holdings_carry_the_company_name_and_the_last_close(conn):
     assert rows[0]["last_close_usd"] == 100.0
 
 
+def test_the_price_history_covers_held_tickers_only(conn):
+    """A watchlist name nobody owns has no trend panel, so it has no series.
+
+    The dashboard draws one panel per holding and looks its series up by
+    ticker; a price for something unheld is weight on every response for a
+    panel that is never rendered.
+    """
+    pid = repo.portfolio_id(conn)
+    repo.apply_fill(
+        conn, pid, TICKER, "BUY", D("2.000000"), D("50.0000"), D("100.0000"), D("25.0000")
+    )
+    _price(conn, ticker=TICKER, close="100.0000", day=TODAY - timedelta(days=1))
+    _price(conn, ticker=TICKER, close="104.0000", day=TODAY)
+    _price(conn, ticker=OTHER, close="400.0000", day=TODAY)
+
+    rows = queries.price_history(conn, days=30)
+
+    assert [r["ticker"] for r in rows] == [TICKER, TICKER]
+    # Ascending by date, because the client plots them in the order given.
+    assert [r["close_usd"] for r in rows] == [100.0, 104.0]
+
+
+def test_the_price_history_window_excludes_older_bars(conn):
+    pid = repo.portfolio_id(conn)
+    repo.apply_fill(
+        conn, pid, TICKER, "BUY", D("2.000000"), D("50.0000"), D("100.0000"), D("25.0000")
+    )
+    _price(conn, ticker=TICKER, close="90.0000", day=TODAY - timedelta(days=40))
+    _price(conn, ticker=TICKER, close="110.0000", day=TODAY)
+
+    rows = queries.price_history(conn, days=7)
+
+    assert [r["close_usd"] for r in rows] == [110.0]
+
+
 # ---------------------------------------------------------------------------
 # Decisions, news, trades, runs
 # ---------------------------------------------------------------------------

@@ -28,3 +28,11 @@ def performance(
 @router.get("/holdings")
 def holdings(conn: Any = Depends(connection)) -> list[dict[str, Any]]:
     return queries.holdings(conn)
+
+
+@router.get("/prices")
+def prices(
+    days: int = Query(default=90, ge=1, le=1000),
+    conn: Any = Depends(connection),
+) -> list[dict[str, Any]]:
+    return queries.price_history(conn, days=days)

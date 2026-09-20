@@ -1,0 +1,72 @@
+/* Tabbed areas with real URLs, and a router small enough not to be a dependency.
+ *
+ * Real paths rather than a hash because nginx already falls back unknown paths
+ * to index.html inside the authenticated `location /`, so deep links cost
+ * nothing and need no server change. Four static areas with no parameters do
+ * not justify react-router; this is the whole of what it would be used for.
+ *
+ * An unknown path renders the overview rather than a not-found page: every
+ * route here is a view of the same dataset, and a stale bookmark should show
+ * the dashboard instead of an error.
+ */
+
+import { useCallback, useEffect, useState } from "react";
+
+export const TABS = [
+  { path: "/", label: "Overview" },
+  { path: "/holdings", label: "Holdings" },
+  { path: "/activity", label: "Activity" },
+  { path: "/review", label: "Review" },
+] as const;
+
+export type TabPath = (typeof TABS)[number]["path"];
+
+function normalise(pathname: string): TabPath {
+  const trimmed = pathname.replace(/\/+$/, "") || "/";
+  return (TABS.find((t) => t.path === trimmed)?.path ?? "/") as TabPath;
+}
+
+export function useRoute(): [TabPath, (to: TabPath) => void] {
+  const [path, setPath] = useState<TabPath>(() => normalise(window.location.pathname));
+
+  // Back and forward have to move the view too, or the URL and the page
+  // disagree — the usual failure of a hand-rolled router.
+  useEffect(() => {
+    const onPop = () => setPath(normalise(window.location.pathname));
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  const navigate = useCallback((to: TabPath) => {
+    if (normalise(window.location.pathname) !== to) {
+      window.history.pushState(null, "", to);
+    }
+    setPath(to);
+  }, []);
+
+  return [path, navigate];
+}
+
+export function Nav({ current, onNavigate }: { current: TabPath; onNavigate: (to: TabPath) => void }) {
+  return (
+    <nav className="tabs" aria-label="Dashboard areas">
+      {TABS.map((tab) => (
+        /* A real anchor, so middle-click, copy-link and open-in-new-tab all
+           behave. The click handler only takes over the plain left click. */
+        <a
+          key={tab.path}
+          href={tab.path}
+          className={`tab${current === tab.path ? " current" : ""}`}
+          aria-current={current === tab.path ? "page" : undefined}
+          onClick={(event) => {
+            if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+            event.preventDefault();
+            onNavigate(tab.path);
+          }}
+        >
+          {tab.label}
+        </a>
+      ))}
+    </nav>
+  );
+}

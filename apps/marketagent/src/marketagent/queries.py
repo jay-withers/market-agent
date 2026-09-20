@@ -141,6 +141,26 @@ def holdings(conn: Any) -> list[dict[str, Any]]:
     )
 
 
+def price_history(conn: Any, days: int = 90) -> list[dict[str, Any]]:
+    """Daily closes per held ticker, behind the per-holding trend panels.
+
+    Held tickers only: a watchlist name nobody owns has no panel to draw. Flat
+    rather than grouped, matching how `performance` returns its benchmark arms
+    — the client groups both the same way.
+
+    History reaches back only as far as the job has ever fetched, so an early
+    window is short rather than empty, and the panels say so.
+    """
+    return _rows(
+        conn,
+        "SELECT ticker, bar_date, close_usd FROM prices"
+        " WHERE ticker IN (SELECT ticker FROM positions)"
+        "   AND bar_date > current_date - %s::int"
+        " ORDER BY ticker, bar_date",
+        (days,),
+    )
+
+
 def decisions(conn: Any, limit: int = 50, ticker: str | None = None) -> list[dict[str, Any]]:
     where = "WHERE d.ticker = %s" if ticker else ""
     params = (ticker, limit) if ticker else (limit,)
