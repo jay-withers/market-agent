@@ -309,6 +309,16 @@ at the end — the runner stays ignorant of what it ran. Chosen over Alembic
 because the pattern already existed and the schema changes rarely; the honest
 cost is no down-migrations and no ordering guarantee beyond the filename.
 
+**`demo/seed.sql` is deliberately not in `sql/`**, and that is the whole point
+of it living in its own directory: `make sql` with no arguments runs the
+*entire* `sql/` directory against **Azure**, so a destructive fixture file
+there would eventually be applied to the real database by someone bringing the
+schema up to date. It is loaded only by `make demo`, and it opens with a guard
+that raises unless `current_database()` is the local `marketagent`.
+Prices are a deterministic pseudo-random walk hashed from the ticker and the
+day index rather than `random()`, so the same seed always draws the same chart
+and a screenshot means something.
+
 - **`pgaadauth` exists only in the `postgres` maintenance database.** The
   application database has `plpgsql` and nothing else, so
   `pgaadauth_create_principal` fails there with `function ... does not exist` —
@@ -609,33 +619,59 @@ process cannot bind below 1024.
   is the value of the same notional £500.
 - A benchmark with no data is omitted rather than drawn flat at the notional,
   matching the summary job.
-- **The dashboard is gated behind HTTP Basic Auth, credentials in
-  `DASHBOARD-USERNAME`/`DASHBOARD-PASSWORD`.** This sits beside, not instead
-  of, the "both apps are public and unauthenticated" design further up: the
-  data is still non-sensitive, so the goal here is keeping casual bots and
-  scanners off a public URL, not defending against a determined attacker —
-  and it needed to work for people with no Microsoft account, which ruled out
-  Entra/EasyAuth despite that being the properly "correct" fix. Because nginx
-  has no application code to call Key Vault itself, the two secrets are wired
-  in as a native Container Apps Key Vault secret reference
-  (`main.container-apps.tf`) rather than read at runtime the way every other
-  secret in this repo is — which means, unlike those, **both must exist in
-  Key Vault before the `terraform apply` that first adds them**, or the
-  dashboard revision fails to resolve them; see `Set-KeyVaultSecrets.ps1`.
-  There is no htpasswd file: nginx's Alpine base is musl, whose `crypt()`
-  support for `$apr1$`/`$1$` varies by version and the image carries neither
-  `openssl` nor `htpasswd` to hash a password portably, so the entrypoint
-  instead precomputes the whole `Authorization: Basic <base64>` header value
-  with `base64` (always present via busybox) and an nginx `if` compares it
-  verbatim — exactly as strong as Basic Auth ever is, since the credential
-  crosses the wire as that same base64 rather than a hash. Absent means open,
-  which is what keeps `docker compose up` serving the dashboard with no
-  credential configured. The check is `include`d explicitly into each
-  protected `location` (`/`, `/assets/`, `= /config.json`) rather than placed
-  once at `server` level, to avoid relying on how `if` inherits into sibling
-  locations; `= /healthz` deliberately has no such include, for the same
-  reason the API's own health endpoints sit outside its bearer gate — a
-  Container Apps liveness probe cannot present a credential.
+- **The dashboard is gated behind a passcode, held in `DASHBOARD-PASSCODE`.**
+  This sits beside, not instead of, the "both apps are public and
+  unauthenticated" design further up: the data is still non-sensitive, so the
+  goal is keeping casual bots and scanners off a public URL, not defending
+  against a determined attacker — and it needed to work for people with no
+  Microsoft account, which ruled out Entra/EasyAuth despite that being the
+  properly "correct" fix. Because nginx has no application code to call Key
+  Vault itself, the secret is wired in as a native Container Apps Key Vault
+  secret reference (`main.container-apps.tf`) rather than read at runtime the
+  way every other secret in this repo is — which means, unlike those, **it
+  must exist in Key Vault before the `terraform apply` that first adds it**,
+  or the dashboard revision fails to resolve it.
+  - **It replaced a `DASHBOARD-USERNAME`/`DASHBOARD-PASSWORD` pair**, because
+    the browser's native Basic Auth dialog always asks for a username and
+    there was only ever one account. Delete those two secrets once a revision
+    carrying the passcode is up.
+  - **`Set-KeyVaultSecrets.ps1` generates it** — press Enter at its prompt —
+    and prints it once. It is the only secret in this repo that is generated
+    rather than typed. Terraform still generates **nothing**: the rule that it
+    creates no `azurerm_key_vault_secret` is what keeps every secret value out
+    of Terraform state, and a `random_password` would have put the passcode
+    straight into it.
+  - **The alphabet excludes `;` `,` `"` `\` and whitespace**, and that is
+    load-bearing rather than cosmetic. The passcode travels as a cookie value,
+    where `;` and `,` terminate it, and nginx compares it inside a quoted
+    string in a generated config, where `"` and `\` terminate that. The
+    entrypoint **refuses to start** on any of them rather than rendering a
+    config that compares against a truncated passcode; the script refuses to
+    store one for the same reason. It also drops `0`/`O` and `1`/`I`/`L`,
+    which are what get mistyped reading a code off another screen.
+  - **nginx compares the cookie verbatim — there is no signed session**, which
+    is where this differs from `gym-log`'s passcode gate. gym-log can HMAC an
+    issue time into a cookie because it is a Python app; this image is static
+    files and nginx, with nothing to do the signing. So the cookie *is* the
+    passcode, which is the same exposure Basic Auth had — that credential also
+    rode on every single request, just base64'd rather than in a cookie.
+  - **A 401 with `error_page 401 /login.html`, not a redirect to a login
+    route.** The request keeps the URL it asked for, so a deep link to
+    `/holdings` survives the login and lands on `/holdings` after the reload;
+    a redirect would have to carry the original path and put it back.
+    `login.html` is `internal`, so it is only ever reachable as that error
+    body, and it is outside the auth check — a login page behind the gate it
+    exists to open is a loop. It carries no secret: what the person types goes
+    into a cookie and nginx does the comparing.
+  - Absent means open, which is what keeps `docker compose up` serving the
+    dashboard with no credential configured. To exercise the gate locally:
+    `DASHBOARD_PASSCODE=LOCAL-TEST-CODE make demo`.
+  - The check is `include`d explicitly into each protected `location` (`/`,
+    `/assets/`, `= /config.json`) rather than placed once at `server` level, to
+    avoid relying on how `if` inherits into sibling locations; `= /healthz`
+    deliberately has no such include, for the same reason the API's own health
+    endpoints sit outside its bearer gate — a Container Apps liveness probe
+    cannot present a credential.
 - `shellcheck`'s SC2016 fires on `envsubst '${API_ORIGIN}'`, where the single
   quotes are the point — expanding them would substitute the value into the
   variable *list* and leave the template untouched. Suppressed inline with that
@@ -986,6 +1022,7 @@ make lint              # all pre-commit hooks against every file
 make secrets           # prompt for the Key Vault values and store them
 make sql               # every file in sql/, in filename order, against the database
 make up / down / logs  # the local docker compose stack
+make demo              # the local stack seeded with fake data, for a dashboard preview
 make run-agent         # one agent run against the local stack
 make run-weekly        # one weekly review against the local stack
 make build             # both images for linux/amd64, tagged with the git SHA

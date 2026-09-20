@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>MarketAgent</title>
+    <!--
+      The body nginx renders for a 401, which is why it is a standalone file
+      with inlined styles rather than part of the SPA: it has to be servable
+      before the gate is cleared, and the SPA's bundle is behind that gate.
+
+      It holds no secret. The passcode is only ever compared by nginx — this
+      page's whole job is to put what was typed into a cookie and reload, so
+      that the next request carries it.
+    -->
+    <style>
+      :root {
+        color-scheme: light;
+        --page: #f9f9f7;
+        --surface: #fcfcfb;
+        --text-primary: #0b0b0b;
+        --text-secondary: #52514e;
+        --text-muted: #898781;
+        --border: #e1e0d9;
+        --accent: #2a78d6;
+        --critical: #d03b3b;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          color-scheme: dark;
+          --page: #0d0d0d;
+          --surface: #1a1a19;
+          --text-primary: #ffffff;
+          --text-secondary: #c3c2b7;
+          --text-muted: #898781;
+          --border: #2c2c2a;
+          --accent: #3987e5;
+          --critical: #e06060;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px 16px;
+        background: var(--page);
+        color: var(--text-primary);
+        font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      .box {
+        width: 100%;
+        max-width: 340px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 24px;
+      }
+      h1 { font-size: 18px; font-weight: 650; margin: 0 0 4px; letter-spacing: -0.01em; }
+      p.sub { color: var(--text-muted); font-size: 12px; margin: 0 0 18px; }
+      label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+      input {
+        width: 100%;
+        font: inherit;
+        font-size: 16px; /* 16px or iOS zooms the page on focus */
+        letter-spacing: 0.08em;
+        padding: 10px 12px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: var(--page);
+        color: var(--text-primary);
+      }
+      input:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+      button {
+        width: 100%;
+        margin-top: 12px;
+        font: inherit;
+        font-weight: 600;
+        padding: 10px 12px;
+        border: 1px solid var(--accent);
+        border-radius: 7px;
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+      }
+      button:hover { filter: brightness(1.06); }
+      .error { color: var(--critical); font-size: 12px; margin-top: 12px; }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <main class="box">
+      <h1>MarketAgent</h1>
+      <p class="sub">Enter the passcode to continue.</p>
+
+      <form id="f">
+        <label for="p">Passcode</label>
+        <!-- type=password so it is not shoulder-read or screenshotted, and
+             one-time-code so a password manager does not try to own it. -->
+        <input
+          id="p"
+          name="p"
+          type="password"
+          autocomplete="one-time-code"
+          autocapitalize="characters"
+          autocorrect="off"
+          spellcheck="false"
+          required
+          autofocus
+        />
+        <button type="submit">Continue</button>
+      </form>
+
+      <!-- role=alert so it is announced rather than only seen. -->
+      <p class="error" id="e" role="alert" hidden>
+        That passcode was not accepted. Try again.
+      </p>
+    </main>
+
+    <script>
+      (function () {
+        var COOKIE = "ma_passcode";
+        var form = document.getElementById("f");
+        var input = document.getElementById("p");
+        var error = document.getElementById("e");
+
+        // This page is only ever rendered as the body of a 401. So if we get
+        // here having just submitted, the passcode we set was rejected — that
+        // flag is the only way a static page can tell a first visit from a
+        // failed attempt.
+        try {
+          if (sessionStorage.getItem("tried") === "1") {
+            error.hidden = false;
+            sessionStorage.removeItem("tried");
+          }
+        } catch (ignored) {
+          // Private mode, or storage blocked. The form still works; it just
+          // cannot explain a rejection.
+        }
+
+        form.addEventListener("submit", function (event) {
+          event.preventDefault();
+          var value = input.value.trim();
+          if (!value) return;
+
+          try {
+            sessionStorage.setItem("tried", "1");
+          } catch (ignored) {
+            /* see above */
+          }
+
+          // Session-length by default. Secure only over HTTPS, or the cookie
+          // would be dropped on a plain-HTTP local run and the gate would look
+          // broken rather than open.
+          var cookie =
+            COOKIE +
+            "=" +
+            encodeURIComponent(value) +
+            "; path=/; max-age=2592000; samesite=lax";
+          if (location.protocol === "https:") cookie += "; secure";
+          document.cookie = cookie;
+
+          // Back to whatever was originally asked for: this page is the 401
+          // body for that URL, so the address bar still holds it and a reload
+          // retries it with the cookie attached.
+          location.reload();
+        });
+      })();
+    </script>
+  </body>
+</html>

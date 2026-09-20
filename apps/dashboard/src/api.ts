@@ -59,6 +59,14 @@ export type Holding = {
   last_close_date: string | null;
 };
 
+/* One daily close for one held ticker. Flat, as `/api/prices` returns it: the
+ * trend panels group it by ticker themselves. */
+export type PricePoint = {
+  ticker: string;
+  bar_date: string;
+  close_usd: number;
+};
+
 export type Decision = {
   id: number;
   decided_at: string;

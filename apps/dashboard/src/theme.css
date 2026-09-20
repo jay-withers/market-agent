@@ -404,3 +404,171 @@ button.toggle.count {
   font-size: 12px;
   margin-bottom: 9px;
 }
+
+/* ---------------------------------------------------------------------------
+ * Tabbed areas
+ *
+ * The page grew past the point where one column of cards could be scanned, so
+ * the sections are split across four routes. The tabs sit under the stat tiles
+ * because those four numbers answer "how is it doing" regardless of which area
+ * is open.
+ * ------------------------------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.tab {
+  padding: 8px 14px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
+  /* Pulled down onto the container's rule so the current tab's underline
+     replaces it rather than sitting above it. */
+  margin-bottom: -1px;
+}
+
+.tab:hover {
+  color: var(--text-primary);
+}
+
+/* The current tab carries weight and an underline, not colour alone. */
+.tab.current {
+  color: var(--text-primary);
+  font-weight: 600;
+  border-bottom-color: var(--series-1);
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--series-1);
+  outline-offset: -2px;
+  border-radius: 4px 4px 0 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Per-holding trend panels (small multiples)
+ * ------------------------------------------------------------------------- */
+
+/* 240px rather than something smaller: at the page's width that settles on
+   four columns, which leaves a six-holding book as 4 + 2 instead of stranding
+   one panel alone on a second row — and it gives each sparkline enough width to
+   be read rather than merely seen. */
+.trends {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.trend {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px 8px;
+}
+
+.trend-head {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-bottom: 2px;
+}
+
+.trend-ticker {
+  font-weight: 650;
+  font-size: 13px;
+}
+
+.trend-name {
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Fixed height so every panel's plot occupies the same area: with per-panel
+   y-scales already in play, a varying height would add a second way for two
+   panels to look different for a reason that is not the data. */
+.trend-plot {
+  width: 100%;
+  height: 84px;
+}
+
+.trend-empty {
+  height: 84px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.trend-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  margin-top: 4px;
+}
+
+.trend-close {
+  color: var(--text-secondary);
+}
+
+/* The range picker beside a section's table toggle. */
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+button.seg {
+  background: none;
+  border: none;
+  border-right: 1px solid var(--border);
+  color: var(--text-secondary);
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+button.seg:last-child {
+  border-right: none;
+}
+
+button.seg:hover {
+  color: var(--text-primary);
+}
+
+/* The selected window carries weight and a filled ground, not colour alone —
+   and aria-pressed says the same thing to anything not reading pixels.
+   Ground is --border rather than --page: --page and --surface differ by about
+   one step, so against a card the selection was invisible in light mode. */
+button.seg.current {
+  background: var(--border);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+button.seg:focus-visible {
+  outline: 2px solid var(--series-1);
+  outline-offset: -2px;
+}

@@ -8,8 +8,7 @@ set -eu
 
 : "${API_ORIGIN:=}"
 : "${API_TOKEN:=}"
-: "${DASHBOARD_USERNAME:=}"
-: "${DASHBOARD_PASSWORD:=}"
+: "${DASHBOARD_PASSCODE:=}"
 
 # envsubst with an explicit variable list: without it, every $-sign in the
 # template is substituted, which quietly empties anything that looks like a
@@ -36,27 +35,45 @@ else
   echo "dashboard: API_TOKEN=(not set)"
 fi
 
-# Basic Auth, opt-in: absent means open, which is what keeps `docker compose
-# up` serving the dashboard with no credential configured. There is no
-# htpasswd file and no crypt() hash — nginx's Alpine base is musl, whose
-# crypt() support for the $apr1$/$1$ formats varies by version, so hashing a
-# password portably would need openssl or htpasswd, neither of which the image
-# carries. Comparing the whole "Basic <base64>" header verbatim needs only
-# base64, which busybox always provides, and is exactly as strong as Basic
-# Auth ever is — the credential travels the wire as this same base64, not a
-# hash, so a hashed comparison would buy nothing here anyway.
-if [ -n "$DASHBOARD_USERNAME" ] && [ -n "$DASHBOARD_PASSWORD" ]; then
-  credential=$(printf '%s:%s' "$DASHBOARD_USERNAME" "$DASHBOARD_PASSWORD" | base64 -w0)
+# A passcode, not a username and a password: one field to type on a phone, and
+# nothing a browser will offer to save as an account. Opt-in exactly as the
+# Basic Auth it replaces was — absent means open, which is what keeps `docker
+# compose up` serving the dashboard with no credential configured.
+#
+# nginx compares the cookie verbatim, because this image has no application
+# code to verify anything: it is static files and nginx. That also rules out
+# gym-log's signed-cookie approach, which works there only because gym-log is
+# a Python app that can HMAC an issue time. The cookie therefore *is* the
+# passcode, which is the same exposure Basic Auth had — that credential also
+# travelled on every single request, just base64'd rather than in a cookie.
+#
+# A 401 rather than a redirect, with login.html as the error page: the browser
+# keeps the URL it asked for, so a deep link into /holdings survives the login
+# and lands where it was going. A redirect to /login would have to carry the
+# original path and put it back afterwards.
+if [ -n "$DASHBOARD_PASSCODE" ]; then
+  # Rejected rather than mangled. The passcode rides in a cookie, where a
+  # semicolon or a comma ends the value, and it is interpolated into an nginx
+  # string, where a quote or a backslash would end that. Set-KeyVaultSecrets.ps1
+  # generates from an alphabet that cannot produce any of them, so this only
+  # fires on a hand-set value — and failing closed beats a gate that silently
+  # compares against a truncated passcode nobody can type.
+  case $DASHBOARD_PASSCODE in
+    *[\;\,\"\\\ ]*)
+      echo "dashboard: DASHBOARD_PASSCODE contains a space, quote, backslash, comma or semicolon — refusing to start" >&2
+      exit 1
+      ;;
+  esac
+
   cat > /tmp/dashboard/auth.conf <<CONF
-if (\$http_authorization != "Basic ${credential}") {
+if (\$cookie_ma_passcode != "${DASHBOARD_PASSCODE}") {
     return 401;
 }
-add_header WWW-Authenticate 'Basic realm="dashboard"' always;
 CONF
-  echo "dashboard: basic auth enabled"
+  echo "dashboard: passcode gate enabled"
 else
   : > /tmp/dashboard/auth.conf
-  echo "dashboard: basic auth disabled (DASHBOARD_USERNAME/DASHBOARD_PASSWORD not set)"
+  echo "dashboard: passcode gate disabled (DASHBOARD_PASSCODE not set)"
 fi
 
 exec "$@"

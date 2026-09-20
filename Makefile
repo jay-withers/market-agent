@@ -11,7 +11,7 @@ KEY_VAULT_URI ?= https://kv-marketagent-dev.vault.azure.net/
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install lint test test-db secrets sql up down logs run-agent run-weekly build push deploy logs-azure init fmt validate plan apply
+.PHONY: help install lint test test-db secrets sql up down logs demo run-agent run-weekly build push deploy logs-azure init fmt validate plan apply
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -59,6 +59,29 @@ down: ## Stop the local stack and delete its data volume
 
 logs: ## Follow the local stack's logs
 	docker compose logs -f
+
+# Fake data, so the dashboard can be looked at without deploying anything and
+# without an Anthropic or Alpaca key — the API only reads Postgres, so a seeded
+# database is a complete local stack.
+#
+# Piped on stdin rather than mounted: compose here has no bind mounts, because
+# the daemon runs on the host and would resolve a relative path there.
+#
+# demo/seed.sql is destructive and deliberately lives outside sql/, so that
+# `make sql` — which runs the whole of sql/ against *Azure* by default — can
+# never pick it up. It also refuses to run against any database but the local
+# `marketagent` one.
+demo: ## Start the local stack and load fake data for a dashboard preview
+	docker compose up -d --build db api dashboard
+	@echo "==> waiting for postgres"
+	@until docker compose exec -T db pg_isready -U postgres -d marketagent >/dev/null 2>&1; do sleep 1; done
+	docker compose exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d marketagent < demo/seed.sql
+	@echo ""
+	@echo "==> OPEN THIS:  http://localhost:8080"
+	@echo ""
+	@echo "    The API is on :8000 but has no page at / — it answers /api/*,"
+	@echo "    /healthz and /docs, so opening :8000 itself shows a bare 404."
+	@echo "    From inside the dev container, use the container's bridge IP."
 
 # `run --rm`, not a long-running service: the agent is a scheduled job, and a
 # container that restarted would trade again each time.

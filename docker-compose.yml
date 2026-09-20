@@ -93,13 +93,17 @@ services:
       # *browser* can reach — not the compose service name. Published ports land
       # on the Docker host, which is where a browser on that host looks.
       API_ORIGIN: "${API_ORIGIN:-http://localhost:8000}"
-      # DASHBOARD_USERNAME/DASHBOARD_PASSWORD gate the dashboard behind HTTP
-      # Basic Auth in Azure, and API_TOKEN is what it would forward to the API
-      # as a bearer token if the API were guarding itself too. All three unset
-      # here on purpose: leaving them out is what keeps the local dashboard
-      # and API open, matching the opt-in shape of every other secret in this
-      # repo. The local `api` service above never sets API_REQUIRE_TOKEN
-      # either, so there is nothing for a token to satisfy.
+      # DASHBOARD_PASSCODE gates the dashboard behind the passcode screen in
+      # Azure, and API_TOKEN is what it would forward to the API as a bearer
+      # token if the API were guarding itself too. Both unset here on purpose:
+      # leaving them out is what keeps the local dashboard and API open,
+      # matching the opt-in shape of every other secret in this repo. The
+      # local `api` service above never sets API_REQUIRE_TOKEN either, so
+      # there is nothing for a token to satisfy.
+      #
+      # Set it to try the gate locally:
+      #   DASHBOARD_PASSCODE=LOCAL-TEST-CODE docker compose up -d dashboard
+      DASHBOARD_PASSCODE: "${DASHBOARD_PASSCODE:-}"
     ports:
       - "8080:8080"
     depends_on:
