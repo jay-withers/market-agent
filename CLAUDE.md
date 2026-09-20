@@ -1386,6 +1386,51 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
   compare against; treat a drop as something to read, not as a build failure.
   Coverage that nothing enforces has to be visible instead, which is the whole
   reason it is surfaced twice rather than left in the log.
+- **ci-dashboard**: renders the built SPA in headless Chromium and asserts it
+  fits its viewport. **The second workflow here that is not a thin caller of
+  `jay-withers/workflows`**, after ci-terraform's `plan` job — there is no
+  `node.yml` there to call, and market-agent is the only repo in the estate
+  with a SPA (gym-log is server-rendered Jinja2 with no build step). A shared
+  workflow with one consumer is a guess at what the second would need; if a
+  second frontend appears, this should move there wholesale rather than be
+  copied.
+
+  It exists because **nothing in CI drew a page**. Lint, pytest and a docker
+  build do not render a pixel, so every CSS change shipped on the strength of
+  someone opening it locally — and the fault that prompted it reached
+  production and was found on a phone: a `flex-shrink: 0` that reads as
+  obviously correct in a diff collapsed the section heading to a column two
+  words wide.
+
+  - **The API is stubbed in the browser, not run.** `tests/fixtures.ts` holds
+    the response shapes and `page.route` serves them, so the suite needs no
+    Postgres, no API image and no network. It is a *layout* suite; wiring it
+    to a database would make it a layout suite that only runs when a database
+    happens to be up.
+  - **Route registration order is load-bearing.** Playwright matches handlers
+    in *reverse* registration order, so the catch-all that fails unknown
+    `/api/**` requests is registered **first**. Added last it wins over every
+    specific stub and the whole page renders its error state — which is
+    exactly what happened on the first run.
+  - **The fixtures are deliberately awkward**: the longest name on the
+    watchlist, a holding with no price at all, a benchmark arm missing from
+    the series. A layout only breaks on content that does not fit.
+  - **Not screenshot tests.** A pixel baseline fails on every font tweak and
+    gets deleted within a month. These assert box geometry — nothing overflows
+    the viewport except inside a `.scroll` wrapper, which is what that wrapper
+    is for.
+  - **Each assertion was checked against the bug.** Reverting the CSS fix
+    fails three of them. That caught one assertion that was worthless:
+    `controls.y > hint.y` passed even with the bug present, because the row is
+    centre-aligned and a squeezed hint is a tall column whose top sits above
+    the controls anyway. It now compares against the hint's *bottom*.
+  - `npx playwright install` rather than a pinned container image: the CLI
+    fetches the browser matching the installed package, so a Renovate bump of
+    `@playwright/test` cannot drift away from a hard-coded image tag. The
+    browser cache is keyed on `package-lock.json` for the same reason.
+  - The status check reports as plain **`layout`**, not `<job> / <name>` —
+    that namespacing only applies to reusable-workflow calls. It is not in
+    `github-repos`' required list yet; add it there if it should block a merge.
 - **ci-container-build**: builds `apps/marketagent` and `apps/dashboard` on PRs
   touching `apps/**`, without pushing, by calling the shared `docker.yml` with
   `push` left at its default of false. The runner is natively amd64, which is

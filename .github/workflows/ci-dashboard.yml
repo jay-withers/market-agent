@@ -1,0 +1,71 @@
+name: ci-dashboard
+
+# Renders the built dashboard in a real browser and asserts it fits.
+#
+# The gap this closes: nothing in CI drew a page. ci-pre-commit lints, ci-python
+# runs pytest, and ci-container-build proves the image compiles — none of them
+# render a pixel, so every CSS change shipped on the strength of somebody
+# opening it locally. The fault that prompted this reached production and was
+# found on a phone: a `flex-shrink: 0` that reads as obviously correct in a
+# diff collapsed the section heading to a column two words wide.
+#
+# **The one workflow here that is not a thin caller of jay-withers/workflows**,
+# and the second deliberate exception after ci-terraform's plan job. There is no
+# node.yml or playwright.yml in that repo to call, and market-agent is the only
+# repo in the estate with a SPA — gym-log is server-rendered Jinja2 with no
+# build step. A shared workflow with exactly one consumer is a guess at what
+# the second one will need. If a second frontend ever appears, this belongs
+# there and should move wholesale rather than being copied.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: apps/dashboard
+
+jobs:
+  layout:
+    name: Layout
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/dashboard/package-lock.json
+
+      - run: npm ci
+
+      # Cached on the lockfile, which pins @playwright/test exactly — the
+      # browser build is tied to the library version, so the key has to move
+      # when the library does or the run installs against a mismatched binary.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        id: browser-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('apps/dashboard/package-lock.json') }}
+
+      # `install` rather than a pinned container image: the CLI always fetches
+      # the browser matching the installed package, so a Renovate bump of
+      # @playwright/test cannot silently drift away from a hard-coded image tag.
+      # --with-deps is still needed on a cache hit, since the apt libraries live
+      # outside the cached path and the runner is fresh each time.
+      - run: npx playwright install --with-deps chromium
+
+      # `npm test` builds first (the config's webServer runs `npm run build &&
+      # vite preview`), so this also proves the production bundle is what gets
+      # asserted against, not a dev server nobody deploys.
+      - run: npm test
+
+      - if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-report
+          path: apps/dashboard/playwright-report/
+          retention-days: 7
