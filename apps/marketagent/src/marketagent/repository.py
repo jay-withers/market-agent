@@ -893,6 +893,215 @@ def week_metrics(conn: Any, pid: int, start: date, end: date) -> dict[str, Any]:
     }
 
 
+# Held apart from week_metrics' reporting figures because these answer a
+# different question. Everything there describes what the experiment *did*;
+# these describe whether the record of it can be trusted at all.
+#
+# The names are a closed set for the same reason `ProposedChange.area` is:
+# `weekly_reviews.metrics` is queryable, so "has this fired three weeks
+# running" stays a query rather than a re-read of the prose.
+INTEGRITY_CHECKS = (
+    "missing_valuations",
+    "missing_runs",
+    "failed_runs",
+    "stale_prices",
+    "price_spike",
+    "cash_drift",
+)
+
+# A held ticker whose newest bar is older than this has stopped being priced.
+# Four days rather than two: a Friday close is three days old by Monday's run,
+# and a public holiday makes it four.
+STALE_PRICE_DAYS = 4
+
+# A one-day move past this is far more likely to be a split restating the close
+# under a quantity nobody adjusted than a real move. Deliberately well above
+# anything the market plausibly does to a mega-cap — AMD moved 9% in a day this
+# month and must not fire it.
+SPIKE_PCT = 25
+
+# Cash is NUMERIC(18,4) and every term is stored at that scale, so an exact
+# match is reasonable to expect; a penny of tolerance keeps a rounding change
+# from crying wolf.
+CASH_TOLERANCE_GBP = Decimal("0.01")
+
+
+def week_integrity(conn: Any, pid: int, start: date, end: date) -> list[dict[str, Any]]:
+    """Deterministic checks that the week's record is intact.
+
+    Every one of these exists because the failure it catches is *invisible*
+    rather than loud. The week of 2026-09-14 lost a whole day's
+    `daily_performance` row and a whole day's agent run, and nothing said so:
+    the chart simply drew a straight line across the gap and the next email
+    reported a number that had moved for no stated reason.
+
+    Computed here and rendered by us, never handed to the model as something
+    to summarise — the same discipline as the daily email's subject line. A
+    failure the model could smooth over in prose is not a check.
+
+    Both ends of the window are inclusive. Returns one row per check, always
+    all of them, so a passing week records the pass rather than an absence.
+
+    **Assumes the window has closed.** The job runs at 22:00, an hour after
+    the summary writes that evening's valuation, so on the schedule every day
+    in the window has one. A manual run earlier in the day will therefore
+    report today as a missing valuation — which is true rather than spurious:
+    the week being reviewed has not finished yet. Use `--as-of` for a past
+    week and the question does not arise.
+    """
+    window = {"pid": pid, "start": start, "end": end}
+
+    def scalar(sql: str, params: dict[str, Any] | None = None) -> Any:
+        found = conn.execute(sql, params or window).fetchone()
+        return found[0] if found else None
+
+    def listing(sql: str, params: dict[str, Any] | None = None) -> list[tuple]:
+        return conn.execute(sql, params or window).fetchall()
+
+    results: list[dict[str, Any]] = []
+
+    def record(check: str, ok: bool, count: int, detail: str) -> None:
+        results.append({"check": check, "ok": ok, "count": count, "detail": detail})
+
+    # 1. A day with no valuation row. The summary job writes one every evening,
+    #    including weekends, so any gap is a job that did not run.
+    missing_days = listing(
+        "SELECT d::date FROM generate_series(%(start)s::date, %(end)s::date, '1 day') d"
+        " WHERE NOT EXISTS ("
+        "   SELECT 1 FROM daily_performance p"
+        "    WHERE p.portfolio_id = %(pid)s AND p.as_of = d::date)"
+        " ORDER BY d"
+    )
+    record(
+        "missing_valuations",
+        not missing_days,
+        len(missing_days),
+        "every day has a stored valuation"
+        if not missing_days
+        else "no daily_performance row for "
+        + ", ".join(str(d[0]) for d in missing_days)
+        + " — the chart draws straight across the gap",
+    )
+
+    # 2. A day with no agent run at all. The cron is daily, weekends included,
+    #    so there is no trading calendar to reason about here.
+    no_run_days = listing(
+        "SELECT d::date FROM generate_series(%(start)s::date, %(end)s::date, '1 day') d"
+        " WHERE NOT EXISTS ("
+        "   SELECT 1 FROM agent_runs r WHERE r.started_at::date = d::date)"
+        " ORDER BY d"
+    )
+    record(
+        "missing_runs",
+        not no_run_days,
+        len(no_run_days),
+        "the agent ran every day"
+        if not no_run_days
+        else "no agent run on " + ", ".join(str(d[0]) for d in no_run_days),
+    )
+
+    # 3. A run that failed, or one still marked running long past the job
+    #    timeout — SIGKILL cannot be caught, so that row was never closed.
+    bad_runs = listing(
+        "SELECT started_at::date, status,"
+        "       (status = 'running'"
+        "        AND started_at < now() - make_interval(secs => %(timeout)s)) AS stale"
+        " FROM agent_runs"
+        " WHERE started_at::date BETWEEN %(start)s AND %(end)s"
+        "   AND (status = 'failed'"
+        "        OR (status = 'running'"
+        "            AND started_at < now() - make_interval(secs => %(timeout)s)))"
+        " ORDER BY started_at",
+        {**window, "timeout": JOB_TIMEOUT_SECONDS},
+    )
+    record(
+        "failed_runs",
+        not bad_runs,
+        len(bad_runs),
+        "no failed or abandoned runs"
+        if not bad_runs
+        else ", ".join(f"{row[0]} {'abandoned' if row[2] else row[1]}" for row in bad_runs),
+    )
+
+    # 4. A held ticker that has stopped being priced. This is the one that
+    #    silently changes the reported total: build_state drops an unpriced
+    #    holding from the valuation entirely rather than carrying it, so the
+    #    total understates and then rebounds when the price returns, with no
+    #    trade behind either move.
+    stale = listing(
+        "SELECT p.ticker, max(pr.bar_date) AS newest"
+        " FROM positions p LEFT JOIN prices pr ON pr.ticker = p.ticker"
+        " WHERE p.portfolio_id = %(pid)s"
+        " GROUP BY p.ticker"
+        " HAVING max(pr.bar_date) IS NULL"
+        "     OR max(pr.bar_date) < %(end)s::date - %(days)s",
+        {**window, "days": STALE_PRICE_DAYS},
+    )
+    record(
+        "stale_prices",
+        not stale,
+        len(stale),
+        "every holding has a recent close"
+        if not stale
+        else ", ".join(f"{t} (newest bar {n or 'none'})" for t, n in stale)
+        + " — an unpriced holding drops out of the valuation entirely",
+    )
+
+    # 5. A one-day close move large enough to suggest a corporate action. Bars
+    #    are fetched with adjustment=all, which restates the price history
+    #    across a split while `positions.quantity` stays exactly as it was — so
+    #    a split moves the reported value with no trade behind it.
+    spikes = listing(
+        "SELECT ticker, bar_date, pct FROM ("
+        "  SELECT pr.ticker, pr.bar_date,"
+        "         round((pr.close_usd / NULLIF("
+        "           lag(pr.close_usd) OVER (PARTITION BY pr.ticker ORDER BY pr.bar_date), 0)"
+        "           - 1) * 100, 1) AS pct"
+        "    FROM prices pr"
+        "   WHERE pr.ticker IN (SELECT ticker FROM positions WHERE portfolio_id = %(pid)s)"
+        ") m"
+        " WHERE m.bar_date BETWEEN %(start)s AND %(end)s AND abs(m.pct) > %(pct)s"
+        " ORDER BY abs(m.pct) DESC",
+        {**window, "pct": SPIKE_PCT},
+    )
+    record(
+        "price_spike",
+        not spikes,
+        len(spikes),
+        f"no held ticker moved more than {SPIKE_PCT}% in a day"
+        if not spikes
+        else ", ".join(f"{t} {p}% on {d}" for t, d, p in spikes)
+        + " — check for a split, which restates closes but not our quantity",
+    )
+
+    # 6. Cash conservation. Every applied trade moves cash by its notional and
+    #    nothing else does, so this reproduces the balance from the trade log
+    #    alone. It is what would catch an apply_fill regression — a fill
+    #    applied twice, or one that moved the position without the cash.
+    drift = scalar(
+        "SELECT pf.cash_gbp - ("
+        "  pf.initial_cash_gbp"
+        "  - coalesce((SELECT sum(t.notional_gbp) FROM trades t"
+        "               WHERE t.portfolio_id = %(pid)s AND t.side = 'BUY'"
+        "                 AND t.status IN ('filled', 'simulated')), 0)"
+        "  + coalesce((SELECT sum(t.notional_gbp) FROM trades t"
+        "               WHERE t.portfolio_id = %(pid)s AND t.side = 'SELL'"
+        "                 AND t.status IN ('filled', 'simulated')), 0))"
+        " FROM portfolio pf WHERE pf.id = %(pid)s"
+    )
+    drift = Decimal(drift or 0)
+    record(
+        "cash_drift",
+        abs(drift) <= CASH_TOLERANCE_GBP,
+        0 if abs(drift) <= CASH_TOLERANCE_GBP else 1,
+        "cash matches the trade log"
+        if abs(drift) <= CASH_TOLERANCE_GBP
+        else f"cash is £{drift} away from what the applied trades account for",
+    )
+
+    return results
+
+
 def save_weekly_review(
     conn: Any,
     period_start: date,

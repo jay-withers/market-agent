@@ -404,3 +404,95 @@ def test_a_week_with_no_agent_runs_is_not_reviewed_at_all(monkeypatch):
     )
 
     assert weekly.run(as_of=END, llm=_ExplodingLlm()) is None
+
+
+# ---------------------------------------------------------------------------
+# Data integrity
+#
+# The checks themselves are exercised against a real Postgres in
+# tests/test_repository.py. What matters here is that a failure actually
+# reaches a human: in the section, and in the subject line, which is the only
+# part of the email that survives being read on a lock screen.
+# ---------------------------------------------------------------------------
+
+
+def _check(name: str = "missing_valuations", ok: bool = True, detail: str = "fine") -> dict:
+    return {"check": name, "ok": ok, "count": 0 if ok else 1, "detail": detail}
+
+
+def test_every_integrity_check_is_listed_even_when_they_all_pass():
+    """A section that appears only on a bad week is one nobody learns to read,
+    and its absence then looks the same as the job having skipped it."""
+    table = _facts_table(
+        START,
+        END,
+        _metrics(integrity=[_check("missing_valuations"), _check("cash_drift")]),
+        D(500),
+        INCEPTION,
+        _limits(),
+    )
+
+    assert "## Data integrity" in table
+    assert "missing_valuations" in table
+    assert "cash_drift" in table
+    assert "FAILED" not in table
+
+
+def test_a_failed_check_is_called_out_above_the_table():
+    table = _facts_table(
+        START,
+        END,
+        _metrics(
+            integrity=[
+                _check("missing_valuations", ok=False, detail="no row for 2026-09-17"),
+                _check("cash_drift"),
+            ]
+        ),
+        D(500),
+        INCEPTION,
+        _limits(),
+    )
+
+    assert "1 of 2 checks failed" in table
+    assert "no row for 2026-09-17" in table
+    assert "**FAILED**" in table
+
+
+def test_a_failed_check_reaches_the_subject_line():
+    """A week that lost a day still produces an entirely ordinary subject
+    otherwise, which is the one case where ordinary-looking is wrong."""
+    subject = _subject(
+        END,
+        _metrics(integrity=[_check("missing_valuations", ok=False), _check("cash_drift")]),
+        [_proposal()],
+    )
+
+    assert subject.endswith("1 data check failed")
+
+
+def test_several_failed_checks_are_pluralised_in_the_subject():
+    subject = _subject(
+        END,
+        _metrics(
+            integrity=[
+                _check("missing_valuations", ok=False),
+                _check("missing_runs", ok=False),
+            ]
+        ),
+        [_proposal()],
+    )
+
+    assert subject.endswith("2 data checks failed")
+
+
+def test_a_clean_week_says_nothing_in_the_subject():
+    subject = _subject(END, _metrics(integrity=[_check("cash_drift")]), [_proposal()])
+
+    assert "data check" not in subject
+
+
+def test_the_integrity_section_is_absent_when_the_checks_did_not_run():
+    """Rather than rendering an empty table that reads as 'nothing to report'."""
+    table = _facts_table(START, END, _metrics(), D(500), INCEPTION, _limits())
+
+    assert "## Data integrity" not in table
