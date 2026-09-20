@@ -57,3 +57,7 @@ dist/
 
 # Vite build output and its cache
 apps/dashboard/dist/
+
+# Playwright output: a report and traces, regenerated on every run.
+apps/dashboard/test-results/
+apps/dashboard/playwright-report/
