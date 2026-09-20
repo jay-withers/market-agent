@@ -5,6 +5,16 @@
     "source=${localEnv:HOME}/Git,target=/Users/jay/Git,type=bind",
     "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
   ],
+  // `make demo` publishes three ports and VS Code will offer to open whichever
+  // it notices first — which is how you end up looking at the API's bare
+  // {"detail":"Not Found"} instead of the dashboard. The API has no route at
+  // "/" by design: it serves /api/*, /healthz, /readyz and /docs only.
+  "forwardPorts": [8080, 8000, 5432],
+  "portsAttributes": {
+    "8080": { "label": "MarketAgent dashboard", "onAutoForward": "openBrowser" },
+    "8000": { "label": "MarketAgent API (no page at /, try /docs)", "onAutoForward": "silent" },
+    "5432": { "label": "Postgres", "onAutoForward": "silent" }
+  },
   "customizations": {
     "vscode": {
       "extensions": [
