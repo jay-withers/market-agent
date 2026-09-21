@@ -49,10 +49,10 @@ Be strict. A false positive costs an expensive analysis call; a false negative \
 costs one day's awareness of one article."""
 
 ANALYSIS_SYSTEM = f"""You are the analysis stage of an automated paper-trading \
-system running a notional GBP 500 portfolio. Prompt version {PROMPT_VERSION}.
+system running a notional USD 100,000 portfolio. Prompt version {PROMPT_VERSION}.
 
 Recommend BUY, SELL or HOLD for the single ticker given, with a confidence \
-between 0 and 1 and, for BUY or SELL, a suggested size in GBP.
+between 0 and 1 and, for BUY or SELL, a suggested size in USD.
 
 Three things to understand about your role:
 
@@ -70,7 +70,7 @@ against your own recommendation in the risks field."""
 
 
 NARRATIVE_SYSTEM = f"""You write the daily email for an automated paper-trading \
-experiment running a notional GBP 500. Prompt version {PROMPT_VERSION}.
+experiment running a notional USD 100,000. Prompt version {PROMPT_VERSION}.
 
 You are given the day's figures as a table. They are already correct and are \
 shown to the reader above your text, so do not repeat them and never restate a \
@@ -89,7 +89,7 @@ reason about why it held positions on a day it never ran."""
 
 
 REVIEW_SYSTEM = f"""You review one week of an automated paper-trading \
-experiment running a notional GBP 500, and propose what to change. Prompt \
+experiment running a notional USD 100,000, and propose what to change. Prompt \
 version {PROMPT_VERSION}.
 
 The system you are reviewing has three parts: an LLM that recommends \

@@ -53,22 +53,26 @@ def portfolio_id(conn: Any, name: str = DEFAULT_PORTFOLIO) -> int:
 
 
 def load_cash(conn: Any, pid: int) -> Decimal:
-    row = conn.execute("SELECT cash_gbp FROM portfolio WHERE id = %s", (pid,)).fetchone()
+    row = conn.execute("SELECT cash_usd FROM portfolio WHERE id = %s", (pid,)).fetchone()
     return money(row[0])
 
 
-def load_positions(conn: Any, pid: int) -> list[tuple[str, Decimal, Decimal, Decimal]]:
-    """Holdings as (ticker, quantity, avg_cost_usd, avg_cost_gbp).
+def save_display_fx(conn: Any, pid: int, rate: Decimal, as_of: date) -> None:
+    """Store the USD-per-GBP rate used only for optional dashboard display."""
+    conn.execute(
+        "UPDATE portfolio SET display_gbp_usd=%s, display_fx_as_of=%s WHERE id=%s",
+        (rate, as_of, pid),
+    )
 
-    Deliberately not returning a `Position`: that carries `value_gbp`, which is
-    a mark to the latest close and so cannot come from this table alone.
-    """
+
+def load_positions(conn: Any, pid: int) -> list[tuple[str, Decimal, Decimal]]:
+    """Holdings as (ticker, quantity, USD average entry price)."""
     rows = conn.execute(
-        "SELECT ticker, quantity, avg_cost_usd, avg_cost_gbp FROM positions "
-        "WHERE portfolio_id = %s AND quantity > 0 ORDER BY ticker",
+        "SELECT ticker, quantity, avg_cost_usd FROM positions "
+        "WHERE portfolio_id = %s AND quantity <> 0 ORDER BY ticker",
         (pid,),
     ).fetchall()
-    return [(r[0], Decimal(r[1]), Decimal(r[2]), Decimal(r[3])) for r in rows]
+    return [(r[0], Decimal(r[1]), Decimal(r[2])) for r in rows]
 
 
 def trades_today(conn: Any, pid: int) -> int:
@@ -103,7 +107,7 @@ def recent_decisions(conn: Any, ticker: str, limit: int) -> list[dict[str, Any]]
     with conn.cursor(row_factory=dict_row) as cur:
         return cur.execute(
             "SELECT d.decided_at::date AS on_date, d.action, d.confidence,"
-            "   d.recommended_amount_gbp, d.approved_amount_gbp,"
+            "   d.recommended_amount_usd, d.approved_amount_usd,"
             "   d.risk_verdict->>'binding_constraint' AS binding_constraint,"
             "   t.status AS trade_status"
             " FROM ai_decisions d"
@@ -154,41 +158,34 @@ def spend(conn: Any, as_of: date) -> dict[str, Any]:
         ).fetchone()
 
 
-def build_state(
-    conn: Any, pid: int, closes: dict[str, Bar], rate_gbp_usd: Decimal
-) -> tuple[PortfolioState, list[str]]:
-    """The portfolio as the risk engine and the model should see it.
-
-    Returns the state plus the tickers whose price is missing. A holding with no
-    current price cannot be valued, and valuing it at zero would understate
-    exposure and let the engine approve a buy it should refuse — so the caller
-    is told rather than quietly given a wrong total.
-    """
+def build_state(conn: Any, pid: int, closes: dict[str, Bar]) -> tuple[PortfolioState, list[str]]:
+    """Use broker marks when synchronized, otherwise local closes for simulations."""
     positions = []
     unpriced = []
-    for ticker, quantity, _avg_usd, avg_gbp in load_positions(conn, pid):
-        bar = closes.get(ticker)
-        if bar is None:
-            unpriced.append(ticker)
-            continue
+    rows = conn.execute(
+        "SELECT ticker, quantity, avg_cost_usd, market_value_usd FROM positions "
+        "WHERE portfolio_id=%s AND quantity <> 0 ORDER BY ticker",
+        (pid,),
+    ).fetchall()
+    for ticker, quantity, average, market_value in rows:
+        if market_value is None:
+            bar = closes.get(ticker)
+            if bar is None:
+                unpriced.append(ticker)
+                continue
+            market_value = quantity * bar.close_usd
         positions.append(
             Position(
                 ticker=ticker,
                 quantity=quantity,
-                value_gbp=money(quantity * bar.close_usd / rate_gbp_usd),
-                avg_cost_gbp=money(avg_gbp),
+                value_usd=money(market_value),
+                avg_cost_usd=money(average),
             )
         )
-
-    return (
-        PortfolioState(cash_gbp=load_cash(conn, pid), positions=tuple(positions)),
-        unpriced,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Market data
-# ---------------------------------------------------------------------------
+    row = conn.execute("SELECT equity_usd FROM portfolio WHERE id=%s", (pid,)).fetchone()
+    return PortfolioState(
+        cash_usd=load_cash(conn, pid), positions=tuple(positions), equity_usd=row[0]
+    ), unpriced
 
 
 def save_prices(conn: Any, bars: list[Bar]) -> int:
@@ -342,7 +339,7 @@ def save_decision(
     """
     row = conn.execute(
         "INSERT INTO ai_decisions (run_id, ticker, action, confidence, reasoning, risks,"
-        "   model, prompt_version, news_ids, recommended_amount_gbp, approved_amount_gbp,"
+        "   model, prompt_version, news_ids, recommended_amount_usd, approved_amount_usd,"
         "   portfolio_state, risk_verdict, prompt_context, input_tokens, output_tokens)"
         " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
         " RETURNING id",
@@ -356,8 +353,8 @@ def save_decision(
             model,
             prompt_version,
             news_ids,
-            money(rec.suggested_amount_gbp) if rec.suggested_amount_gbp else None,
-            verdict.approved_amount_gbp,
+            money(rec.suggested_amount_usd) if rec.suggested_amount_usd else None,
+            verdict.approved_amount_usd,
             # mode="json" so Decimals serialise as strings rather than failing:
             # jsonb has no decimal type, and float would defeat the point of
             # storing exactly what the model was shown.
@@ -377,10 +374,7 @@ def save_trade(
     decision_id: int,
     ticker: str,
     side: str,
-    notional_gbp: Decimal,
     notional_usd: Decimal,
-    fx_rate: Decimal,
-    fx_rate_as_of: date,
     status: str,
     dry_run: bool,
     client_order_id: str,
@@ -392,17 +386,11 @@ def save_trade(
 ) -> int:
     row = conn.execute(
         "INSERT INTO trades (portfolio_id, decision_id, ticker, side, quantity, price_usd,"
-        "   notional_usd, notional_gbp, fx_rate_gbp_usd, fx_rate_as_of, broker,"
-        "   broker_order_id, client_order_id, status, dry_run, submitted_at, filled_at)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'alpaca', %s, %s, %s, %s, %s, %s)"
-        # client_order_id is deterministic per decision, so a resubmission
-        # updates the existing row instead of creating a second trade for one
-        # decision.
-        " ON CONFLICT (client_order_id) DO UPDATE SET"
-        "   status = EXCLUDED.status, quantity = EXCLUDED.quantity,"
-        "   price_usd = EXCLUDED.price_usd, broker_order_id = EXCLUDED.broker_order_id,"
-        "   filled_at = EXCLUDED.filled_at"
-        " RETURNING id",
+        " notional_usd, broker_order_id, client_order_id, status, dry_run, submitted_at, filled_at)"
+        " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+        " ON CONFLICT (client_order_id) DO UPDATE SET status=EXCLUDED.status,"
+        " quantity=EXCLUDED.quantity, price_usd=EXCLUDED.price_usd,"
+        " broker_order_id=EXCLUDED.broker_order_id, filled_at=EXCLUDED.filled_at RETURNING id",
         (
             pid,
             decision_id,
@@ -411,9 +399,6 @@ def save_trade(
             quantity,
             price_usd,
             notional_usd,
-            notional_gbp,
-            fx_rate,
-            fx_rate_as_of,
             broker_order_id,
             client_order_id,
             status,
@@ -431,101 +416,39 @@ def apply_fill(
     ticker: str,
     side: str,
     quantity: Decimal,
-    notional_gbp: Decimal,
+    notional_usd: Decimal,
     price_usd: Decimal,
-    price_gbp: Decimal,
 ) -> None:
-    """Move cash and the position to reflect a fill.
-
-    Only called for a *filled* order — a submission still resting at the broker
-    has moved nothing. Our tables are the ledger, so this is what makes the
-    GBP 500 figure move; Alpaca's own balance describes a different portfolio.
-    """
+    """Apply a simulated fill. Paper account balances come only from broker sync."""
     signed = quantity if side == "BUY" else -quantity
-    cash_delta = -notional_gbp if side == "BUY" else notional_gbp
-
+    cash_delta = -notional_usd if side == "BUY" else notional_usd
     conn.execute(
-        "UPDATE portfolio SET cash_gbp = cash_gbp + %s, updated_at = now() WHERE id = %s",
+        "UPDATE portfolio SET cash_usd=cash_usd+%s, equity_usd=NULL, updated_at=now() WHERE id=%s",
         (cash_delta, pid),
     )
-
     conn.execute(
-        "INSERT INTO positions (portfolio_id, ticker, quantity, avg_cost_usd, avg_cost_gbp)"
-        " VALUES (%s, %s, %s, %s, %s)"
-        # Weighted average cost on a buy; on a sell the average is unchanged
-        # and only the quantity falls, which is what makes realised and
-        # unrealised return separable later.
-        " ON CONFLICT (portfolio_id, ticker) DO UPDATE SET"
-        "   avg_cost_usd = CASE WHEN %s > 0 THEN"
-        "     (positions.avg_cost_usd * positions.quantity + %s * %s)"
-        "     / NULLIF(positions.quantity + %s, 0)"
-        "   ELSE positions.avg_cost_usd END,"
-        "   avg_cost_gbp = CASE WHEN %s > 0 THEN"
-        "     (positions.avg_cost_gbp * positions.quantity + %s)"
-        "     / NULLIF(positions.quantity + %s, 0)"
-        "   ELSE positions.avg_cost_gbp END,"
-        "   quantity = positions.quantity + %s,"
-        "   updated_at = now()",
-        (
-            pid,
-            ticker,
-            signed,
-            price_usd,
-            price_gbp,
-            signed,
-            price_usd,
-            quantity,
-            signed,
-            signed,
-            notional_gbp,
-            signed,
-            signed,
-        ),
+        "INSERT INTO positions (portfolio_id,ticker,quantity,avg_cost_usd) VALUES (%s,%s,%s,%s)"
+        " ON CONFLICT (portfolio_id,ticker) DO UPDATE SET"
+        " avg_cost_usd=CASE WHEN %s>0 THEN"
+        " (positions.avg_cost_usd*positions.quantity+%s)/NULLIF(positions.quantity+%s,0)"
+        " ELSE positions.avg_cost_usd END, quantity=positions.quantity+%s,"
+        " market_value_usd=NULL, updated_at=now()",
+        (pid, ticker, signed, price_usd, signed, notional_usd, signed, signed),
     )
-
-    # A fully closed position is deleted rather than left at zero, so
-    # `load_positions` and the concentration cap do not have to filter it out.
     conn.execute(
-        "DELETE FROM positions WHERE portfolio_id = %s AND ticker = %s AND quantity <= 0",
-        (pid, ticker),
+        "DELETE FROM positions WHERE portfolio_id=%s AND ticker=%s AND quantity<=0", (pid, ticker)
     )
-
-
-# ---------------------------------------------------------------------------
-# Reconciliation and the daily rollup, both owned by the summary job
-# ---------------------------------------------------------------------------
 
 
 def unreconciled_trades(conn: Any, pid: int) -> list[dict[str, Any]]:
-    """Trades submitted to the broker whose outcome we do not yet know.
-
-    The agent runs at 06:00 UTC and the market opens at 14:30, so a scheduled
-    run's orders are still resting when it finishes. This is the queue the
-    summary job works through at 21:00.
-
-    Dry-run trades are excluded: they never reached a broker, so there is
-    nothing to ask about.
-    """
-    rows = conn.execute(
-        "SELECT id, ticker, side, client_order_id, notional_gbp, fx_rate_gbp_usd"
-        " FROM trades"
-        " WHERE portfolio_id = %s AND dry_run = false"
-        "   AND client_order_id IS NOT NULL"
-        "   AND status IN ('pending', 'submitted', 'partially_filled')"
-        " ORDER BY created_at",
-        (pid,),
-    ).fetchall()
-    return [
-        {
-            "id": r[0],
-            "ticker": r[1],
-            "side": r[2],
-            "client_order_id": r[3],
-            "notional_gbp": Decimal(r[4]),
-            "fx_rate_gbp_usd": Decimal(r[5]),
-        }
-        for r in rows
-    ]
+    """Orders whose latest fill status needs checking, including partial cancellations."""
+    with conn.cursor(row_factory=dict_row) as cur:
+        return cur.execute(
+            "SELECT id,ticker,side,client_order_id,notional_usd FROM trades "
+            "WHERE portfolio_id=%s AND NOT dry_run AND client_order_id IS NOT NULL "
+            "AND status IN ('pending','submitted','partially_filled') ORDER BY created_at",
+            (pid,),
+        ).fetchall()
 
 
 def update_trade_outcome(
@@ -550,26 +473,8 @@ def portfolio_inception(conn: Any, pid: int) -> date:
 
 
 def initial_cash(conn: Any, pid: int) -> Decimal:
-    row = conn.execute("SELECT initial_cash_gbp FROM portfolio WHERE id = %s", (pid,)).fetchone()
+    row = conn.execute("SELECT initial_cash_usd FROM portfolio WHERE id = %s", (pid,)).fetchone()
     return money(row[0])
-
-
-def last_fx_rate(conn: Any, pid: int) -> tuple[Decimal, date] | None:
-    """The most recent GBP/USD rate already stored, and the day it is for.
-
-    The summary falls back to this when Frankfurter is unreachable, so a day's
-    valuation survives an upstream outage. `fx_rate_as_of` is required rather
-    than defaulted: a rate whose age cannot be stated is worse than none, since
-    the whole point of the fallback is that the staleness stays visible.
-    Nullable because `002` added the column to existing rows.
-    """
-    row = conn.execute(
-        "SELECT fx_rate_gbp_usd, fx_rate_as_of FROM daily_performance"
-        " WHERE portfolio_id = %s AND fx_rate_as_of IS NOT NULL"
-        " ORDER BY as_of DESC LIMIT 1",
-        (pid,),
-    ).fetchone()
-    return (Decimal(row[0]), row[1]) if row else None
 
 
 def close_on(conn: Any, ticker: str, on_or_after: date) -> Decimal | None:
@@ -590,38 +495,19 @@ def save_daily_performance(
     conn: Any,
     pid: int,
     as_of: date,
-    cash_gbp: Decimal,
-    positions_value_gbp: Decimal,
-    total_value_gbp: Decimal,
-    pnl_gbp: Decimal,
+    cash_usd: Decimal,
+    positions_value_usd: Decimal,
+    total_value_usd: Decimal,
+    pnl_usd: Decimal,
     pnl_pct: Decimal,
-    fx_rate: Decimal,
-    fx_rate_as_of: date,
 ) -> None:
     conn.execute(
-        "INSERT INTO daily_performance (portfolio_id, as_of, cash_gbp, positions_value_gbp,"
-        "   total_value_gbp, pnl_gbp, pnl_pct, fx_rate_gbp_usd, fx_rate_as_of)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
-        # Re-running the summary for a day overwrites its row rather than
-        # failing, so a retry after a mail outage is safe.
-        " ON CONFLICT (portfolio_id, as_of) DO UPDATE SET"
-        "   cash_gbp = EXCLUDED.cash_gbp,"
-        "   positions_value_gbp = EXCLUDED.positions_value_gbp,"
-        "   total_value_gbp = EXCLUDED.total_value_gbp,"
-        "   pnl_gbp = EXCLUDED.pnl_gbp, pnl_pct = EXCLUDED.pnl_pct,"
-        "   fx_rate_gbp_usd = EXCLUDED.fx_rate_gbp_usd,"
-        "   fx_rate_as_of = EXCLUDED.fx_rate_as_of, computed_at = now()",
-        (
-            pid,
-            as_of,
-            cash_gbp,
-            positions_value_gbp,
-            total_value_gbp,
-            pnl_gbp,
-            pnl_pct,
-            fx_rate,
-            fx_rate_as_of,
-        ),
+        "INSERT INTO daily_performance (portfolio_id,as_of,cash_usd,positions_value_usd,"
+        "total_value_usd,pnl_usd,pnl_pct) VALUES (%s,%s,%s,%s,%s,%s,%s)"
+        " ON CONFLICT (portfolio_id,as_of) DO UPDATE SET cash_usd=EXCLUDED.cash_usd,"
+        "positions_value_usd=EXCLUDED.positions_value_usd,total_value_usd=EXCLUDED.total_value_usd,"
+        "pnl_usd=EXCLUDED.pnl_usd,pnl_pct=EXCLUDED.pnl_pct,computed_at=now()",
+        (pid, as_of, cash_usd, positions_value_usd, total_value_usd, pnl_usd, pnl_pct),
     )
 
 
@@ -630,16 +516,11 @@ def save_benchmarks(conn: Any, points: list[Any]) -> int:
         return 0
     with conn.cursor() as cur:
         cur.executemany(
-            "INSERT INTO benchmarks (symbol, as_of, close_usd, fx_rate_gbp_usd, value_gbp,"
-            "                        source)"
-            " VALUES (%s, %s, %s, %s, %s, %s)"
-            " ON CONFLICT (symbol, as_of) DO UPDATE SET"
-            "   close_usd = EXCLUDED.close_usd, value_gbp = EXCLUDED.value_gbp,"
-            "   fx_rate_gbp_usd = EXCLUDED.fx_rate_gbp_usd, fetched_at = now()",
-            [
-                (p.symbol, p.as_of, p.close_usd, p.fx_rate_gbp_usd, p.value_gbp, p.source)
-                for p in points
-            ],
+            "INSERT INTO benchmarks (symbol,as_of,close_usd,value_usd,source) "
+            "VALUES (%s,%s,%s,%s,%s)"
+            " ON CONFLICT (symbol,as_of) DO UPDATE SET close_usd=EXCLUDED.close_usd,"
+            "value_usd=EXCLUDED.value_usd,fetched_at=now()",
+            [(p.symbol, p.as_of, p.close_usd, p.value_usd, p.source) for p in points],
         )
     return len(points)
 
@@ -661,20 +542,20 @@ def day_activity(conn: Any, pid: int, as_of: date) -> dict[str, Any]:
     ).fetchall()
 
     decisions = conn.execute(
-        "SELECT ticker, action, confidence, approved_amount_gbp, reasoning,"
+        "SELECT ticker, action, confidence, approved_amount_usd, reasoning,"
         "       risk_verdict->>'binding_constraint'"
         " FROM ai_decisions WHERE decided_at::date = %s ORDER BY ticker",
         (as_of,),
     ).fetchall()
 
     trades = conn.execute(
-        "SELECT ticker, side, status, notional_gbp, quantity, price_usd"
+        "SELECT ticker, side, status, notional_usd, quantity, price_usd"
         " FROM trades WHERE portfolio_id = %s AND created_at::date = %s ORDER BY id",
         (pid, as_of),
     ).fetchall()
 
     holdings = conn.execute(
-        "SELECT p.ticker, p.quantity, p.avg_cost_gbp, lc.close_usd"
+        "SELECT p.ticker, p.quantity, p.avg_cost_usd, lc.close_usd"
         " FROM positions p"
         " LEFT JOIN LATERAL ("
         "   SELECT close_usd FROM prices WHERE ticker = p.ticker ORDER BY bar_date DESC LIMIT 1"
@@ -816,7 +697,7 @@ def week_metrics(conn: Any, pid: int, start: date, end: date) -> dict[str, Any]:
     trades = rows(
         "SELECT status, count(*) AS trades,"
         "       count(*) FILTER (WHERE dry_run) AS simulated,"
-        "       coalesce(sum(notional_gbp), 0) AS notional_gbp"
+        "       coalesce(sum(notional_usd), 0) AS notional_usd"
         " FROM trades WHERE portfolio_id = %(pid)s"
         "   AND created_at::date BETWEEN %(start)s AND %(end)s"
         " GROUP BY status ORDER BY status"
@@ -842,7 +723,7 @@ def week_metrics(conn: Any, pid: int, start: date, end: date) -> dict[str, Any]:
     )
 
     valuation = one(
-        "SELECT as_of, total_value_gbp, cash_gbp, positions_value_gbp, pnl_gbp, pnl_pct"
+        "SELECT as_of, total_value_usd, cash_usd, positions_value_usd, pnl_usd, pnl_pct"
         " FROM daily_performance WHERE portfolio_id = %(pid)s"
         "   AND as_of BETWEEN %(start)s AND %(end)s"
         " ORDER BY as_of DESC LIMIT 1"
@@ -852,19 +733,19 @@ def week_metrics(conn: Any, pid: int, start: date, end: date) -> dict[str, Any]:
     # measured against. Absent in the experiment's first week, and the caller
     # substitutes the notional rather than reporting a change of nothing.
     opening = one(
-        "SELECT total_value_gbp FROM daily_performance WHERE portfolio_id = %(pid)s"
+        "SELECT total_value_usd FROM daily_performance WHERE portfolio_id = %(pid)s"
         "   AND as_of < %(start)s ORDER BY as_of DESC LIMIT 1"
     )
 
     # A benchmark with no point inside the window is absent from this list, not
-    # reported flat: £500 unchanged reads as "the index did nothing", which is a
+    # reported flat: an unchanged balance reads as "the index did nothing", which is a
     # different and wrong claim from "we have no data".
     benchmarks = rows(
         "SELECT b.symbol,"
-        "       (SELECT value_gbp FROM benchmarks n WHERE n.symbol = b.symbol"
-        "          AND n.as_of <= %(end)s ORDER BY n.as_of DESC LIMIT 1) AS value_gbp,"
-        "       (SELECT value_gbp FROM benchmarks o WHERE o.symbol = b.symbol"
-        "          AND o.as_of < %(start)s ORDER BY o.as_of DESC LIMIT 1) AS opening_gbp"
+        "       (SELECT value_usd FROM benchmarks n WHERE n.symbol = b.symbol"
+        "          AND n.as_of <= %(end)s ORDER BY n.as_of DESC LIMIT 1) AS value_usd,"
+        "       (SELECT value_usd FROM benchmarks o WHERE o.symbol = b.symbol"
+        "          AND o.as_of < %(start)s ORDER BY o.as_of DESC LIMIT 1) AS opening_usd"
         " FROM benchmarks b WHERE b.as_of BETWEEN %(start)s AND %(end)s"
         " GROUP BY b.symbol ORDER BY b.symbol"
     )
@@ -887,7 +768,7 @@ def week_metrics(conn: Any, pid: int, start: date, end: date) -> dict[str, Any]:
         "trades": trades,
         "tickers": tickers,
         "valuation": valuation,
-        "opening_total_gbp": opening["total_value_gbp"] if opening else None,
+        "opening_total_usd": opening["total_value_usd"] if opening else None,
         "benchmarks": benchmarks,
         "summaries": summaries or {},
     }
@@ -906,7 +787,7 @@ INTEGRITY_CHECKS = (
     "failed_runs",
     "stale_prices",
     "price_spike",
-    "cash_drift",
+    "broker_sync",
 )
 
 # A held ticker whose newest bar is older than this has stopped being priced.
@@ -923,7 +804,7 @@ SPIKE_PCT = 25
 # Cash is NUMERIC(18,4) and every term is stored at that scale, so an exact
 # match is reasonable to expect; a penny of tolerance keeps a rounding change
 # from crying wolf.
-CASH_TOLERANCE_GBP = Decimal("0.01")
+CASH_TOLERANCE_USD = Decimal("0.01")
 
 
 def week_integrity(conn: Any, pid: int, start: date, end: date) -> list[dict[str, Any]]:
@@ -1074,29 +955,17 @@ def week_integrity(conn: Any, pid: int, start: date, end: date) -> list[dict[str
         + " — check for a split, which restates closes but not our quantity",
     )
 
-    # 6. Cash conservation. Every applied trade moves cash by its notional and
-    #    nothing else does, so this reproduces the balance from the trade log
-    #    alone. It is what would catch an apply_fill regression — a fill
-    #    applied twice, or one that moved the position without the cash.
-    drift = scalar(
-        "SELECT pf.cash_gbp - ("
-        "  pf.initial_cash_gbp"
-        "  - coalesce((SELECT sum(t.notional_gbp) FROM trades t"
-        "               WHERE t.portfolio_id = %(pid)s AND t.side = 'BUY'"
-        "                 AND t.status IN ('filled', 'simulated')), 0)"
-        "  + coalesce((SELECT sum(t.notional_gbp) FROM trades t"
-        "               WHERE t.portfolio_id = %(pid)s AND t.side = 'SELL'"
-        "                 AND t.status IN ('filled', 'simulated')), 0))"
-        " FROM portfolio pf WHERE pf.id = %(pid)s"
+    # Broker account state is authoritative, including activity outside this agent.
+    age = scalar(
+        "SELECT extract(epoch FROM (now()-broker_synced_at)) FROM portfolio WHERE id=%(pid)s"
     )
-    drift = Decimal(drift or 0)
     record(
-        "cash_drift",
-        abs(drift) <= CASH_TOLERANCE_GBP,
-        0 if abs(drift) <= CASH_TOLERANCE_GBP else 1,
-        "cash matches the trade log"
-        if abs(drift) <= CASH_TOLERANCE_GBP
-        else f"cash is £{drift} away from what the applied trades account for",
+        "broker_sync",
+        age is not None and age < 86400,
+        0 if age is not None and age < 86400 else 1,
+        "broker snapshot is less than a day old"
+        if age is not None and age < 86400
+        else "broker snapshot missing or older than a day",
     )
 
     return results
@@ -1173,3 +1042,57 @@ def last_recommendations(conn: Any, before: date) -> list[dict[str, Any]]:
         (before,),
     ).fetchone()
     return list(row[0]) if row and row[0] else []
+
+
+def save_broker_snapshot(conn: Any, pid: int, snapshot: Any) -> None:
+    """Atomically replace the account mirror, retaining its original equity baseline."""
+    account = snapshot.account
+    existing = conn.execute(
+        "SELECT broker_account_id FROM portfolio WHERE id=%s FOR UPDATE", (pid,)
+    ).fetchone()
+    if existing is None:
+        raise LookupError("Portfolio does not exist")
+    if existing[0] is not None and existing[0] != account.id:
+        raise RuntimeError("Alpaca account changed; start a separate experiment")
+    conn.execute(
+        "UPDATE portfolio SET cash_usd=%s,equity_usd=%s,buying_power_usd=%s,"
+        "initial_cash_usd=CASE WHEN broker_account_id IS NULL THEN %s "
+        "ELSE initial_cash_usd END,"
+        "created_at=CASE WHEN broker_account_id IS NULL THEN now() "
+        "ELSE created_at END,"
+        "broker_account_id=%s,broker_synced_at=now(),updated_at=now(),"
+        "base_currency='USD' WHERE id=%s",
+        (
+            account.cash_usd,
+            account.equity_usd,
+            account.buying_power_usd,
+            account.equity_usd,
+            account.id,
+            pid,
+        ),
+    )
+    tickers = []
+    for position in snapshot.positions:
+        tickers.append(position.ticker)
+        # A manual position is mirrored without silently expanding the trading allowlist.
+        conn.execute(
+            "INSERT INTO companies(ticker,name,is_active) VALUES (%s,%s,false) "
+            "ON CONFLICT(ticker) DO NOTHING",
+            (position.ticker, position.ticker),
+        )
+        conn.execute(
+            "INSERT INTO positions(portfolio_id,ticker,quantity,avg_cost_usd,market_value_usd) "
+            "VALUES (%s,%s,%s,%s,%s) ON CONFLICT(portfolio_id,ticker) DO UPDATE SET "
+            "quantity=EXCLUDED.quantity,avg_cost_usd=EXCLUDED.avg_cost_usd,"
+            "market_value_usd=EXCLUDED.market_value_usd,updated_at=now()",
+            (
+                pid,
+                position.ticker,
+                position.quantity,
+                position.avg_entry_price_usd,
+                position.market_value_usd,
+            ),
+        )
+    conn.execute(
+        "DELETE FROM positions WHERE portfolio_id=%s AND NOT(ticker=ANY(%s))", (pid, tickers)
+    )

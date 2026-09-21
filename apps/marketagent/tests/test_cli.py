@@ -1,4 +1,4 @@
-"""Tests for the entrypoint the four workloads share."""
+"""Tests for the entrypoint the five workloads share."""
 
 from __future__ import annotations
 

@@ -5,8 +5,8 @@
 # The API only reads Postgres, so it genuinely runs in isolation. The agent
 # still calls Alpaca for prices and news, Frankfurter for the rate, and
 # Anthropic for both model stages — real requests, and the Anthropic ones are
-# billed. What it will not do is place an order: DRY_RUN is true here, so the
-# dry-run broker records what it would have submitted.
+# billed. The agent submits Alpaca paper orders by default; set DRY_RUN=true
+# to record simulated fills without submitting orders.
 #
 # Secrets come from Key Vault, not from a file. The image has no `az`, so it
 # cannot authenticate on its own — instead `make run-agent` fetches a
@@ -67,7 +67,7 @@ services:
       POSTGRES_DATABASE: marketagent
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: local
-      DRY_RUN: "true"
+      DRY_RUN: "${DRY_RUN:-false}"
       LOG_LEVEL: INFO
       # Empty unless the caller exports them; settings.secret() reads an
       # environment variable first either way, so an empty vault URI simply
@@ -123,7 +123,7 @@ services:
       POSTGRES_DATABASE: marketagent
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: local
-      DRY_RUN: "true"
+      DRY_RUN: "${DRY_RUN:-false}"
       KEY_VAULT_URI: "${KEY_VAULT_URI:-}"
       AZURE_KEYVAULT_TOKEN: "${AZURE_KEYVAULT_TOKEN:-}"
     env_file:

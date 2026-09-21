@@ -59,10 +59,9 @@ class Settings(BaseSettings):
 
     applicationinsights_connection_string: str = ""
 
-    # Runs the full decision path and persists everything without submitting an
-    # order. The safe first deploy, so it defaults on: a mistake here costs
-    # nothing, whereas the reverse default trades on the first run.
-    dry_run: bool = True
+    # Paper orders are submitted by default. Set DRY_RUN=true to record
+    # simulated fills without sending orders to Alpaca.
+    dry_run: bool = False
 
     api_require_token: bool = False
     # The dashboard's origin, for CORS. Terraform passes the dashboard app's

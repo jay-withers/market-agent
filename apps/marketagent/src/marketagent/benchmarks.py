@@ -1,7 +1,7 @@
 """The comparison arms of the experiment.
 
 The question is not "did the AI make money" but "did it beat the alternatives",
-so every one of these tracks the same notional £500 from the same start date.
+so every one of these tracks the same starting account equity from the same start date.
 
 Alpaca only covers US-listed instruments, so the index arms are proxies and are
 labelled as such: `EWU` is a UK equity ETF, **not** the FTSE 100. Saying so is
@@ -32,38 +32,33 @@ class BenchmarkPoint:
 
     symbol: str
     as_of: date
-    value_gbp: Decimal
+    value_usd: Decimal
     close_usd: Decimal | None = None
-    fx_rate_gbp_usd: Decimal | None = None
     source: str = "alpaca"
 
 
-def cash_value(notional_gbp: Decimal, apr_pct: Decimal, days_held: int) -> Decimal:
+def cash_value(notional_usd: Decimal, apr_pct: Decimal, days_held: int) -> Decimal:
     """The savings-account arm, compounded daily.
 
     Daily rather than annual compounding because the comparison is read every
     day and a step function once a year would make the chart nonsense.
     """
     if days_held <= 0:
-        return money(notional_gbp)
+        return money(notional_usd)
     daily_rate = apr_pct / 100 / DAYS_PER_YEAR
-    return money(notional_gbp * (1 + daily_rate) ** days_held)
+    return money(notional_usd * (1 + daily_rate) ** days_held)
 
 
 def index_value(
-    notional_gbp: Decimal, close_now_usd: Decimal, close_at_inception_usd: Decimal
+    notional_usd: Decimal, close_now_usd: Decimal, close_at_inception_usd: Decimal
 ) -> Decimal:
     """What the notional would be worth having bought this index at inception.
 
-    A pure ratio, so the currency cancels: buying $x of SPY with £500 and
-    selling it later gives the same GBP return whichever rate is used, provided
-    the same rate is used on both sides. That is why this takes no FX argument
-    — an earlier version applied today's rate to both ends and produced a number
-    that moved with sterling rather than with the index.
+    USD notional multiplied by the index price ratio since inception.
     """
     if close_at_inception_usd <= 0:
-        return money(notional_gbp)
-    return money(notional_gbp * close_now_usd / close_at_inception_usd)
+        return money(notional_usd)
+    return money(notional_usd * close_now_usd / close_at_inception_usd)
 
 
 def fetch_benchmark_bars(symbols: list[str], days: int = 7, client: Any = None) -> list[Bar]:
@@ -78,7 +73,7 @@ def build(
     symbols: list[str],
     bars: list[Bar],
     inception_closes: dict[str, Decimal],
-    notional_gbp: Decimal,
+    notional_usd: Decimal,
     apr_pct: Decimal,
     days_held: int,
     as_of: date,
@@ -86,7 +81,7 @@ def build(
     """One point per benchmark for `as_of`.
 
     A symbol with no current price or no inception price is skipped rather than
-    plotted at the notional: a flat line at £500 would read as "the index did
+    plotted at the notional: a flat line at the starting value would read as "the index did
     nothing", which is a different and wrong claim from "we have no data".
     """
     closes = latest_close(bars)
@@ -94,7 +89,7 @@ def build(
         BenchmarkPoint(
             symbol=CASH_SYMBOL,
             as_of=as_of,
-            value_gbp=cash_value(notional_gbp, apr_pct, days_held),
+            value_usd=cash_value(notional_usd, apr_pct, days_held),
             source="computed",
         )
     ]
@@ -110,7 +105,7 @@ def build(
             BenchmarkPoint(
                 symbol=symbol,
                 as_of=as_of,
-                value_gbp=index_value(notional_gbp, bar.close_usd, start),
+                value_usd=index_value(notional_usd, bar.close_usd, start),
                 close_usd=bar.close_usd,
             )
         )

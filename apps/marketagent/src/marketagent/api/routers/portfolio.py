@@ -1,4 +1,4 @@
-"""What the £500 is worth, and how it got there."""
+"""What the paper account is worth, and how it got there."""
 
 from __future__ import annotations
 

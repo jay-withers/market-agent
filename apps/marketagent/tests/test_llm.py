@@ -65,7 +65,7 @@ def recommendation(**overrides) -> Recommendation:
         ticker="NVDA",
         action="BUY",
         confidence=0.8,
-        suggested_amount_gbp=D(50),
+        suggested_amount_usd=D(50),
         reasoning="Datacentre revenue beat.",
         risks="Concentration.",
     )

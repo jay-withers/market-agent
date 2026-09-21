@@ -28,14 +28,14 @@ from ..broker.alpaca import AlpacaBroker
 from ..broker.base import Broker
 from ..broker.dryrun import DryRunBroker
 from ..db import pool
-from ..fx import FxRate, fetch_gbp_usd
 from ..llm.anthropic_provider import AnthropicLlm
 from ..llm.base import PROMPT_VERSION, Llm, Usage
 from ..marketdata import Bar, fetch_daily_bars, latest_close
-from ..models import Recommendation, money
+from ..models import Recommendation
 from ..news import Article, fetch_news
 from ..risk import evaluate
 from ..settings import settings
+from ..sync import risk_state, synchronize
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +115,18 @@ def run(
         if not tickers:
             raise RuntimeError("no active tickers — run sql/003-seed-watchlist.sql")
 
-        rate = fetch_gbp_usd()
+        paper = not isinstance(broker, DryRunBroker)
+        if paper:
+            synchronize(pid, broker, pool())
+        else:
+            with pool().connection() as conn:
+                synced = conn.execute(
+                    "SELECT broker_account_id FROM portfolio WHERE id=%s", (pid,)
+                ).fetchone()[0]
+            if synced:
+                raise RuntimeError(
+                    "Use an isolated database for dry runs; this portfolio mirrors Alpaca"
+                )
         bars = fetch_daily_bars(tickers, days=PRICE_HISTORY_DAYS)
         closes = latest_close(bars)
         articles = fetch_news(tickers, hours=NEWS_WINDOW_HOURS)
@@ -169,8 +180,15 @@ def run(
                 logger.warning("%s: no price, skipping", ticker)
                 continue
 
+            snapshot = synchronize(pid, broker, pool()) if paper else None
+            if snapshot and any(o.ticker == ticker for o in snapshot.open_orders):
+                logger.info("%s: an order is already open; skipping", ticker)
+                continue
             with pool().connection() as conn:
-                state, unpriced = repo.build_state(conn, pid, closes, rate.gbp_usd)
+                state, unpriced = repo.build_state(conn, pid, closes)
+            if snapshot:
+                state = risk_state(state, snapshot)
+            with pool().connection() as conn:
                 already = repo.trades_today(conn, pid)
                 history = repo.recent_decisions(conn, ticker, DECISION_HISTORY)
             if unpriced:
@@ -180,9 +198,7 @@ def run(
                 raise RuntimeError(f"holdings with no current price: {', '.join(unpriced)}")
 
             limits = risklimits.limits(frozenset(tickers))
-            result = llm.analyse(
-                _prompt(ticker, relevant[ticker], bars, state, limits, rate, history)
-            )
+            result = llm.analyse(_prompt(ticker, relevant[ticker], bars, state, limits, history))
             usage += result.usage
             cost_usd += result.cost_usd
             _check_budget(cost_usd, cfg.max_run_cost_usd)
@@ -195,8 +211,8 @@ def run(
                 ticker,
                 rec.action,
                 rec.confidence,
-                rec.suggested_amount_gbp,
-                verdict.approved_amount_gbp,
+                rec.suggested_amount_usd,
+                verdict.approved_amount_usd,
                 verdict.binding_constraint,
             )
 
@@ -219,22 +235,23 @@ def run(
                     prompt_context={"recent_decisions": history},
                 )
 
-                if verdict.approved and verdict.approved_amount_gbp:
+                if verdict.approved and verdict.approved_amount_usd:
                     executed = _execute(
                         conn,
                         broker,
                         pid,
                         decision_id,
                         rec,
-                        verdict.approved_amount_gbp,
+                        verdict.approved_amount_usd,
                         closes[ticker],
-                        rate,
                     )
                     counts["trades_executed"] += int(executed)
 
                 # One commit for the decision and its trade together.
                 conn.commit()
 
+        if paper:
+            synchronize(pid, broker, pool())
         with pool().connection() as conn:
             repo.close_run(
                 conn,
@@ -282,13 +299,12 @@ def _execute(
     pid: int,
     decision_id: int,
     rec: Recommendation,
-    approved_gbp: Decimal,
+    approved_usd: Decimal,
     bar: Bar,
-    rate: FxRate,
 ) -> bool:
     """Submit the approved trade and record it. True if it filled."""
     side = "BUY" if rec.action == "BUY" else "SELL"
-    notional_usd = rate.to_usd(approved_gbp)
+    notional_usd = approved_usd
 
     # Deterministic, so a resubmission is idempotent at the broker and the
     # trades row it maps to is updated rather than duplicated.
@@ -308,10 +324,7 @@ def _execute(
         decision_id=decision_id,
         ticker=rec.ticker,
         side=side,
-        notional_gbp=approved_gbp,
         notional_usd=notional_usd,
-        fx_rate=rate.gbp_usd,
-        fx_rate_as_of=rate.as_of,
         status=order.status,
         dry_run=order.status == "simulated",
         client_order_id=client_order_id,
@@ -326,23 +339,17 @@ def _execute(
     # before the market opens, so the usual outcome is `submitted` and the
     # ledger is untouched until the summary job reconciles.
     filled = order.status in ("filled", "simulated") and order.quantity
-    if filled and order.filled_avg_price_usd:
+    if order.status == "simulated" and filled and order.filled_avg_price_usd:
         repo.apply_fill(
             conn,
             pid=pid,
             ticker=rec.ticker,
             side=side,
             quantity=order.quantity,
-            notional_gbp=approved_gbp,
+            notional_usd=approved_usd,
             price_usd=order.filled_avg_price_usd,
-            # From cash actually spent rather than converting the USD price:
-            # the share count is floored, so notional / quantity is the real
-            # cost basis and it keeps the first buy consistent with the
-            # weighted average applied to every subsequent one.
-            price_gbp=money(approved_gbp / order.quantity),
         )
-        return True
-    return False
+    return bool(filled)
 
 
 def _history_lines(history: list[dict]) -> str:
@@ -356,7 +363,7 @@ def _history_lines(history: list[dict]) -> str:
         return "  none recorded — this is the first assessment of this ticker"
 
     def amount(value) -> str:
-        return f"GBP {value}" if value is not None else "none"
+        return f"USD {value}" if value is not None else "none"
 
     lines = []
     for row in history:
@@ -364,15 +371,15 @@ def _history_lines(history: list[dict]) -> str:
         lines.append(
             f"  {row['on_date']} {row['action']}"
             f" confidence {confidence}"
-            f" | asked {amount(row['recommended_amount_gbp'])}"
-            f" | approved {amount(row['approved_amount_gbp'])}"
+            f" | asked {amount(row['recommended_amount_usd'])}"
+            f" | approved {amount(row['approved_amount_usd'])}"
             f" | binding constraint {row['binding_constraint'] or 'none recorded'}"
             f" | order {row['trade_status'] or 'none placed'}"
         )
     return "\n".join(lines)
 
 
-def _prompt(ticker, articles, bars, state, limits, rate, history=()) -> str:
+def _prompt(ticker, articles, bars, state, limits, history=()) -> str:
     """Assemble what the analysis model sees.
 
     Everything here is also serialised onto the `ai_decisions` row — the
@@ -394,7 +401,7 @@ def _prompt(ticker, articles, bars, state, limits, rate, history=()) -> str:
 
     return f"""Ticker: {ticker}
 Date: {datetime.now(UTC):%Y-%m-%d} (all times UTC)
-GBP/USD: {rate.gbp_usd} (ECB rate for {rate.as_of})
+Currency: USD
 
 Recent daily closes:
 {prices or "  none available"}
@@ -412,16 +419,16 @@ resulting order, not its outcome — one submitted before the US open rests for
 hours — and nothing here says whether a decision turned out well. Use it to
 avoid re-arguing a case you have already made, not as a score.
 
-Portfolio (the experiment is a notional GBP 500):
-  cash: GBP {state.cash_gbp}
-  total value: GBP {state.total_value_gbp}
-  invested: GBP {state.invested_gbp}
-  held in {ticker}: GBP {held}
+Portfolio (mirrors the Alpaca paper account):
+  cash: USD {state.cash_usd}
+  total value: USD {state.total_value_usd}
+  invested: USD {state.invested_usd}
+  held in {ticker}: USD {held}
 
 Risk limits that will be applied to your suggestion:
-  max per position: GBP {limits.max_position_gbp}
-  max per trade: GBP {limits.max_trade_gbp}
-  min per trade: GBP {limits.min_trade_gbp}
+  max per position: USD {limits.max_position_usd}
+  max per trade: USD {limits.max_trade_usd}
+  min per trade: USD {limits.min_trade_usd}
   max concentration: {limits.max_concentration_pct}% of total value
   confidence floor: {limits.min_confidence}
 

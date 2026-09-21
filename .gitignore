@@ -51,6 +51,8 @@ dist/
 # apps/marketagent/src/marketagent/settings.py), so these hold real values.
 .env
 .env.*
+# Local database backups contain operational history and must not be committed.
+/backups/
 # ...but a committed template holds none, and `.env.*` would otherwise swallow
 # it silently.
 !.env.example

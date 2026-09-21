@@ -37,4 +37,9 @@ locals {
     # writing that row is actually running. The dashboard never reads it.
     IMAGE_TAG = var.marketagent_image_tag
   }
+
+  agent_env = merge(local.common_env, {
+    DRY_RUN                 = tostring(var.agent_dry_run)
+    ALPACA_TRADING_BASE_URL = "https://paper-api.alpaca.markets"
+  })
 }

@@ -4,12 +4,9 @@ One credential pair covers market data, news and paper execution, which is why
 this lives in one place rather than three. The surfaces differ only by host:
 trading on `paper-api.alpaca.markets`, data and news on `data.alpaca.markets`.
 
-Worth knowing before trusting anything this returns: the paper account is
-funded with **$100,000 and $400,000 of buying power**, against an experiment
-denominated at a notional £500. Alpaca will happily execute orders hundreds of
-times larger than intended, so its balance is not a safety net and nothing here
-treats it as one — the risk engine and our own `portfolio` table are the only
-things bounding position size.
+The paper account is the source of truth for cash, equity and positions. Its
+buying power may include margin, so the agent sizes orders against cash and
+its own risk limits instead.
 """
 
 from __future__ import annotations

@@ -12,11 +12,7 @@ from contextlib import contextmanager
 from datetime import date, datetime
 from decimal import Decimal
 
-import pytest
-
 from marketagent.benchmarks import CASH_SYMBOL, BenchmarkPoint
-from marketagent.fetch import FetchError
-from marketagent.fx import FxRate
 from marketagent.jobs import summary
 from marketagent.jobs.summary import (
     _facts_table,
@@ -33,13 +29,13 @@ TODAY = date(2026, 9, 3)
 
 def _state() -> PortfolioState:
     return PortfolioState(
-        cash_gbp=D("380.0000"),
+        cash_usd=D("380.0000"),
         positions=(
             Position(
                 ticker="AVGO",
                 quantity=D("0.146852"),
-                value_gbp=D("40.0000"),
-                avg_cost_gbp=D("272.3830"),
+                value_usd=D("40.0000"),
+                avg_cost_usd=D("272.3830"),
             ),
         ),
     )
@@ -94,7 +90,7 @@ def test_a_simulated_trade_is_reported_as_having_happened():
     table = _table(trades=[("AVGO", "BUY", "simulated", D("40.0000"), D("0.146852"), D("272.38"))])
 
     assert "## Trades today" in table
-    assert "| AVGO | BUY | simulated | £40.0000 | 0.146852 |" in table
+    assert "| AVGO | BUY | simulated | $40.0000 | 0.146852 |" in table
     # And the meaning of `simulated` is spelled out, not left to be inferred.
     assert "no order was sent to the broker" in table
 
@@ -127,22 +123,22 @@ def test_the_reconciliation_count_is_stated_alongside_the_trades():
 def test_the_headline_figures_come_from_the_database():
     table = _table()
 
-    assert "| Total value | £499.9950 |" not in table  # derived from state, not passed
-    assert "| Cash | £380.0000 |" in table
-    assert "| Started with | £500.0000 |" in table
+    assert "| Total value | $499.9950 |" not in table  # derived from state, not passed
+    assert "| Cash | $380.0000 |" in table
+    assert "| Started with | $500.0000 |" in table
 
 
 def test_benchmarks_are_labelled_and_the_cash_arm_is_named():
     table = _table()
 
-    assert "| Savings at 5% | £500.0684 |" in table
+    assert "| Savings at 5% | $500.0684 |" in table
     # "proxy" in the label, because EWU is not the FTSE 100 and SPY is not the
     # index itself.
-    assert "| SPY (proxy) | £512.0000 |" in table
+    assert "| SPY (proxy) | $512.0000 |" in table
 
 
 def test_a_refused_decision_shows_a_dash_rather_than_a_zero():
-    """£0.00 approved and "refused" are different facts."""
+    """$0.00 approved and "refused" are different facts."""
     table = _table(decisions=[("MSFT", "BUY", D("0.62"), None, "reasons", "daily_trade_limit")])
 
     assert "| MSFT | BUY | 0.62 | — | daily_trade_limit |" in table
@@ -290,42 +286,6 @@ def _patch_fx(monkeypatch, *, fetch, stored):
     monkeypatch.setattr(summary, "fetch_gbp_usd", fetch)
     monkeypatch.setattr(summary, "pool", lambda: _fake_pool().__enter__())
     monkeypatch.setattr(summary.repo, "last_fx_rate", lambda _conn, _pid: stored)
-
-
-def test_a_published_rate_is_used_when_frankfurter_answers(monkeypatch):
-    live = FxRate(gbp_usd=D("1.349400"), as_of=TODAY)
-    _patch_fx(monkeypatch, fetch=lambda: live, stored=(D("1.100000"), date(2026, 1, 1)))
-
-    assert summary._fx_rate(1) is live
-
-
-def test_an_fx_outage_falls_back_to_the_last_stored_rate(monkeypatch):
-    """The 2026-09-14 failure: a 522 from Frankfurter lost the entire summary."""
-
-    def _boom():
-        raise FetchError("522 from https://api.frankfurter.dev/v1/latest")
-
-    stored_on = date(2026, 9, 13)
-    _patch_fx(monkeypatch, fetch=_boom, stored=(D("1.340000"), stored_on))
-
-    rate = summary._fx_rate(1)
-
-    assert rate.gbp_usd == D("1.340000")
-    # The staleness has to stay legible on the row, not just in the log.
-    assert rate.as_of == stored_on
-    assert "stored" in rate.source
-
-
-def test_an_fx_outage_with_nothing_stored_reports_the_original_failure(monkeypatch):
-    """A first-ever run has no rate to fall back to, so the fetch error stands."""
-
-    def _boom():
-        raise FetchError("522 from https://api.frankfurter.dev/v1/latest")
-
-    _patch_fx(monkeypatch, fetch=_boom, stored=None)
-
-    with pytest.raises(FetchError, match="522"):
-        summary._fx_rate(1)
 
 
 # ---------------------------------------------------------------------------

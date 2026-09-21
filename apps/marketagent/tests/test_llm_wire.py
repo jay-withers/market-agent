@@ -28,7 +28,7 @@ RECOMMENDATION_JSON = {
     "ticker": "NVDA",
     "action": "BUY",
     "confidence": 0.8,
-    "suggested_amount_gbp": 50,
+    "suggested_amount_usd": 50,
     "reasoning": "Datacentre revenue beat.",
     "risks": "Concentration.",
 }
@@ -154,7 +154,7 @@ def test_the_suggested_amount_is_a_plain_nullable_number_in_the_schema(wire):
 
     AnthropicLlm(client=client).analyse("Assess NVDA.")
 
-    field = captured[0]["output_config"]["format"]["schema"]["properties"]["suggested_amount_gbp"]
+    field = captured[0]["output_config"]["format"]["schema"]["properties"]["suggested_amount_usd"]
     assert field["anyOf"] == [{"type": "number"}, {"type": "null"}]
 
 

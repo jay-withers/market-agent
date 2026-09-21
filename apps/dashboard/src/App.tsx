@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
-import type { Decision, Holding, Overview, Performance, PricePoint, Review, Run, Trade } from "./api";
-import { gbp, get, getOptional, pct, when } from "./api";
+import type { Decision, DisplayCurrency, Holding, Overview, Performance, PricePoint, Review, Run, Trade } from "./api";
+import { configureDisplayCurrency, displayMoney, get, getOptional, pct, when } from "./api";
 import { Nav, useRoute } from "./components/Nav";
 import { PerformanceChart } from "./components/PerformanceChart";
 import { PriceTrends } from "./components/PriceTrends";
@@ -30,6 +30,9 @@ export default function App() {
   const [data, setData] = useState<Data | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, navigate] = useRoute();
+  const [currency, setCurrency] = useState<DisplayCurrency>(() =>
+    localStorage.getItem("marketagent-currency") === "GBP" ? "GBP" : "USD",
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -82,7 +85,15 @@ export default function App() {
   }
 
   const { overview } = data;
-  const up = overview.pnl_gbp >= 0;
+  const gbpUsd = overview.display_gbp_usd ?? null;
+  const effectiveCurrency = currency === "GBP" && gbpUsd ? "GBP" : "USD";
+  configureDisplayCurrency(effectiveCurrency, gbpUsd);
+  const up = overview.pnl_usd >= 0;
+
+  function chooseCurrency(next: DisplayCurrency) {
+    setCurrency(next);
+    localStorage.setItem("marketagent-currency", next);
+  }
 
   return (
     <div className="app">
@@ -93,8 +104,17 @@ export default function App() {
             An AI paper-trading experiment. No real money is ever connected.
           </div>
         </div>
-        {overview.last_run && (
-          <div className="subtitle">
+        <div className="masthead-actions">
+          <div className="currency-toggle" role="group" aria-label="Display currency">
+            {(["USD", "GBP"] as const).map((code) => (
+              <button key={code} className={`toggle ${effectiveCurrency === code ? "current" : ""}`}
+                aria-pressed={effectiveCurrency === code} disabled={code === "GBP" && !gbpUsd}
+                onClick={() => chooseCurrency(code)}>
+                {code === "USD" ? "$ USD" : "£ GBP"}
+              </button>
+            ))}
+          </div>
+          {overview.last_run && <div className="subtitle">
             Last run {when(overview.last_run.started_at)} ·{" "}
             {overview.last_run.status}
             {/* Guarded because the API and the dashboard are separate container
@@ -103,27 +123,40 @@ export default function App() {
                 render a dangling separator. */}
             {overview.last_run.trigger ? ` · ${overview.last_run.trigger}` : ""}
             {overview.last_run.dry_run ? " · dry run" : ""}
-          </div>
-        )}
+          </div>}
+        </div>
       </header>
 
       {/* Above the tabs, not inside one: these four are the answer to "how is it
           doing", and they should not depend on which area happens to be open. */}
       <div className="tiles">
-        <StatTile label="Total value" value={gbp(overview.total_value_gbp)} />
+        <StatTile label="Total value" value={displayMoney(overview.total_value_usd)} />
         <StatTile
           label="Profit and loss"
-          value={`${up ? "+" : ""}${gbp(overview.pnl_gbp)}`}
+          value={`${up ? "+" : ""}${displayMoney(overview.pnl_usd)}`}
           note={pct(overview.pnl_pct)}
           tone={up ? "up" : "down"}
         />
-        <StatTile label="Cash" value={gbp(overview.cash_gbp)} />
+        <StatTile label="Cash" value={displayMoney(overview.cash_usd)}
+          note={overview.buying_power_usd == null ? undefined : `Alpaca buying power ${displayMoney(overview.buying_power_usd)}`} />
         <StatTile
           label="Positions"
-          value={gbp(overview.positions_value_gbp)}
+          value={displayMoney(overview.positions_value_usd)}
           note={`${overview.position_count} holding${overview.position_count === 1 ? "" : "s"}`}
         />
       </div>
+
+      <p className="hint">
+        {overview.broker_synced_at
+          ? `Alpaca paper account · last synchronized ${when(overview.broker_synced_at)}`
+          : "Awaiting the first Alpaca account synchronization"}
+      </p>
+      {effectiveCurrency === "GBP" && gbpUsd && (
+        <p className="hint currency-note">
+          Display converted at £1 = ${gbpUsd.toFixed(4)}
+          {overview.display_fx_as_of ? ` (${overview.display_fx_as_of})` : ""}. Trading and accounting remain in USD.
+        </p>
+      )}
 
       <Nav current={tab} onNavigate={navigate} />
 
@@ -141,7 +174,7 @@ export default function App() {
 
           <section className="card">
             <h2>Holdings</h2>
-            <p className="hint">Valued at the most recent close we hold.</p>
+            <p className="hint">Holdings and cost basis from the latest Alpaca snapshot.</p>
             <HoldingsTable rows={data.holdings} />
           </section>
         </>

@@ -33,20 +33,20 @@ def test_money_never_rounds_a_value_up_past_a_limit():
 
 def _state() -> PortfolioState:
     return PortfolioState(
-        cash_gbp=D("100.5000"),
+        cash_usd=D("100.5000"),
         positions=(
-            Position(ticker="NVDA", quantity=D("0.5"), value_gbp=D("80"), avg_cost_gbp=D("75")),
-            Position(ticker="AAPL", quantity=D("1.5"), value_gbp=D("45.25"), avg_cost_gbp=D("40")),
+            Position(ticker="NVDA", quantity=D("0.5"), value_usd=D("80"), avg_cost_usd=D("75")),
+            Position(ticker="AAPL", quantity=D("1.5"), value_usd=D("45.25"), avg_cost_usd=D("40")),
         ),
     )
 
 
 def test_invested_is_the_sum_of_position_values():
-    assert _state().invested_gbp == D("125.2500")
+    assert _state().invested_usd == D("125.2500")
 
 
 def test_total_value_is_cash_plus_positions():
-    assert _state().total_value_gbp == D("225.7500")
+    assert _state().total_value_usd == D("225.7500")
 
 
 def test_position_value_finds_a_holding():
@@ -58,14 +58,14 @@ def test_position_value_of_something_not_held_is_zero():
 
 
 def test_an_empty_portfolio_is_all_cash():
-    empty = PortfolioState(cash_gbp=D("500"))
-    assert empty.invested_gbp == D("0.0000")
-    assert empty.total_value_gbp == D("500.0000")
+    empty = PortfolioState(cash_usd=D("500"))
+    assert empty.invested_usd == D("0.0000")
+    assert empty.total_value_usd == D("500.0000")
 
 
 def test_portfolio_state_is_frozen():
     with pytest.raises(ValidationError) as caught:
-        _state().cash_gbp = D("1")
+        _state().cash_usd = D("1")
 
     assert caught.value.errors()[0]["type"] == "frozen_instance"
 
@@ -90,14 +90,14 @@ def test_the_llm_suggested_amount_is_a_float_and_quantizes_cleanly():
         ticker="NVDA",
         action="BUY",
         confidence=0.8,
-        suggested_amount_gbp=0.1,
+        suggested_amount_usd=0.1,
         reasoning="r",
         risks="x",
     )
 
-    assert isinstance(rec.suggested_amount_gbp, float)
+    assert isinstance(rec.suggested_amount_usd, float)
     # Decimal(0.1) is 0.1000000000000000055511151231257827; via str it is 0.1.
-    assert money(rec.suggested_amount_gbp) == D("0.1000")
+    assert money(rec.suggested_amount_usd) == D("0.1000")
 
 
 def test_money_of_a_float_matches_money_of_the_same_decimal():

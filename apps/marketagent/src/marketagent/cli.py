@@ -1,6 +1,6 @@
 """One entrypoint, four commands — `marketagent api|agent|summary|weekly`.
 
-The four workloads share one image and differ only by the container's `args`,
+The five workloads share one image and differ only by the container's `args`,
 so this is what Terraform's `command = ["marketagent"]` reaches.
 """
 
@@ -70,6 +70,7 @@ def main(argv: list[str] | None = None) -> int:
     agent.add_argument("--trigger", default="manual", choices=["manual", "schedule"])
 
     sub.add_parser("summary", help="produce and send the daily summary")
+    sub.add_parser("sync", help="refresh cash, positions and order status from Alpaca")
 
     weekly = sub.add_parser("weekly", help="produce and send the weekly review")
     # A date rather than always "today", so a week can be reviewed after the
@@ -129,6 +130,19 @@ def main(argv: list[str] | None = None) -> int:
             # A job exits within seconds of this point, and the exporters batch.
             # Without the flush a run's telemetry dies in the buffer — including
             # the failure path above, which is the one worth having.
+            telemetry.flush()
+        return 0
+
+    if args.command == "sync":
+        from . import sync
+
+        signal.signal(signal.SIGTERM, _terminate)
+        try:
+            sync.run()
+        except (Exception, SystemExit) as exc:
+            logging.getLogger("marketagent").error("broker sync failed: %s", exc)
+            return 1
+        finally:
             telemetry.flush()
         return 0
 

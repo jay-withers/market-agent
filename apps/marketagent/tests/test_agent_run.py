@@ -60,7 +60,10 @@ def _reset(dsn: str) -> None:
         conn.execute("DELETE FROM prices")
         conn.execute("DELETE FROM agent_runs")
         conn.execute("DELETE FROM positions")
-        conn.execute("UPDATE portfolio SET cash_gbp = initial_cash_gbp")
+        conn.execute(
+            "UPDATE portfolio SET initial_cash_usd=100000,cash_usd=100000,equity_usd=NULL,"
+            "buying_power_usd=NULL,broker_account_id=NULL,broker_synced_at=NULL"
+        )
 
 
 @pytest.fixture
@@ -114,10 +117,10 @@ class _FakeLlm:
     skipped before it ever reaches `analyse` — and would raise if it didn't,
     since `calls` records every ticker actually analysed."""
 
-    def __init__(self, relevant_ticker: str, action: str = "BUY", amount_gbp: float = 40.0):
+    def __init__(self, relevant_ticker: str, action: str = "BUY", amount_usd: float = 40.0):
         self.relevant_ticker = relevant_ticker
         self.action = action
-        self.amount_gbp = amount_gbp
+        self.amount_usd = amount_usd
         self.analysed: list[str] = []
 
     def filter_news(self, ticker: str, headline: str, summary: str | None) -> LlmResult:
@@ -139,7 +142,7 @@ class _FakeLlm:
                 ticker=self.relevant_ticker,
                 action=self.action,
                 confidence=0.8,
-                suggested_amount_gbp=self.amount_gbp if self.action != "HOLD" else None,
+                suggested_amount_usd=self.amount_usd if self.action != "HOLD" else None,
                 reasoning="Strong quarter and a market that has not caught up.",
                 risks="Guidance could disappoint next quarter.",
             ),
@@ -159,8 +162,9 @@ def _patch_market_data(monkeypatch, agent_dsn):
     """Everything run() fetches directly rather than through an injected
     parameter — fx, prices and news are all outbound network calls the loop
     makes for itself, unlike llm and broker."""
+    monkeypatch.setenv("RISK_MAX_TRADE_USD", "50")
+    monkeypatch.setenv("RISK_MAX_POSITION_USD", "100")
     monkeypatch.setattr(agent, "pool", lambda: _FreshConnectionPool(agent_dsn))
-    monkeypatch.setattr(agent, "fetch_gbp_usd", lambda: RATE)
     monkeypatch.setattr(agent, "fetch_daily_bars", lambda tickers, days: [_bar(t) for t in tickers])
     monkeypatch.setattr(agent, "fetch_news", lambda tickers, hours: [_article(TICKER)])
 
@@ -175,8 +179,9 @@ def _portfolio_cash(dsn: str) -> Decimal:
 # ---------------------------------------------------------------------------
 
 
-def test_a_buy_is_analysed_approved_and_filled(agent_dsn):
-    llm = _FakeLlm(TICKER, action="BUY", amount_gbp=40.0)
+def test_a_buy_is_analysed_approved_and_filled(agent_dsn, monkeypatch):
+    monkeypatch.setenv("DRY_RUN", "true")
+    llm = _FakeLlm(TICKER, action="BUY", amount_usd=40.0)
 
     run_id = agent.run(trigger="manual", llm=llm, broker=DryRunBroker())
 
@@ -193,13 +198,13 @@ def test_a_buy_is_analysed_approved_and_filled(agent_dsn):
         assert run_row == ("succeeded", True, "manual", 1, 1, None)
 
         decision = conn.execute(
-            "SELECT action, approved_amount_gbp, model FROM ai_decisions WHERE run_id = %s",
+            "SELECT action, approved_amount_usd, model FROM ai_decisions WHERE run_id = %s",
             (run_id,),
         ).fetchone()
         assert decision == ("BUY", D("40.0000"), "claude-sonnet-5")
 
         trade = conn.execute(
-            "SELECT status, side, dry_run, notional_gbp FROM trades t "
+            "SELECT status, side, dry_run, notional_usd FROM trades t "
             "JOIN ai_decisions d ON d.id = t.decision_id WHERE d.run_id = %s",
             (run_id,),
         ).fetchone()
@@ -212,7 +217,7 @@ def test_a_buy_is_analysed_approved_and_filled(agent_dsn):
 
     # Cash moved by the fill — a dry run still updates our own ledger, only the
     # broker call itself is simulated.
-    assert _portfolio_cash(agent_dsn) == D("460.0000")
+    assert _portfolio_cash(agent_dsn) == D("99960.0000")
 
 
 def test_a_decision_is_persisted_with_the_history_it_was_shown(agent_dsn):
@@ -237,7 +242,7 @@ def test_a_hold_is_persisted_with_no_trade_and_cash_untouched(agent_dsn):
 
     with psycopg.connect(agent_dsn) as conn:
         decision = conn.execute(
-            "SELECT action, approved_amount_gbp FROM ai_decisions WHERE run_id = %s",
+            "SELECT action, approved_amount_usd FROM ai_decisions WHERE run_id = %s",
             (run_id,),
         ).fetchone()
         assert decision == ("HOLD", None)
@@ -249,7 +254,7 @@ def test_a_hold_is_persisted_with_no_trade_and_cash_untouched(agent_dsn):
         ).fetchone()[0]
         assert trade_count == 0
 
-    assert _portfolio_cash(agent_dsn) == D("500.0000")
+    assert _portfolio_cash(agent_dsn) == D("100000.0000")
 
 
 # ---------------------------------------------------------------------------
@@ -281,4 +286,32 @@ def test_crossing_the_budget_ceiling_fails_the_run_with_evidence(agent_dsn, monk
 
     # Untouched: the run failed before the risk engine or the broker ever saw
     # a recommendation.
-    assert _portfolio_cash(agent_dsn) == D("500.0000")
+    assert _portfolio_cash(agent_dsn) == D("100000.0000")
+
+
+def test_paper_fills_are_mirrored_without_applying_cash_twice(agent_dsn):
+    from marketagent.broker.base import BrokerAccount, BrokerPosition, BrokerSnapshot, OrderResult
+
+    class PaperBroker:
+        filled = False
+
+        def snapshot(self):
+            cash = D(99960) if self.filled else D(100000)
+            positions = [BrokerPosition(TICKER, D("0.4"), D(40), D(100))] if self.filled else []
+            return BrokerSnapshot(BrokerAccount("paper", cash, D(100000), D(400000)), positions, [])
+
+        def submit_market_order(self, **kwargs):
+            assert kwargs["notional_usd"] == D(40)
+            self.filled = True
+            return OrderResult(
+                status="filled",
+                broker_order_id="paper-fill",
+                quantity=D("0.4"),
+                filled_avg_price_usd=D(100),
+            )
+
+    agent.run(llm=_FakeLlm(TICKER, amount_usd=40), broker=PaperBroker())
+    with psycopg.connect(agent_dsn) as conn:
+        assert repo.load_cash(conn, repo.portfolio_id(conn)) == D(99960)
+        assert conn.execute("SELECT count(*) FROM positions").fetchone()[0] == 1
+        assert conn.execute("SELECT notional_usd FROM trades").fetchone()[0] == D(40)
