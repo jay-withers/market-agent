@@ -26,7 +26,7 @@ def test_the_defaults_are_sized_for_the_usd_paper_account():
     assert limits.max_position_usd == D(20000)
     assert limits.max_trade_usd == D(10000)
     assert limits.min_trade_usd == D(5)
-    assert limits.max_daily_trades == 3
+    assert limits.max_daily_trades == 6
 
 
 def test_limits_are_overridable_by_environment(monkeypatch):
