@@ -1,6 +1,6 @@
 {
   "name": "terraform",
-  "image": "ghcr.io/jay-withers/dev-containers/terraform:latest@sha256:894889ac393d94ccc3a785e8e37faf62f06dd9e8aa43012d0e058c860a03166f",
+  "image": "ghcr.io/jay-withers/dev-containers/terraform:latest@sha256:d5f56c4c9eab5e5a6f9ea22ad9a687eaf7fe7445a34f853ba46a5453aa271c09",
   "mounts": [
     "source=${localEnv:HOME}/Git,target=/Users/jay/Git,type=bind",
     "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
