@@ -165,41 +165,6 @@ resource "azurerm_container_app" "dashboard" {
     identity_ids = [azurerm_user_assigned_identity.this.id]
   }
 
-  # Gates the dashboard behind a passcode, held in Key Vault — opt-in from the
-  # container's point of view (unset disables the check in the entrypoint) but
-  # *not* from Terraform's: unlike every other secret in this repo, this is
-  # resolved by the Container Apps platform at revision creation rather than
-  # lazily by application code, so it must already exist in Key Vault before
-  # the first `terraform apply` that adds this block — see
-  # Set-KeyVaultSecrets.ps1, which generates it. No `data` source is used to
-  # look it up first, for the same reason the alerting config avoids one: it
-  # would fail the stg/prd plan legs in CI, which plan against a vault that
-  # does not exist yet. `versionless_id` (built by hand, not read) is what
-  # lets a secret rotation take effect on the next revision with no Terraform
-  # change at all.
-  #
-  # One passcode rather than the username/password pair this replaced: the
-  # browser's Basic Auth dialog always asks for both, and there was only ever
-  # one account. Terraform does not generate it — this repo creates no
-  # `azurerm_key_vault_secret` anywhere, so no secret value reaches state.
-  secret {
-    name                = "dashboard-passcode"
-    key_vault_secret_id = "${trimsuffix(azurerm_key_vault.this.vault_uri, "/")}/secrets/DASHBOARD-PASSCODE"
-    identity            = azurerm_user_assigned_identity.this.id
-  }
-
-  # The same secret the API reads via settings.secret("API-BEARER-TOKEN") — one
-  # token, not two, so there is nothing to keep in sync. The browser needs it
-  # verbatim to call the API directly, so it is rendered into config.json
-  # exactly like API_ORIGIN; anyone who has already cleared this app's own
-  # passcode gate can read it from that response regardless; that is an accepted
-  # boundary, not a gap, given the data behind both apps is non-sensitive.
-  secret {
-    name                = "api-bearer-token"
-    key_vault_secret_id = "${trimsuffix(azurerm_key_vault.this.vault_uri, "/")}/secrets/API-BEARER-TOKEN"
-    identity            = azurerm_user_assigned_identity.this.id
-  }
-
   template {
     min_replicas = 0
     max_replicas = 1
@@ -210,11 +175,6 @@ resource "azurerm_container_app" "dashboard" {
       cpu    = local.container_cpu
       memory = local.container_memory
 
-      # API_ORIGIN plus the passcode and the API token, and nothing else. The
-      # dashboard is nginx serving static files: it holds no database
-      # credential, and passing it `common_env` would put the database host
-      # and the vault URI into a container that has no use for either.
-      #
       # The browser talks to the API directly, so this has to be an address the
       # *browser* can reach — the API's public ingress, not an internal name.
       # The entrypoint renders it into config.json at start-up, which is what
@@ -224,18 +184,25 @@ resource "azurerm_container_app" "dashboard" {
         value = "https://${azurerm_container_app.api.ingress[0].fqdn}"
       }
 
-      # Read by the entrypoint to render (or, if absent, skip) the nginx
-      # passcode check. Absent is what keeps `docker compose up` working with
-      # the dashboard wide open, matching every other opt-in secret in this
-      # repo.
+      # Not `common_env`: the dashboard still holds no database credential and
+      # has no use for POSTGRES_* or the App Insights connection string. These
+      # two are exactly what the entrypoint needs to fetch DASHBOARD-PASSCODE
+      # and API-BEARER-TOKEN from Key Vault itself, with the container's
+      # managed identity — the same way every other secret in this repo is
+      # read, rather than through Container Apps' native Key Vault secret
+      # reference. That mechanism resolves a secret once at revision creation
+      # and caches it for the revision's whole life, so rotating either secret
+      # needed a brand-new revision to actually take effect — worth avoiding,
+      # since neither secret then needs to exist in Key Vault before this is
+      # first applied either.
       env {
-        name        = "DASHBOARD_PASSCODE"
-        secret_name = "dashboard-passcode"
+        name  = "AZURE_CLIENT_ID"
+        value = azurerm_user_assigned_identity.this.client_id
       }
 
       env {
-        name        = "API_TOKEN"
-        secret_name = "api-bearer-token"
+        name  = "KEY_VAULT_URI"
+        value = azurerm_key_vault.this.vault_uri
       }
 
       # nginx answers this from memory, without reaching the API. A dashboard

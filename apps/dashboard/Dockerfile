@@ -26,6 +26,20 @@ FROM nginxinc/nginx-unprivileged:1.31-alpine@sha256:e75f89810bf5bfbcf58a1cfb32a1
 # apps/marketagent/Dockerfile.
 LABEL org.opencontainers.image.source="https://github.com/jay-withers/market-agent"
 
+# curl and jq are what let the entrypoint fetch DASHBOARD-PASSCODE and
+# API-BEARER-TOKEN from Key Vault itself, with the container's managed
+# identity, instead of Container Apps' native Key Vault secret reference —
+# that mechanism resolves a secret once at revision creation and caches it for
+# every replica of that revision, so rotating either secret needed a brand-new
+# revision to actually take effect. The base image already runs as its
+# unprivileged user by default, so installing anything needs root explicitly,
+# switched back immediately after. Numeric, like the final USER 101 below —
+# DL3066 flags a named user as possibly unresolvable by the host, the same
+# trap CLAUDE.md already records for the Python image's USER marketagent.
+USER 0
+# hadolint ignore=DL3018
+RUN apk add --no-cache curl jq
+
 # The unprivileged image already runs as uid 101 and listens above 1024, which
 # is what Container Apps wants; rolling our own non-root nginx means fighting
 # its pid file, cache and log paths.

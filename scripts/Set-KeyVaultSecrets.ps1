@@ -33,30 +33,30 @@
     creates no `azurerm_key_vault_secret` at all and a generated one would
     live in Terraform state.
 
-    It is also read differently from the rest: Terraform wires it into the
-    dashboard container app as a native Key Vault secret reference
-    (main.container-apps.tf), because the dashboard is static nginx with no
-    application code to call Key Vault itself. That means — unlike every other
-    secret this script sets — it must exist **before** the `terraform apply`
-    that first adds that secret block, or the dashboard revision fails to
-    resolve it. Set it first on a fresh environment.
+    It is read the same way as every other secret here, just from shell
+    rather than Python: docker-entrypoint.sh fetches it from Key Vault itself
+    with the container's managed identity, on every container start. That
+    replaced Terraform wiring it in as a native Key Vault secret reference
+    (main.container-apps.tf) — that mechanism resolved the value once at
+    revision creation and cached it for the revision's whole life, so rotating
+    the passcode needed a brand-new revision to actually take effect. A plain
+    restart is now enough, and it no longer has to exist in Key Vault before
+    the `terraform apply` that first deploys the dashboard, either.
 
     It replaced a DASHBOARD-USERNAME/DASHBOARD-PASSWORD pair: the browser's
     Basic Auth dialog always asks for a username, there was only ever one
     account, and a passcode is one field to type on a phone. Delete the two
-    old secrets once the new revision is up.
+    old secrets once a dashboard restart has picked up the new one.
 
     API-BEARER-TOKEN is the one secret two apps share. The API reads it lazily
     via settings.secret(), same as every other application secret, and gates
     every /api/* route behind it once API_REQUIRE_TOKEN is set — but the
     dashboard needs the same value to call the API on the browser's behalf, so
-    it is *also* wired into the dashboard container as a Key Vault secret
-    reference, the same way as DASHBOARD-PASSCODE above, and carries
-    the same before-apply requirement on a fresh environment. Generate it as a
-    plain random string (`openssl rand -hex 32` or similar) rather than typing
-    one: it is embedded verbatim inside a JSON string in the dashboard's
-    rendered config.json, and a quote or backslash in it would break that
-    file.
+    it is *also* fetched from Key Vault by docker-entrypoint.sh, the same way
+    as DASHBOARD-PASSCODE above. Generate it as a plain random string
+    (`openssl rand -hex 32` or similar) rather than typing one: it is embedded
+    verbatim inside a JSON string in the dashboard's rendered config.json, and
+    a quote or backslash in it would break that file.
 
     Existing secrets are left alone unless you say otherwise, because Key Vault
     versions every write and re-setting an unchanged value just adds noise.
@@ -91,16 +91,17 @@
     ./scripts/Set-KeyVaultSecrets.ps1 -Name DASHBOARD-PASSCODE -Force
 
     Rotates the dashboard passcode. Press Enter to have one generated; it is
-    printed once. Every browser holding the old one is logged out on the next
-    revision, which is the intended way to revoke access.
+    printed once. Every browser holding the old one is logged out once the
+    dashboard restarts and re-fetches it, which is the intended way to revoke
+    access.
 
 .EXAMPLE
     ./scripts/Set-KeyVaultSecrets.ps1 -Name API-BEARER-TOKEN -Force
 
-    Rotates the token both the API and the dashboard use. Takes effect for the
-    API on its next revision (API_REQUIRE_TOKEN is set separately in
-    Terraform); the dashboard also needs a `terraform apply` to pick it up,
-    same as DASHBOARD-PASSCODE.
+    Rotates the token both the API and the dashboard use. The API reads it
+    lazily (settings.secret()), so it takes effect there once the process next
+    reads it; the dashboard re-fetches it on its next restart, same as
+    DASHBOARD-PASSCODE.
 #>
 [CmdletBinding()]
 param(
@@ -328,12 +329,24 @@ foreach ($secretName in $Name) {
 
     # A refusal, not a warning, and the only one in this script. The dashboard
     # entrypoint exits non-zero on any of these characters, so storing one
-    # would not produce a weak gate — it would produce a container that will
-    # not start, discovered as a failed revision some time after this script
-    # said it had succeeded. A generated passcode can never contain one; this
-    # only ever fires on a hand-typed value.
+    # would not produce a weak gate — it would produce a container that
+    # refuses to start on its next restart. A generated passcode can never
+    # contain one; this only ever fires on a hand-typed value.
     if ($secretName -eq 'DASHBOARD-PASSCODE' -and $value -match '[;,"\\\s]') {
         Write-Warning "$secretName cannot contain a space, quote, backslash, comma or semicolon — the cookie and the nginx config both end at one, and the dashboard refuses to start. Not stored."
+        $skipped++
+        continue
+    }
+
+    # Also a refusal. A non-ASCII character (a curly quote or a pound sign
+    # pasted from somewhere that "smartened" it, say) passes the check above
+    # and the entrypoint's own guard untouched, but login.html's
+    # encodeURIComponent percent-encodes it into the cookie while the
+    # entrypoint substitutes it in raw — the two then never compare equal, no
+    # matter how carefully it is retyped. Lost a working session to exactly
+    # this once already.
+    if ($secretName -eq 'DASHBOARD-PASSCODE' -and $value -match '[^\x20-\x7e]') {
+        Write-Warning "$secretName contains a non-ASCII character — it can never match what the browser sends, however carefully it's retyped. Not stored."
         $skipped++
         continue
     }
@@ -355,8 +368,8 @@ foreach ($secretName in $Name) {
         Write-Host ''
         Write-Host "    $secretName is:  $value"
         Write-Host '    Write it down now — this is the only time it is displayed.'
-        Write-Host '    The dashboard picks it up on its next revision:'
-        Write-Host '      make deploy IMAGE_TAG=<tag>   (or `az containerapp revision restart`)'
+        Write-Host '    The dashboard re-fetches it from Key Vault on its next restart:'
+        Write-Host '      az containerapp revision restart --name <dashboard_app_name> --resource-group <resource_group_name>'
         Write-Host ''
     }
     elseif ($isSecret) {

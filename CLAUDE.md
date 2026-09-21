@@ -626,15 +626,27 @@ process cannot bind below 1024.
   goal is keeping casual bots and scanners off a public URL, not defending
   against a determined attacker — and it needed to work for people with no
   Microsoft account, which ruled out Entra/EasyAuth despite that being the
-  properly "correct" fix. Because nginx has no application code to call Key
-  Vault itself, the secret is wired in as a native Container Apps Key Vault
-  secret reference (`main.container-apps.tf`) rather than read at runtime the
-  way every other secret in this repo is — which means, unlike those, **it
-  must exist in Key Vault before the `terraform apply` that first adds it**,
-  or the dashboard revision fails to resolve it.
+  properly "correct" fix.
+  - **`docker-entrypoint.sh` fetches it from Key Vault itself**, with the
+    container's managed identity (`AZURE_CLIENT_ID`/`KEY_VAULT_URI`, an MSI
+    token exchange against `IDENTITY_ENDPOINT`/`IDENTITY_HEADER`, then a plain
+    REST call for the secret) — the same way every other secret in this repo
+    is read, just from shell rather than from `settings.secret()`. This
+    replaced Container Apps' native Key Vault secret reference
+    (`key_vault_secret_id` on a `secret` block), which resolves a secret's
+    value once, at revision creation, and caches it for every replica and
+    every restart of that revision. Rotating the passcode then needed a
+    brand-new revision to actually take effect — a plain
+    `az containerapp revision restart` silently kept serving the value from
+    whenever the revision was first created, which cost a working session to
+    diagnose, since the entrypoint's own "passcode gate enabled" log line gave
+    no hint it was using a stale value. Fetching it ourselves means a plain
+    restart is enough, and it no longer has to exist in Key Vault before the
+    `terraform apply` that first deploys the dashboard, either. `curl` and
+    `jq` are in the image for exactly this.
   - **It replaced a `DASHBOARD-USERNAME`/`DASHBOARD-PASSWORD` pair**, because
     the browser's native Basic Auth dialog always asks for a username and
-    there was only ever one account. Delete those two secrets once a revision
+    there was only ever one account. Delete those two secrets once a restart
     carrying the passcode is up.
   - **`Set-KeyVaultSecrets.ps1` generates it** — press Enter at its prompt —
     and prints it once. It is the only secret in this repo that is generated
@@ -650,6 +662,14 @@ process cannot bind below 1024.
     config that compares against a truncated passcode; the script refuses to
     store one for the same reason. It also drops `0`/`O` and `1`/`I`/`L`,
     which are what get mistyped reading a code off another screen.
+  - **Both also refuse a non-ASCII character** — a curly quote or a pound sign
+    pasted from somewhere that "smartened" it, say. That one is not cosmetic
+    either: `login.html`'s `encodeURIComponent` percent-encodes it into the
+    cookie, while the entrypoint substitutes it into the nginx config raw, so
+    the two can never compare equal — retyping it, however carefully, cannot
+    fix that. A hand-set `DASHBOARD-PASSCODE` containing one passed silently
+    until this was added, and cost a working session to diagnose because
+    every other symptom looked like a stale-secret problem instead.
   - **nginx compares the cookie verbatim — there is no signed session**, which
     is where this differs from `gym-log`'s passcode gate. gym-log can HMAC an
     issue time into a cookie because it is a Python app; this image is static
