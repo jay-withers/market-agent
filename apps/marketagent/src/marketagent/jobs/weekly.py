@@ -145,10 +145,10 @@ def _subject(as_of: date, metrics: dict[str, Any], proposals: list[ProposedChang
     else:
         change, change_pct = _week_change(metrics)
         if change is None:
-            subject = f"MarketAgent week to {as_of}: £{valuation['total_value_gbp']}, {count}"
+            subject = f"MarketAgent week to {as_of}: ${valuation['total_value_usd']}, {count}"
         else:
             subject = (
-                f"MarketAgent week to {as_of}: £{valuation['total_value_gbp']} "
+                f"MarketAgent week to {as_of}: ${valuation['total_value_usd']} "
                 f"({'+' if change >= 0 else ''}{change_pct}% this week), {count}"
             )
 
@@ -170,11 +170,11 @@ def _week_change(metrics: dict[str, Any]) -> tuple[Decimal | None, Decimal | Non
     change of zero.
     """
     valuation = metrics["valuation"]
-    opening = metrics["opening_total_gbp"]
+    opening = metrics["opening_total_usd"]
     if valuation is None or opening is None or not opening:
         return None, None
 
-    change = money(valuation["total_value_gbp"] - opening)
+    change = money(valuation["total_value_usd"] - opening)
     return change, money(change / opening * 100)
 
 
@@ -198,7 +198,7 @@ def _facts_table(
     lines = [
         f"# MarketAgent — week to {end}",
         "",
-        f"Covering {start} to {end} inclusive. The experiment began {inception} with £{initial}.",
+        f"Covering {start} to {end} inclusive. The experiment began {inception} with ${initial}.",
         "",
         "## Where the money is",
         "",
@@ -211,16 +211,16 @@ def _facts_table(
         lines.append("| Total value | not recorded this week |")
     else:
         lines += [
-            f"| Total value | £{valuation['total_value_gbp']} (as at {valuation['as_of']}) |",
-            f"| Cash | £{valuation['cash_gbp']} |",
-            f"| Positions | £{valuation['positions_value_gbp']} |",
-            f"| Since inception | £{_signed(valuation['pnl_gbp'])} "
+            f"| Total value | ${valuation['total_value_usd']} (as at {valuation['as_of']}) |",
+            f"| Cash | ${valuation['cash_usd']} |",
+            f"| Positions | ${valuation['positions_value_usd']} |",
+            f"| Since inception | ${_signed(valuation['pnl_usd'])} "
             f"({_signed(valuation['pnl_pct'])}%) |",
         ]
     if change is None:
         lines.append("| Change this week | no valuation before this week to compare against |")
     else:
-        lines.append(f"| Change this week | £{_signed(change)} ({_signed(change_pct)}%) |")
+        lines.append(f"| Change this week | ${_signed(change)} ({_signed(change_pct)}%) |")
 
     lines += _benchmark_section(metrics, change_pct)
     lines += _activity_section(runs, metrics)
@@ -292,11 +292,11 @@ def _benchmark_section(metrics: dict[str, Any], change_pct: Decimal | None) -> l
     ]
     for row in metrics["benchmarks"]:
         label = "Savings at 5%" if row["symbol"] == CASH_SYMBOL else f"{row['symbol']} (proxy)"
-        value = f"£{row['value_gbp']}" if row["value_gbp"] is not None else "—"
-        if row["value_gbp"] is not None and row["opening_gbp"]:
-            delta = money(row["value_gbp"] - row["opening_gbp"])
-            pct = money(delta / row["opening_gbp"] * 100)
-            movement = f"£{_signed(delta)} ({_signed(pct)}%)"
+        value = f"${row['value_usd']}" if row["value_usd"] is not None else "—"
+        if row["value_usd"] is not None and row["opening_usd"]:
+            delta = money(row["value_usd"] - row["opening_usd"])
+            pct = money(delta / row["opening_usd"] * 100)
+            movement = f"${_signed(delta)} ({_signed(pct)}%)"
         else:
             movement = "no earlier value to compare"
         lines.append(f"| {label} | {value} | {movement} |")
@@ -369,9 +369,9 @@ def _risk_section(metrics: dict[str, Any], lim: RiskLimits) -> list[str]:
         # these are called. `RISK_` is `RiskSettings`' env_prefix.
         "| Limit | Value | Setting |",
         "| --- | --- | --- |",
-        f"| Largest single trade | £{lim.max_trade_gbp} | `RISK_MAX_TRADE_GBP` |",
-        f"| Smallest single trade | £{lim.min_trade_gbp} | `RISK_MIN_TRADE_GBP` |",
-        f"| Largest position | £{lim.max_position_gbp} | `RISK_MAX_POSITION_GBP` |",
+        f"| Largest single trade | ${lim.max_trade_usd} | `RISK_MAX_TRADE_USD` |",
+        f"| Smallest single trade | ${lim.min_trade_usd} | `RISK_MIN_TRADE_USD` |",
+        f"| Largest position | ${lim.max_position_usd} | `RISK_MAX_POSITION_USD` |",
         f"| Concentration ceiling | {lim.max_concentration_pct}% of the portfolio "
         f"| `RISK_MAX_CONCENTRATION_PCT` |",
         f"| Total exposure ceiling | {lim.max_total_exposure_pct}% of the portfolio "
@@ -429,7 +429,7 @@ def _trades_section(metrics: dict[str, Any]) -> list[str]:
     ]
     for row in metrics["trades"]:
         lines.append(
-            f"| {row['status']} | {row['trades']} | {row['simulated']} | £{row['notional_gbp']} |"
+            f"| {row['status']} | {row['trades']} | {row['simulated']} | ${row['notional_usd']} |"
         )
     lines += [
         "",

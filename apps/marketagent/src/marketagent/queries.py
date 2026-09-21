@@ -41,50 +41,30 @@ def _plain(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def overview(conn: Any) -> dict[str, Any]:
-    """The headline numbers: what the £500 is now worth, and how the run went."""
+    """The headline numbers: what the paper account is now worth, and how the run went."""
     portfolio = _row(
         conn,
-        "SELECT id, name, base_currency, initial_cash_gbp, cash_gbp, updated_at"
+        "SELECT id, name, base_currency, initial_cash_usd, cash_usd, equity_usd, "
+        "buying_power_usd, broker_synced_at, display_gbp_usd, display_fx_as_of, updated_at"
         " FROM portfolio WHERE name = %s",
         (DEFAULT_PORTFOLIO,),
     )
     if portfolio is None:
         return {"portfolio": None}
 
-    # Positions are valued at the latest close, joined per ticker with a lateral
-    # so a ticker with no price contributes nothing rather than dropping the row.
-    #
-    # The rate is the most recently *recorded* one, not max() — which was the
-    # first version and is wrong in a way that worsens: max() locks onto the
-    # highest rate ever seen and never moves again. The valuation is therefore
-    # only as fresh as the last rate we stored, which is consistent, since the
-    # prices it multiplies are daily closes rather than live quotes.
     valuation = _row(
         conn,
-        "WITH fx AS ("
-        "  SELECT rate FROM ("
-        "    SELECT fx_rate_gbp_usd AS rate, as_of::timestamptz AS at"
-        "      FROM daily_performance WHERE fx_rate_gbp_usd IS NOT NULL"
-        "    UNION ALL"
-        "    SELECT fx_rate_gbp_usd AS rate, created_at AS at FROM trades"
-        "  ) r ORDER BY at DESC LIMIT 1"
-        ")"
-        " SELECT coalesce(sum(p.quantity * lc.close_usd"
-        "                     / coalesce((SELECT rate FROM fx), 1)), 0) AS positions_value_gbp,"
-        "        count(*) AS position_count"
-        " FROM positions p"
-        " LEFT JOIN LATERAL ("
-        "   SELECT close_usd FROM prices WHERE ticker = p.ticker"
-        "   ORDER BY bar_date DESC LIMIT 1"
-        " ) lc ON true"
-        " WHERE p.portfolio_id = %s",
+        "SELECT coalesce(sum(coalesce(p.market_value_usd,p.quantity*lc.close_usd)),0) "
+        "AS positions_value_usd,count(*) AS position_count FROM positions p "
+        "LEFT JOIN LATERAL (SELECT close_usd FROM prices WHERE ticker=p.ticker "
+        "ORDER BY bar_date DESC LIMIT 1) lc ON true WHERE p.portfolio_id=%s",
         (portfolio["id"],),
     )
 
-    cash = portfolio["cash_gbp"]
-    invested = valuation["positions_value_gbp"] if valuation else 0.0
-    total = cash + invested
-    initial = portfolio["initial_cash_gbp"]
+    cash = portfolio["cash_usd"]
+    invested = valuation["positions_value_usd"] if valuation else 0.0
+    total = portfolio["equity_usd"] if portfolio["equity_usd"] is not None else cash + invested
+    initial = portfolio["initial_cash_usd"]
 
     last_run = _row(
         conn,
@@ -95,11 +75,15 @@ def overview(conn: Any) -> dict[str, Any]:
 
     return {
         "portfolio": portfolio,
-        "cash_gbp": cash,
-        "positions_value_gbp": invested,
-        "total_value_gbp": total,
+        "broker_synced_at": portfolio["broker_synced_at"],
+        "buying_power_usd": portfolio["buying_power_usd"],
+        "display_gbp_usd": portfolio["display_gbp_usd"],
+        "display_fx_as_of": portfolio["display_fx_as_of"],
+        "cash_usd": cash,
+        "positions_value_usd": invested,
+        "total_value_usd": total,
         "position_count": valuation["position_count"] if valuation else 0,
-        "pnl_gbp": total - initial,
+        "pnl_usd": total - initial,
         # Percent, matching daily_performance.pnl_pct: 12.34 is +12.34%.
         "pnl_pct": ((total - initial) / initial * 100) if initial else 0.0,
         "last_run": last_run,
@@ -111,14 +95,14 @@ def performance(conn: Any, days: int = 180) -> dict[str, Any]:
     return {
         "portfolio": _rows(
             conn,
-            "SELECT as_of, total_value_gbp, cash_gbp, positions_value_gbp, pnl_gbp, pnl_pct"
+            "SELECT as_of, total_value_usd, cash_usd, positions_value_usd, pnl_usd, pnl_pct"
             " FROM daily_performance WHERE as_of > current_date - %s::int"
             " ORDER BY as_of",
             (days,),
         ),
         "benchmarks": _rows(
             conn,
-            "SELECT symbol, as_of, value_gbp, close_usd FROM benchmarks"
+            "SELECT symbol, as_of, value_usd, close_usd FROM benchmarks"
             " WHERE as_of > current_date - %s::int ORDER BY symbol, as_of",
             (days,),
         ),
@@ -128,7 +112,7 @@ def performance(conn: Any, days: int = 180) -> dict[str, Any]:
 def holdings(conn: Any) -> list[dict[str, Any]]:
     return _rows(
         conn,
-        "SELECT p.ticker, c.name, c.sector, p.quantity, p.avg_cost_usd, p.avg_cost_gbp,"
+        "SELECT p.ticker, c.name, c.sector, p.quantity, p.avg_cost_usd, p.market_value_usd,"
         "       lc.close_usd AS last_close_usd, lc.bar_date AS last_close_date,"
         "       p.opened_at, p.updated_at"
         " FROM positions p"
@@ -167,7 +151,7 @@ def decisions(conn: Any, limit: int = 50, ticker: str | None = None) -> list[dic
     return _rows(
         conn,
         "SELECT d.id, d.run_id, d.decided_at, d.ticker, d.action, d.confidence,"
-        "       d.recommended_amount_gbp, d.approved_amount_gbp, d.model,"
+        "       d.recommended_amount_usd, d.approved_amount_usd, d.model,"
         "       d.risk_verdict->>'binding_constraint' AS binding_constraint,"
         "       (d.risk_verdict->>'approved')::boolean AS approved,"
         "       cardinality(d.news_ids) AS news_count"
@@ -199,8 +183,8 @@ def decision(conn: Any, decision_id: int) -> dict[str, Any] | None:
     )
     found["trades"] = _rows(
         conn,
-        "SELECT id, ticker, side, status, dry_run, quantity, price_usd, notional_gbp,"
-        "       notional_usd, fx_rate_gbp_usd, created_at, filled_at"
+        "SELECT id, ticker, side, status, dry_run, quantity, price_usd, notional_usd,"
+        "       created_at, filled_at"
         " FROM trades WHERE decision_id = %s ORDER BY created_at",
         (decision_id,),
     )
@@ -232,7 +216,7 @@ def trades(conn: Any, limit: int = 50) -> list[dict[str, Any]]:
     return _rows(
         conn,
         "SELECT id, decision_id, ticker, side, status, dry_run, quantity, price_usd,"
-        "       notional_usd, notional_gbp, fx_rate_gbp_usd, fx_rate_as_of,"
+        "       notional_usd,"
         "       broker_order_id, created_at, submitted_at, filled_at"
         " FROM trades ORDER BY created_at DESC LIMIT %s",
         (limit,),

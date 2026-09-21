@@ -69,7 +69,7 @@ resource "azurerm_container_app_job" "agent" {
       args    = ["agent", "--trigger", "schedule"]
 
       dynamic "env" {
-        for_each = local.common_env
+        for_each = local.agent_env
         content {
           name  = env.key
           value = env.value
@@ -83,6 +83,8 @@ resource "azurerm_container_app_job" "agent" {
   # Same split as azurerm_container_app.api: `make deploy` (az cli) owns the
   # image and IMAGE_TAG after the first revision. See that resource's comment
   # for why the whole env list is ignored rather than just IMAGE_TAG's entry.
+  # This includes DRY_RUN: changing agent_dry_run on an existing job also needs
+  # an explicit `az containerapp job update --set-env-vars DRY_RUN=...`.
   lifecycle {
     ignore_changes = [
       template[0].container[0].image,
@@ -197,6 +199,68 @@ resource "azurerm_container_app_job" "weekly_review" {
 
   # See azurerm_container_app_job.agent above: `make deploy` owns image and
   # IMAGE_TAG from the first revision onward.
+  lifecycle {
+    ignore_changes = [
+      template[0].container[0].image,
+      template[0].container[0].env,
+      template[0].container[0].command,
+    ]
+  }
+}
+
+module "naming_sync" {
+  # checkov:skip=CKV_TF_1: Terraform Registry module pinned by semver.
+  source  = "Azure/naming/azurerm"
+  version = "~> 0.4"
+  suffix  = [var.project_name, var.environment, "sync"]
+}
+
+# Read-only broker requests; no model calls, orders or email.
+resource "azurerm_container_app_job" "broker_sync" {
+  name                         = module.naming_sync.container_app_job.name
+  container_app_environment_id = azurerm_container_app_environment.this.id
+  resource_group_name          = azurerm_resource_group.this.name
+  location                     = azurerm_resource_group.this.location
+
+  replica_timeout_in_seconds = 120
+  replica_retry_limit        = 1
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.this.id]
+  }
+
+  schedule_trigger_config {
+    cron_expression          = var.broker_sync_cron_expression
+    parallelism              = 1
+    replica_completion_count = 1
+  }
+
+  template {
+    container {
+      name   = "broker-sync"
+      image  = local.app_image
+      cpu    = local.container_cpu
+      memory = local.container_memory
+
+      command = ["marketagent"]
+      args    = ["sync"]
+
+      dynamic "env" {
+        for_each = local.common_env
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+    }
+  }
+
+  tags = local.tags
+
+  # Same split as azurerm_container_app.api: `make deploy` (az cli) owns the
+  # image and IMAGE_TAG after the first revision. See that resource's comment
+  # for why the whole env list is ignored rather than just IMAGE_TAG's entry.
   lifecycle {
     ignore_changes = [
       template[0].container[0].image,

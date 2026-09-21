@@ -14,8 +14,8 @@
  * comparable across panels in a way the lines deliberately are not.
  *
  * Quoted in USD against the USD cost basis, not converted: this answers "what
- * did the stock do", and mixing in the GBP rate would fold a currency move into
- * a figure read as the company's. The portfolio's own GBP P&L is on the
+ * did the stock do", and mixing in the USD rate would fold a currency move into
+ * a figure read as the company's. The portfolio's own USD P&L is on the
  * overview, where the FX belongs.
  */
 
@@ -23,8 +23,7 @@ import { useMemo, useState } from "react";
 import { Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import type { Holding, PricePoint } from "../api";
-
-const usd = (value: number): string => `$${value.toFixed(2)}`;
+import { displayMoney } from "../api";
 
 function PanelTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
@@ -33,7 +32,7 @@ function PanelTooltip({ active, payload, label }: any) {
       <div className="t-date">{label}</div>
       <div className="t-row">
         <span>Close</span>
-        <span className="t-val">{usd(payload[0].value)}</span>
+        <span className="t-val">{displayMoney(payload[0].value)}</span>
       </div>
     </div>
   );
@@ -97,9 +96,9 @@ function Panel({ holding, points }: { holding: Holding; points: PricePoint[] }) 
       )}
 
       <div className="trend-foot">
-        <span className="trend-close">{last === null ? "—" : usd(last)}</span>
+        <span className="trend-close">{last === null ? "—" : displayMoney(last)}</span>
         {/* Sign in the text as well as the colour, and the basis named: this is
-            the stock against what we paid, not the holding's GBP return. */}
+            the stock against what we paid, not the holding's USD return. */}
         <span className={change === null ? undefined : change >= 0 ? "up" : "down"}>
           {change === null ? "—" : `${change >= 0 ? "+" : ""}${change.toFixed(1)}% vs cost`}
         </span>
@@ -214,7 +213,7 @@ export function PriceTrends({ holdings, prices }: { holdings: Holding[]; prices:
                     const point = byTicker.get(h.ticker)?.find((p) => p.bar_date === date);
                     return (
                       <td className="num" key={h.ticker}>
-                        {point === undefined ? "—" : usd(point.close_usd)}
+                        {point === undefined ? "—" : displayMoney(point.close_usd)}
                       </td>
                     );
                   })}

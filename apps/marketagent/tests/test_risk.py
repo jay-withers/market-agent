@@ -25,9 +25,9 @@ D = Decimal
 
 def limits(**overrides) -> RiskLimits:
     defaults = dict(
-        max_position_gbp=D(100),
-        max_trade_gbp=D(100),
-        min_trade_gbp=D(5),
+        max_position_usd=D(100),
+        max_trade_usd=D(100),
+        min_trade_usd=D(5),
         max_concentration_pct=D(30),
         max_total_exposure_pct=D(80),
         max_daily_trades=5,
@@ -40,13 +40,13 @@ def limits(**overrides) -> RiskLimits:
 def state(cash: Decimal = D(420), holdings: dict[str, Decimal] | None = None) -> PortfolioState:
     holdings = {"NVDA": D(80)} if holdings is None else holdings
     return PortfolioState(
-        cash_gbp=cash,
+        cash_usd=cash,
         positions=tuple(
             Position(
                 ticker=ticker,
                 quantity=D("1.0"),
-                value_gbp=value,
-                avg_cost_gbp=value,
+                value_usd=value,
+                avg_cost_usd=value,
             )
             for ticker, value in holdings.items()
         ),
@@ -63,7 +63,7 @@ def rec(
         ticker=ticker,
         action=action,
         confidence=confidence,
-        suggested_amount_gbp=amount,
+        suggested_amount_usd=amount,
         reasoning="Datacentre revenue beat expectations.",
         risks="Concentration risk in a single sector.",
     )
@@ -75,25 +75,25 @@ def rec(
 
 
 def test_brief_worked_example_buy_50_with_80_held_against_100_cap_approves_20():
-    """BUY £50 NVDA, £80 already held, £100 max position -> approve £20."""
+    """BUY $50 NVDA, $80 already held, $100 max position -> approve $20."""
     verdict = evaluate(rec(), state(), limits(), trades_today=0)
 
     assert verdict.approved is True
-    assert verdict.approved_amount_gbp == D("20.0000")
-    assert verdict.binding_constraint == "max_position_gbp"
+    assert verdict.approved_amount_usd == D("20.0000")
+    assert verdict.binding_constraint == "max_position_usd"
 
 
 def test_worked_example_records_every_cap_it_considered():
     verdict = evaluate(rec(), state(), limits(), trades_today=0)
 
-    caps = {r.constraint: r.cap_gbp for r in verdict.reasons}
+    caps = {r.constraint: r.cap_usd for r in verdict.reasons}
     assert caps == {
         "recommended_amount": D("50.0000"),
-        "max_trade_gbp": D("100.0000"),
-        "max_position_gbp": D("20.0000"),
-        # 30% of the £500 total, less the £80 already held.
+        "max_trade_usd": D("100.0000"),
+        "max_position_usd": D("20.0000"),
+        # 30% of the $500 total, less the $80 already held.
         "max_concentration_pct": D("70.0000"),
-        # 80% of £500, less £80 invested.
+        # 80% of $500, less $80 invested.
         "max_total_exposure_pct": D("320.0000"),
         "available_cash": D("420.0000"),
     }
@@ -108,7 +108,7 @@ def test_hold_is_refused_without_considering_any_cap():
     verdict = evaluate(rec(action="HOLD"), state(), limits(), trades_today=0)
 
     assert verdict.approved is False
-    assert verdict.approved_amount_gbp is None
+    assert verdict.approved_amount_usd is None
     assert verdict.binding_constraint == "action_is_hold"
     assert [r.constraint for r in verdict.reasons] == ["action_is_hold"]
 
@@ -178,7 +178,7 @@ def test_a_recommendation_inside_every_limit_passes_through_unclamped():
     verdict = evaluate(rec(amount=D(10)), state(), limits(), trades_today=0)
 
     assert verdict.approved is True
-    assert verdict.approved_amount_gbp == D("10.0000")
+    assert verdict.approved_amount_usd == D("10.0000")
     # Nothing clamped it, so the recommendation itself is what bound the size.
     assert verdict.binding_constraint == "recommended_amount"
 
@@ -187,12 +187,12 @@ def test_max_trade_clamps_a_large_recommendation():
     verdict = evaluate(
         rec(amount=D(200)),
         state(holdings={}),
-        limits(max_trade_gbp=D(25), max_position_gbp=D(1000)),
+        limits(max_trade_usd=D(25), max_position_usd=D(1000)),
         trades_today=0,
     )
 
-    assert verdict.approved_amount_gbp == D("25.0000")
-    assert verdict.binding_constraint == "max_trade_gbp"
+    assert verdict.approved_amount_usd == D("25.0000")
+    assert verdict.binding_constraint == "max_trade_usd"
 
 
 def test_available_cash_clamps_the_trade():
@@ -206,7 +206,7 @@ def test_available_cash_clamps_the_trade():
         trades_today=0,
     )
 
-    assert verdict.approved_amount_gbp == D("12.0000")
+    assert verdict.approved_amount_usd == D("12.0000")
     assert verdict.binding_constraint == "available_cash"
 
 
@@ -214,45 +214,45 @@ def test_the_exposure_ceiling_binds_before_cash_whenever_it_is_under_100_pct():
     """Cash is dominated by the exposure ceiling, and the ordering says so.
 
     Exposure headroom is `pct x total - invested` and cash is
-    `total - invested`, so for any pct below 100 the former is smaller. A £12
+    `total - invested`, so for any pct below 100 the former is smaller. A $12
     all-cash portfolio against a 30% concentration limit really can only buy
-    £3.60, and that is the honest answer rather than "you have £12".
+    $3.60, and that is the honest answer rather than "you have $12".
     """
     verdict = evaluate(
         rec(amount=D(50)),
         state(cash=D(12), holdings={}),
-        limits(min_trade_gbp=D(1)),
+        limits(min_trade_usd=D(1)),
         trades_today=0,
     )
 
-    assert verdict.approved_amount_gbp == D("3.6000")
+    assert verdict.approved_amount_usd == D("3.6000")
     assert verdict.binding_constraint == "max_concentration_pct"
 
 
 def test_concentration_clamps_before_the_absolute_position_cap():
-    # £1,000 total, 10% concentration -> £100 for any one name, while the
-    # absolute cap would allow £400.
+    # $1,000 total, 10% concentration -> $100 for any one name, while the
+    # absolute cap would allow $400.
     verdict = evaluate(
         rec(amount=D(500)),
         state(cash=D(1000), holdings={}),
-        limits(max_concentration_pct=D(10), max_position_gbp=D(400), max_trade_gbp=D(500)),
+        limits(max_concentration_pct=D(10), max_position_usd=D(400), max_trade_usd=D(500)),
         trades_today=0,
     )
 
-    assert verdict.approved_amount_gbp == D("100.0000")
+    assert verdict.approved_amount_usd == D("100.0000")
     assert verdict.binding_constraint == "max_concentration_pct"
 
 
 def test_total_exposure_ceiling_clamps_the_trade():
-    # £1,000 total, £700 already invested elsewhere, 80% ceiling -> £100 left.
+    # $1,000 total, $700 already invested elsewhere, 80% ceiling -> $100 left.
     verdict = evaluate(
         rec(amount=D(500)),
         state(cash=D(300), holdings={"AAPL": D(400), "MSFT": D(300)}),
-        limits(max_total_exposure_pct=D(80), max_trade_gbp=D(500), max_position_gbp=D(500)),
+        limits(max_total_exposure_pct=D(80), max_trade_usd=D(500), max_position_usd=D(500)),
         trades_today=0,
     )
 
-    assert verdict.approved_amount_gbp == D("100.0000")
+    assert verdict.approved_amount_usd == D("100.0000")
     assert verdict.binding_constraint == "max_total_exposure_pct"
 
 
@@ -260,11 +260,11 @@ def test_sell_is_clamped_by_the_size_of_the_holding():
     verdict = evaluate(
         rec(action="SELL", amount=D(500)),
         state(),
-        limits(max_trade_gbp=D(1000)),
+        limits(max_trade_usd=D(1000)),
         trades_today=0,
     )
 
-    assert verdict.approved_amount_gbp == D("80.0000")
+    assert verdict.approved_amount_usd == D("80.0000")
     assert verdict.binding_constraint == "position_size"
 
 
@@ -278,9 +278,9 @@ def test_sell_is_not_constrained_by_cash_concentration_or_exposure():
     )
 
     assert verdict.approved is True
-    assert verdict.approved_amount_gbp == D("50.0000")
+    assert verdict.approved_amount_usd == D("50.0000")
     considered = {r.constraint for r in verdict.reasons}
-    assert considered == {"recommended_amount", "max_trade_gbp", "position_size"}
+    assert considered == {"recommended_amount", "max_trade_usd", "position_size"}
 
 
 # ---------------------------------------------------------------------------
@@ -292,59 +292,59 @@ def test_a_trade_clamped_below_the_minimum_is_refused():
     verdict = evaluate(
         rec(amount=D(50)),
         state(holdings={"NVDA": D("98")}),
-        limits(min_trade_gbp=D(5)),
+        limits(min_trade_usd=D(5)),
         trades_today=0,
     )
 
     assert verdict.approved is False
-    assert verdict.approved_amount_gbp is None
+    assert verdict.approved_amount_usd is None
     # The minimum is what turned this into a refusal...
-    assert verdict.binding_constraint == "below_min_trade_gbp"
-    # ...but the £2 of headroom that caused it is still on the record.
-    caps = {r.constraint: r.cap_gbp for r in verdict.reasons}
-    assert caps["max_position_gbp"] == D("2.0000")
+    assert verdict.binding_constraint == "below_min_trade_usd"
+    # ...but the $2 of headroom that caused it is still on the record.
+    caps = {r.constraint: r.cap_usd for r in verdict.reasons}
+    assert caps["max_position_usd"] == D("2.0000")
 
 
 def test_a_recommendation_below_the_minimum_is_refused_outright():
-    verdict = evaluate(rec(amount=D(2)), state(), limits(min_trade_gbp=D(5)), trades_today=0)
+    verdict = evaluate(rec(amount=D(2)), state(), limits(min_trade_usd=D(5)), trades_today=0)
 
     assert verdict.approved is False
-    assert verdict.binding_constraint == "below_min_trade_gbp"
+    assert verdict.binding_constraint == "below_min_trade_usd"
 
 
 def test_a_trade_exactly_at_the_minimum_is_allowed():
-    verdict = evaluate(rec(amount=D(5)), state(), limits(min_trade_gbp=D(5)), trades_today=0)
+    verdict = evaluate(rec(amount=D(5)), state(), limits(min_trade_usd=D(5)), trades_today=0)
 
     assert verdict.approved is True
-    assert verdict.approved_amount_gbp == D("5.0000")
+    assert verdict.approved_amount_usd == D("5.0000")
 
 
 def test_a_position_already_at_its_cap_leaves_no_headroom():
     verdict = evaluate(
         rec(amount=D(50)),
         state(holdings={"NVDA": D(100)}),
-        limits(max_position_gbp=D(100)),
+        limits(max_position_usd=D(100)),
         trades_today=0,
     )
 
     assert verdict.approved is False
-    assert verdict.approved_amount_gbp is None
-    assert verdict.binding_constraint == "max_position_gbp"
+    assert verdict.approved_amount_usd is None
+    assert verdict.binding_constraint == "max_position_usd"
 
 
 def test_a_position_pushed_over_its_cap_by_a_price_rise_never_yields_a_negative_cap():
-    """A £150 holding against a £100 cap is -£50 of headroom, not a £50 trade."""
+    """A $150 holding against a $100 cap is -$50 of headroom, not a $50 trade."""
     verdict = evaluate(
         rec(amount=D(50)),
         state(holdings={"NVDA": D(150)}),
-        limits(max_position_gbp=D(100)),
+        limits(max_position_usd=D(100)),
         trades_today=0,
     )
 
     assert verdict.approved is False
-    assert verdict.approved_amount_gbp is None
-    caps = {r.constraint: r.cap_gbp for r in verdict.reasons}
-    assert caps["max_position_gbp"] == D("0.0000")
+    assert verdict.approved_amount_usd is None
+    caps = {r.constraint: r.cap_usd for r in verdict.reasons}
+    assert caps["max_position_usd"] == D("0.0000")
     assert all(cap >= 0 for cap in caps.values())
 
 
@@ -352,7 +352,7 @@ def test_exposure_already_over_the_ceiling_yields_no_headroom():
     verdict = evaluate(
         rec(ticker="MSFT", amount=D(50)),
         state(cash=D(10), holdings={"AAPL": D(500), "NVDA": D(490)}),
-        limits(max_total_exposure_pct=D(50), max_position_gbp=D(1000)),
+        limits(max_total_exposure_pct=D(50), max_position_usd=D(1000)),
         trades_today=0,
     )
 
@@ -366,16 +366,16 @@ def test_exposure_already_over_the_ceiling_yields_no_headroom():
 
 
 def test_percentage_caps_round_down_so_a_limit_is_never_exceeded():
-    # 30% of £333.3333 is £99.99999, which must floor to £99.9999 rather than
+    # 30% of $333.3333 is $99.99999, which must floor to $99.9999 rather than
     # rounding up past the ceiling.
     verdict = evaluate(
         rec(amount=D(500)),
         state(cash=D("333.3333"), holdings={}),
-        limits(max_concentration_pct=D(30), max_trade_gbp=D(500), max_position_gbp=D(500)),
+        limits(max_concentration_pct=D(30), max_trade_usd=D(500), max_position_usd=D(500)),
         trades_today=0,
     )
 
-    assert verdict.approved_amount_gbp == D("99.9999")
+    assert verdict.approved_amount_usd == D("99.9999")
 
 
 def test_the_approved_amount_never_exceeds_available_cash():
@@ -386,8 +386,8 @@ def test_the_approved_amount_never_exceeds_available_cash():
         trades_today=0,
     )
 
-    assert verdict.approved_amount_gbp is not None
-    assert verdict.approved_amount_gbp <= D("19.99999")
+    assert verdict.approved_amount_usd is not None
+    assert verdict.approved_amount_usd <= D("19.99999")
 
 
 def test_evaluate_does_not_mutate_the_state_it_is_given():
@@ -415,7 +415,7 @@ def test_a_refusal_never_reports_a_constraint_twice():
     verdict = evaluate(
         rec(amount=D(50)),
         state(holdings={"NVDA": D(150)}),
-        limits(max_position_gbp=D(100)),
+        limits(max_position_usd=D(100)),
         trades_today=0,
     )
 
@@ -445,6 +445,6 @@ def test_every_verdict_cites_its_binding_constraint_in_its_reasons():
 def test_an_approved_amount_never_exceeds_the_binding_cap():
     verdict = evaluate(rec(), state(), limits(), trades_today=0)
 
-    caps = {r.constraint: r.cap_gbp for r in verdict.reasons}
-    assert verdict.approved_amount_gbp == caps[verdict.binding_constraint]
-    assert all(verdict.approved_amount_gbp <= cap for cap in caps.values())
+    caps = {r.constraint: r.cap_usd for r in verdict.reasons}
+    assert verdict.approved_amount_usd == caps[verdict.binding_constraint]
+    assert all(verdict.approved_amount_usd <= cap for cap in caps.values())

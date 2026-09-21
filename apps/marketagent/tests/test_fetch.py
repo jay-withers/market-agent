@@ -69,9 +69,9 @@ def test_a_transport_error_is_retried():
 
 def test_query_parameters_are_sent():
     captured: list = []
-    get_json("https://x/y", params={"base": "GBP"}, client=json_client({}, capture=captured))
+    get_json("https://x/y", params={"base": "USD"}, client=json_client({}, capture=captured))
 
-    assert captured[0].url.params["base"] == "GBP"
+    assert captured[0].url.params["base"] == "USD"
 
 
 def test_a_post_is_never_retried():

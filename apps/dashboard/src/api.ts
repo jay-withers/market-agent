@@ -8,12 +8,16 @@
  */
 
 export type Overview = {
-  portfolio: { name: string; initial_cash_gbp: number } | null;
-  cash_gbp: number;
-  positions_value_gbp: number;
-  total_value_gbp: number;
+  portfolio: { name: string; initial_cash_usd: number } | null;
+  cash_usd: number;
+  broker_synced_at?: string | null;
+  buying_power_usd?: number | null;
+  display_gbp_usd?: number | null;
+  display_fx_as_of?: string | null;
+  positions_value_usd: number;
+  total_value_usd: number;
   position_count: number;
-  pnl_gbp: number;
+  pnl_usd: number;
   pnl_pct: number;
   last_run: {
     id: number;
@@ -29,17 +33,17 @@ export type Overview = {
 
 export type PerformancePoint = {
   as_of: string;
-  total_value_gbp: number;
-  cash_gbp: number;
-  positions_value_gbp: number;
-  pnl_gbp: number;
+  total_value_usd: number;
+  cash_usd: number;
+  positions_value_usd: number;
+  pnl_usd: number;
   pnl_pct: number;
 };
 
 export type BenchmarkPoint = {
   symbol: string;
   as_of: string;
-  value_gbp: number;
+  value_usd: number;
   close_usd: number | null;
 };
 
@@ -54,7 +58,7 @@ export type Holding = {
   sector: string | null;
   quantity: number;
   avg_cost_usd: number;
-  avg_cost_gbp: number;
+  market_value_usd: number | null;
   last_close_usd: number | null;
   last_close_date: string | null;
 };
@@ -73,8 +77,8 @@ export type Decision = {
   ticker: string;
   action: "BUY" | "SELL" | "HOLD";
   confidence: number | null;
-  recommended_amount_gbp: number | null;
-  approved_amount_gbp: number | null;
+  recommended_amount_usd: number | null;
+  approved_amount_usd: number | null;
   binding_constraint: string | null;
   approved: boolean | null;
   news_count: number;
@@ -108,7 +112,7 @@ export type Trade = {
   dry_run: boolean;
   quantity: number | null;
   price_usd: number | null;
-  notional_gbp: number;
+  notional_usd: number;
   created_at: string;
 };
 
@@ -173,14 +177,33 @@ export async function get<T>(path: string): Promise<T> {
   return (await response.json()) as T;
 }
 
-export const gbp = (value: number | null | undefined): string =>
-  value === null || value === undefined
+export type DisplayCurrency = "USD" | "GBP";
+
+let displayCurrency: DisplayCurrency = "USD";
+let displayGbpUsd: number | null = null;
+
+export function configureDisplayCurrency(currency: DisplayCurrency, gbpUsd: number | null): void {
+  displayCurrency = currency;
+  displayGbpUsd = gbpUsd;
+}
+
+export const money = (
+  valueUsd: number | null | undefined,
+  currency: DisplayCurrency = "USD",
+  gbpUsd: number | null = null,
+): string =>
+  valueUsd === null || valueUsd === undefined
     ? "—"
-    : new Intl.NumberFormat("en-GB", {
+    : new Intl.NumberFormat(currency === "USD" ? "en-US" : "en-GB", {
         style: "currency",
-        currency: "GBP",
+        currency,
         maximumFractionDigits: 2,
-      }).format(value);
+      }).format(currency === "GBP" && gbpUsd ? valueUsd / gbpUsd : valueUsd);
+
+// Prices and model costs are intrinsically USD and never use the display toggle.
+export const usd = (value: number | null | undefined): string => money(value);
+export const displayMoney = (value: number | null | undefined): string =>
+  money(value, displayCurrency, displayGbpUsd);
 
 export const pct = (value: number | null | undefined): string =>
   value === null || value === undefined ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;

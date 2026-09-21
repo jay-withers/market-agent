@@ -87,14 +87,14 @@ demo: ## Start the local stack and load fake data for a dashboard preview
 # container that restarted would trade again each time.
 #
 # Local database, but *real* calls to Alpaca, Frankfurter and Anthropic — the
-# last of which is billed. It places no order, because DRY_RUN is true in the
-# compose environment.
+# last of which is billed. Submits Alpaca paper orders by default; use
+# `DRY_RUN=true make run-agent` to simulate fills without submitting orders.
 #
 # Secrets come from Key Vault rather than a file. The image has no `az`, so the
 # token is minted here and passed in: it lasts about an hour and is scoped to
 # Key Vault alone, which is a far better thing to hand a container than four
 # long-lived API keys in a .env. Falls back to .env if there is no az login.
-run-agent: ## Run the agent once against the local stack (real APIs, no orders)
+run-agent: ## Run the agent once against the local stack (Alpaca paper orders)
 	KEY_VAULT_URI=$(KEY_VAULT_URI) \
 	AZURE_KEYVAULT_TOKEN="$$(az account get-access-token \
 	  --resource https://vault.azure.net --query accessToken -o tsv 2>/dev/null)" \
@@ -199,12 +199,13 @@ deploy: ## Deploy built images to Container Apps via az cli (needs IMAGE_TAG=vX.
 	AGENT=$$(terraform -chdir=$(TF_DIR) output -raw agent_job_name); \
 	SUMMARY=$$(terraform -chdir=$(TF_DIR) output -raw summary_job_name); \
 	WEEKLY=$$(terraform -chdir=$(TF_DIR) output -raw weekly_review_job_name); \
+	SYNC=$$(terraform -chdir=$(TF_DIR) output -raw broker_sync_job_name); \
 	az containerapp update --name $$API --resource-group $$RG \
 	  --image $(IMAGE_REGISTRY)/marketagent:$(MARKETAGENT_IMAGE_TAG) \
 	  --set-env-vars IMAGE_TAG=$(MARKETAGENT_IMAGE_TAG); \
 	az containerapp update --name $$DASHBOARD --resource-group $$RG \
 	  --image $(IMAGE_REGISTRY)/dashboard:$(DASHBOARD_IMAGE_TAG); \
-	for JOB in $$AGENT $$SUMMARY $$WEEKLY; do \
+	for JOB in $$AGENT $$SUMMARY $$WEEKLY $$SYNC; do \
 	  az containerapp job update --name $$JOB --resource-group $$RG \
 	    --image $(IMAGE_REGISTRY)/marketagent:$(MARKETAGENT_IMAGE_TAG) \
 	    --set-env-vars IMAGE_TAG=$(MARKETAGENT_IMAGE_TAG); \

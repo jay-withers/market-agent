@@ -48,7 +48,7 @@ def _gate(constraint: Constraint, detail: str) -> RiskVerdict:
     """A verdict permitting nothing, refused before any cap was computed."""
     return RiskVerdict(
         approved=False,
-        approved_amount_gbp=None,
+        approved_amount_usd=None,
         reasons=(RiskReason(constraint=constraint, detail=detail),),
         binding_constraint=constraint,
     )
@@ -64,7 +64,7 @@ def _refused(constraint: Constraint, reasons: list[RiskReason]) -> RiskVerdict:
     """
     return RiskVerdict(
         approved=False,
-        approved_amount_gbp=None,
+        approved_amount_usd=None,
         reasons=tuple(reasons),
         binding_constraint=constraint,
     )
@@ -107,20 +107,20 @@ def evaluate(
     if rec.action == "SELL" and held <= ZERO:
         return _gate("no_position_to_sell", f"no {rec.ticker} held")
 
-    if rec.suggested_amount_gbp is None or money(rec.suggested_amount_gbp) <= ZERO:
+    if rec.suggested_amount_usd is None or money(rec.suggested_amount_usd) <= ZERO:
         return _gate("no_amount_recommended", f"{rec.action} without a positive amount")
 
     # --- Caps --------------------------------------------------------------
 
-    requested = money(rec.suggested_amount_gbp)
-    total = state.total_value_gbp
+    requested = money(rec.suggested_amount_usd)
+    total = state.total_value_usd
 
     caps: list[tuple[Constraint, Decimal, str]] = [
-        ("recommended_amount", requested, f"the model asked for £{requested}"),
+        ("recommended_amount", requested, f"the model asked for ${requested}"),
         (
-            "max_trade_gbp",
-            money(limits.max_trade_gbp),
-            f"a single trade may not exceed £{money(limits.max_trade_gbp)}",
+            "max_trade_usd",
+            money(limits.max_trade_usd),
+            f"a single trade may not exceed ${money(limits.max_trade_usd)}",
         ),
     ]
 
@@ -129,10 +129,10 @@ def evaluate(
         # unchanged and only alters its composition. That is why the
         # concentration and exposure denominators are the *current* total and
         # no fixed-point iteration is needed to find a self-consistent size.
-        position_headroom = _headroom(money(limits.max_position_gbp) - held)
+        position_headroom = _headroom(money(limits.max_position_usd) - held)
         concentration_cap = _pct(total, limits.max_concentration_pct)
         exposure_headroom = _headroom(
-            _pct(total, limits.max_total_exposure_pct) - state.invested_gbp
+            _pct(total, limits.max_total_exposure_pct) - state.invested_usd
         )
         # Cash comes before the policy limits so that where it ties with one,
         # the physical constraint is the one reported. Note that cash is
@@ -142,56 +142,56 @@ def evaluate(
         # backstop for a 100% ceiling and for a state that disagrees with
         # itself, not because it is expected to bind.
         caps += [
-            ("available_cash", _headroom(state.cash_gbp), f"£{money(state.cash_gbp)} cash"),
+            ("available_cash", _headroom(state.cash_usd), f"${money(state.cash_usd)} cash"),
             (
-                "max_position_gbp",
+                "max_position_usd",
                 position_headroom,
-                f"£{held} of {rec.ticker} held against a £{money(limits.max_position_gbp)} cap",
+                f"${held} of {rec.ticker} held against a ${money(limits.max_position_usd)} cap",
             ),
             (
                 "max_concentration_pct",
                 _headroom(concentration_cap - held),
-                f"{limits.max_concentration_pct}% of £{total} is £{concentration_cap}",
+                f"{limits.max_concentration_pct}% of ${total} is ${concentration_cap}",
             ),
             (
                 "max_total_exposure_pct",
                 exposure_headroom,
-                f"£{state.invested_gbp} invested of a "
+                f"${state.invested_usd} invested of a "
                 f"{limits.max_total_exposure_pct}% exposure ceiling",
             ),
         ]
     else:
         # A sell reduces exposure, so concentration, total exposure and cash
         # cannot constrain it. Only the size of the holding can.
-        caps.append(("position_size", held, f"£{held} of {rec.ticker} held"))
+        caps.append(("position_size", held, f"${held} of {rec.ticker} held"))
 
     # min() over a list of tuples would compare the constraint name on a tie;
     # this keeps the fixed evaluation order as the tie-break instead.
     binding, approved, _ = min(caps, key=lambda cap: cap[1])
 
-    reasons = [RiskReason(constraint=name, detail=text, cap_gbp=cap) for name, cap, text in caps]
+    reasons = [RiskReason(constraint=name, detail=text, cap_usd=cap) for name, cap, text in caps]
 
     if approved <= ZERO:
         return _refused(binding, reasons)
 
-    if approved < money(limits.min_trade_gbp):
+    if approved < money(limits.min_trade_usd):
         # The clamping cap stays in `reasons` as the root cause; the minimum
         # trade size is what actually turned this into a refusal, so it is the
         # binding constraint.
         reasons.append(
             RiskReason(
-                constraint="below_min_trade_gbp",
+                constraint="below_min_trade_usd",
                 detail=(
-                    f"£{approved} ({binding}) is below the "
-                    f"£{money(limits.min_trade_gbp)} minimum trade"
+                    f"${approved} ({binding}) is below the "
+                    f"${money(limits.min_trade_usd)} minimum trade"
                 ),
             )
         )
-        return _refused("below_min_trade_gbp", reasons)
+        return _refused("below_min_trade_usd", reasons)
 
     return RiskVerdict(
         approved=True,
-        approved_amount_gbp=approved,
+        approved_amount_usd=approved,
         reasons=tuple(reasons),
         binding_constraint=binding,
     )

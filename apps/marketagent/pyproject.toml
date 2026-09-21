@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "AI paper-trading agent: news and market data in, risk-checked simulated trades out"
 requires-python = ">=3.12"
 
-# One package, one image, four entrypoints (api, agent, summary, weekly): they
+# One package, one image, five entrypoints (api, agent, sync, summary, weekly): they
 # share the risk engine, the database layer, the broker client and the LLM
 # client, so splitting them would mean four builds of near-identical layers.
 #

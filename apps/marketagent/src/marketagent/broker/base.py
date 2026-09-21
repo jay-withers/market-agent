@@ -45,15 +45,37 @@ class OrderResult:
 class BrokerPosition:
     """A holding as the broker sees it.
 
-    Used for reconciliation only. Our `positions` table is the source of truth
-    for the experiment, because the paper account is funded with $100,000
-    against a notional £500 and its figures describe a different portfolio.
+    Alpaca supplies quantities, valuation and cost basis for the mirrored account.
     """
 
     ticker: str
     quantity: Decimal
     market_value_usd: Decimal
     avg_entry_price_usd: Decimal
+
+
+@dataclass(frozen=True)
+class BrokerAccount:
+    id: str
+    cash_usd: Decimal
+    equity_usd: Decimal
+    buying_power_usd: Decimal
+    currency: str = "USD"
+    trading_blocked: bool = False
+
+
+@dataclass(frozen=True)
+class OpenOrder:
+    ticker: str
+    side: str
+    reserved_usd: Decimal
+
+
+@dataclass(frozen=True)
+class BrokerSnapshot:
+    account: BrokerAccount
+    positions: list[BrokerPosition]
+    open_orders: list[OpenOrder]
 
 
 class Broker(Protocol):

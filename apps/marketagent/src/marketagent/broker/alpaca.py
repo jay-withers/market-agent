@@ -7,7 +7,15 @@ from decimal import Decimal
 from typing import Any
 
 from ..alpaca_api import get_trading, post_trading
-from .base import BrokerPosition, OrderResult, Side, Status
+from .base import (
+    BrokerAccount,
+    BrokerPosition,
+    BrokerSnapshot,
+    OpenOrder,
+    OrderResult,
+    Side,
+    Status,
+)
 
 ORDERS_PATH = "/v2/orders"
 POSITIONS_PATH = "/v2/positions"
@@ -124,3 +132,39 @@ class AlpacaBroker:
             )
             for row in payload
         ]
+
+    def snapshot(self) -> BrokerSnapshot:
+        positions = self.positions()
+        orders = get_trading(ORDERS_PATH, {"status": "open", "limit": 500}, client=self._client)
+        if len(orders) >= 500:
+            raise RuntimeError("Open order list may be truncated; refusing incomplete snapshot")
+        open_orders = []
+        for row in orders:
+            reserved = Decimal(0)
+            if row["side"] == "buy":
+                # Reserve the full original notional even on a partial fill.
+                # Over-reserving is preferable to spending unsettled cash twice.
+                if row.get("notional"):
+                    reserved = Decimal(row["notional"])
+                elif row.get("qty") and row.get("limit_price"):
+                    reserved = Decimal(row["qty"]) * Decimal(row["limit_price"])
+                else:
+                    raise RuntimeError("Cannot size an open buy order; wait for it to finish")
+            open_orders.append(OpenOrder(row["symbol"], row["side"], reserved))
+        row = get_trading("/v2/account", client=self._client)
+        account = BrokerAccount(
+            id=row["id"],
+            currency=row["currency"],
+            cash_usd=Decimal(row["cash"]),
+            equity_usd=Decimal(row["equity"]),
+            buying_power_usd=Decimal(row["buying_power"]),
+            trading_blocked=bool(
+                row.get("trading_blocked")
+                or row.get("account_blocked")
+                or row.get("trade_suspended_by_user")
+                or row.get("status") != "ACTIVE"
+            ),
+        )
+        if account.currency != "USD":
+            raise RuntimeError("Only USD Alpaca accounts are supported")
+        return BrokerSnapshot(account, positions, open_orders)

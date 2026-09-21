@@ -3,10 +3,9 @@
 Azure infrastructure for **MarketAgent**, an AI paper-trading and investment
 research platform: an LLM analyses financial news and market data and recommends
 BUY/SELL/HOLD, a deterministic risk engine decides what is actually permitted,
-and the resulting simulated trades run against a paper-trading broker. No real
-money is ever connected. The point of the experiment is to find out, over three
-to six months, whether the AI beats simply putting £500 into a passive index or
-leaving it in a savings account.
+and approved orders run against Alpaca's paper-trading broker. No real money is
+ever connected. The experiment mirrors the $100,000 paper account and compares
+its performance with passive indexes and a savings benchmark.
 
 This repository contains the Terraform infrastructure and the **application**,
 both deployed and running — see [The application](#the-application) and
@@ -17,14 +16,15 @@ both deployed and running — see [The application](#the-application) and
 | Resource | Purpose |
 | --- | --- |
 | Resource group | Everything below lives here |
-| User-assigned managed identity | Shared by all four workloads; reads Key Vault and authenticates to PostgreSQL |
+| User-assigned managed identity | Shared by all five workloads; reads Key Vault and authenticates to PostgreSQL |
 | Log Analytics workspace | Container and job logs, with a daily ingestion cap |
 | Application Insights | Workspace-based, with a daily data cap |
 | Key Vault | RBAC-authorised. Terraform owns the vault, **not** the secret values |
 | Container Apps environment | Consumption-only, so idle costs nothing |
 | Container app `api` | Read-only FastAPI backend, scales to zero |
 | Container app `dashboard` | React dashboard on nginx, scales to zero |
-| Container app job `agent` | Scheduled: news → analysis → risk engine → simulated trade |
+| Container app job `agent` | Scheduled: news → analysis → risk engine → Alpaca paper order |
+| Container app job `sync` | Every five minutes: mirror Alpaca cash, equity, positions and open orders |
 | Container app job `daily-summary` | Scheduled: performance, benchmarks, email |
 | Container app job `weekly-review` | Scheduled Sunday: reviews the week, proposes changes |
 | PostgreSQL Flexible Server + database | Burstable B1ms, Entra-only authentication. The one resource that bills while idle |
@@ -49,8 +49,8 @@ Two departures from the original design:
 
 ## The application
 
-`apps/marketagent/` is one Python package with four entrypoints (`api`, `agent`,
-`summary`, `weekly`) sharing one image: they have the risk engine, the database
+`apps/marketagent/` is one Python package with five entrypoints (`api`, `agent`,
+`sync`, `summary`, `weekly`) sharing one image: they have the risk engine, the database
 layer, the broker client and the LLM client in common, so four images would mean
 four builds of near-identical layers. The dashboard is genuinely separate and gets
 its own.
@@ -84,7 +84,8 @@ the single constraint that decided the outcome, which is what gets written to
 
 ```bash
 make up          # Postgres with the schema baked in, the API, and the dashboard
-make run-agent   # one agent run: real market data and LLM calls, no orders
+make demo        # same stack, loaded with dummy $100,000 account data
+make run-agent   # one agent run: real market data, LLM calls, Alpaca paper orders
 make down        # stop, and delete the data volume
 ```
 
@@ -93,17 +94,39 @@ The dashboard is then on <http://localhost:8080> and the API on
 from inside the dev container reach a service at its bridge IP or via
 `host.docker.internal`.
 
+The dashboard accounts in USD to match Alpaca. Its `$ USD` / `£ GBP` control
+can convert every displayed amount using the latest reference rate; changing
+the display currency does not alter stored values or order sizes.
+
 Secrets come from Key Vault, not a file: `make run-agent` mints a short-lived,
 Key Vault-scoped token from your `az login` and passes it in, because the image
 has no `az` and so cannot authenticate on its own. A `.env` works too — see
 `.env.example` — for anyone with no Azure access.
 
-`DRY_RUN` defaults to **true**, so the whole decision path runs and is recorded
-but no order is ever submitted.
+`DRY_RUN` defaults to **false**, so approved trades are submitted to Alpaca's
+paper account. Set `DRY_RUN=true` to record simulated fills without submitting
+orders, including locally with `DRY_RUN=true make run-agent`.
+
+Azure's agent job sets this explicitly through Terraform's `agent_dry_run`
+variable. It defaults to `false` in every environment. The job also pins
+`ALPACA_TRADING_BASE_URL` to `https://paper-api.alpaca.markets`.
+
+The job's environment variables are covered by `lifecycle.ignore_changes`, so
+Terraform seeds these settings when creating a job but does not update them on
+an existing job. When changing mode, update the environment's tfvars and the
+running job together. For dev, the following has already been applied:
+
+```bash
+az containerapp job update --name caj-marketagent-dev-agent \
+  --resource-group rg-marketagent-dev \
+  --set-env-vars DRY_RUN=false ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets
+```
+
+`make deploy` preserves these settings when updating the image.
 
 ## Deploying
 
-All four workloads run from public ghcr.io images. **Merging to `main` builds
+All five workloads run from public ghcr.io images. **Merging to `main` builds
 and pushes them**: `cd-tag` bumps the semver tag, then `cd-publish` builds both
 images on a native amd64 runner and pushes each under two immutable tags — the
 release (`v1.2.3`) and the commit's short SHA, which is what `IMAGE_TAG`
@@ -519,7 +542,7 @@ always runs and aggregates the validate and plan jobs.
 
 ```
 apps/
-  marketagent/                  # one Python package, four entrypoints, one image
+  marketagent/                  # one Python package, five entrypoints, one image
     src/marketagent/
       settings.py               # config; secrets from env, then Key Vault
       db.py                     # psycopg pool, Entra token or password auth
@@ -527,7 +550,7 @@ apps/
       risk.py                   # the deterministic risk engine (pure)
       risklimits.py             # the engine's bounds, from RISK_* variables
       fetch.py                  # shared HTTP, with retries (never on POST)
-      fx.py                     # GBP/USD from Frankfurter
+      fx.py                     # GBP/USD reference rate for dashboard display
       alpaca_api.py             # one credential pair, three Alpaca surfaces
       marketdata.py  news.py    # daily bars; headlines narrowed to the watchlist
       benchmarks.py             # SPY/VT/EWU proxies and cash at 5%
@@ -535,7 +558,7 @@ apps/
       repository.py             # the writes, sharing a caller's transaction
       telemetry.py              # App Insights; off without a connection string
       queries.py                # the API's reads
-      cli.py                    # marketagent api|agent|summary
+      cli.py                    # marketagent api|agent|sync|summary|weekly
       llm/base.py  llm/anthropic_provider.py
       broker/base.py  broker/alpaca.py  broker/dryrun.py
       jobs/agent.py  jobs/summary.py
@@ -554,6 +577,7 @@ sql/                            # numbered, idempotent, applied by the runner
   005-weekly-reviews.sql
   006-decision-context.sql
   007-job-costs.sql
+  008-usd-broker-account.sql    # USD ledger and Alpaca account mirror
   grant-uai-access.sql          # Azure-only: pgaadauth lives in `postgres`
 docker/Dockerfile.db            # local Postgres with the schema baked in
 docker-compose.yml

@@ -15,7 +15,6 @@ from decimal import Decimal
 
 import pytest
 
-from marketagent.fx import FxRate
 from marketagent.jobs.agent import (
     BudgetExceeded,
     _check_budget,
@@ -41,23 +40,23 @@ def _decision(**overrides) -> dict:
         on_date=date(2026, 9, 12),
         action="BUY",
         confidence=D("0.7800"),
-        recommended_amount_gbp=D("40.0000"),
-        approved_amount_gbp=D("30.0000"),
-        binding_constraint="max_trade_gbp",
+        recommended_amount_usd=D("40.0000"),
+        approved_amount_usd=D("30.0000"),
+        binding_constraint="max_trade_usd",
         trade_status="submitted",
     )
     return {**defaults, **overrides}
 
 
 def _state() -> PortfolioState:
-    return PortfolioState(cash_gbp=D("500.0000"))
+    return PortfolioState(cash_usd=D("500.0000"))
 
 
 def _limits() -> RiskLimits:
     return RiskLimits(
-        max_position_gbp=D(100),
-        max_trade_gbp=D(50),
-        min_trade_gbp=D(5),
+        max_position_usd=D(100),
+        max_trade_usd=D(50),
+        min_trade_usd=D(5),
         max_concentration_pct=D(25),
         max_total_exposure_pct=D(80),
         max_daily_trades=3,
@@ -89,7 +88,6 @@ def _rendered(history) -> str:
         ],
         _state(),
         _limits(),
-        FxRate(gbp_usd=D("1.3400"), as_of=date(2026, 9, 12)),
         history,
     )
 
@@ -104,9 +102,9 @@ def test_every_field_of_a_prior_decision_is_shown():
     assert "2026-09-12" in line
     assert "BUY" in line
     assert "confidence 0.78" in line
-    assert "asked GBP 40.0000" in line
-    assert "approved GBP 30.0000" in line
-    assert "binding constraint max_trade_gbp" in line
+    assert "asked USD 40.0000" in line
+    assert "approved USD 30.0000" in line
+    assert "binding constraint max_trade_usd" in line
     assert "order submitted" in line
 
 
@@ -119,7 +117,7 @@ def test_a_first_assessment_says_so_rather_than_showing_an_empty_list():
 def test_a_refused_decision_shows_no_approved_amount_rather_than_zero():
     # NULL and 0 are different facts in `ai_decisions`: the engine refusing is
     # not the engine approving nothing.
-    line = _history_lines([_decision(approved_amount_gbp=None, trade_status=None)])
+    line = _history_lines([_decision(approved_amount_usd=None, trade_status=None)])
     assert "approved none" in line
     assert "order none placed" in line
 
@@ -129,8 +127,8 @@ def test_a_hold_is_shown_with_no_amounts_and_still_names_its_gate():
         [
             _decision(
                 action="HOLD",
-                recommended_amount_gbp=None,
-                approved_amount_gbp=None,
+                recommended_amount_usd=None,
+                approved_amount_usd=None,
                 binding_constraint="action_is_hold",
                 trade_status=None,
             )
@@ -154,7 +152,7 @@ def test_the_order_the_rows_arrive_in_is_the_order_shown():
 def test_the_prompt_carries_the_history_and_says_what_it_does_not_mean():
     prompt = _rendered([_decision()])
     assert "Your own recent decisions on NVDA" in prompt
-    assert "binding constraint max_trade_gbp" in prompt
+    assert "binding constraint max_trade_usd" in prompt
     # The model must not read a string of refusals as a verdict on its
     # analysis, nor an order's status as an outcome.
     assert "not about your reasoning" in prompt

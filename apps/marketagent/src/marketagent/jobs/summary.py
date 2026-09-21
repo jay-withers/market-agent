@@ -24,14 +24,13 @@ from ..benchmarks import build as build_benchmarks
 from ..broker.alpaca import AlpacaBroker
 from ..broker.base import Broker
 from ..db import pool
-from ..fetch import FetchError
-from ..fx import FxRate, fetch_gbp_usd
 from ..llm.anthropic_provider import AnthropicLlm
 from ..llm.base import PROMPT_VERSION, Llm
 from ..mailer import MailResult, send
 from ..marketdata import fetch_daily_bars, latest_close
 from ..models import money
 from ..settings import optional_secret, settings
+from ..sync import synchronize
 
 logger = logging.getLogger(__name__)
 
@@ -58,12 +57,14 @@ def run(
 
     with pool().connection() as conn:
         pid = repo.portfolio_id(conn)
+    synchronize(pid, broker, pool())
+    with pool().connection() as conn:
         inception = repo.portfolio_inception(conn, pid)
         initial = repo.initial_cash(conn, pid)
 
     filled = _reconcile(pid, broker)
+    synchronize(pid, broker, pool())
 
-    rate = _fx_rate(pid)
     benchmark_symbols = [s.strip() for s in cfg.benchmark_symbols.split(",") if s.strip()]
 
     with pool().connection() as conn:
@@ -77,11 +78,11 @@ def run(
         conn.commit()
 
     with pool().connection() as conn:
-        state, unpriced = repo.build_state(conn, pid, latest_close(bars), rate.gbp_usd)
+        state, unpriced = repo.build_state(conn, pid, latest_close(bars))
         if unpriced:
             logger.warning("valuing without a current price for: %s", ", ".join(unpriced))
 
-        total = state.total_value_gbp
+        total = state.total_value_usd
         pnl = money(total - initial)
         pnl_pct = money(pnl / initial * 100) if initial else Decimal(0)
 
@@ -89,13 +90,11 @@ def run(
             conn,
             pid,
             as_of,
-            cash_gbp=state.cash_gbp,
-            positions_value_gbp=state.invested_gbp,
-            total_value_gbp=total,
-            pnl_gbp=pnl,
+            cash_usd=state.cash_usd,
+            positions_value_usd=state.invested_usd,
+            total_value_usd=total,
+            pnl_usd=pnl,
             pnl_pct=pnl_pct,
-            fx_rate=rate.gbp_usd,
-            fx_rate_as_of=rate.as_of,
         )
 
         # Benchmarks are indexed from the first close at or after inception, so
@@ -111,7 +110,7 @@ def run(
             benchmark_symbols,
             benchmark_bars,
             inception_closes,
-            notional_gbp=initial,
+            notional_usd=initial,
             apr_pct=cfg.cash_benchmark_apr_pct,
             days_held=(as_of - inception).days,
             as_of=as_of,
@@ -125,7 +124,7 @@ def run(
     facts = _facts_table(
         as_of, state, initial, pnl, pnl_pct, points, filled, activity, spend, _credit_usd()
     )
-    subject = f"MarketAgent {as_of}: £{total} ({'+' if pnl >= 0 else ''}{pnl_pct}%)"
+    subject = f"MarketAgent {as_of}: ${total} ({'+' if pnl >= 0 else ''}{pnl_pct}%)"
     # Built from stored figures, never by the model — and that is exactly why
     # it has to carry this: a day the agent died still values the portfolio and
     # would otherwise be indistinguishable in an inbox from a day it worked.
@@ -159,35 +158,6 @@ def run(
     return summary_id
 
 
-def _fx_rate(pid: int) -> FxRate:
-    """Today's published rate, or the last one we stored if that is unreachable.
-
-    A Cloudflare 522 from Frankfurter cost the 2026-09-14 summary entirely — no
-    valuation, no benchmark arms, no row. On a series read over months a hole
-    distorts more than a rate a day or two old does, and the stored figure stays
-    honest either way: `fx_rate_as_of` records the day the rate is *for*, so a
-    fallback row is indistinguishable in shape from the weekend runs that
-    already carry Friday's rate because the ECB does not publish at weekends.
-
-    Deliberately not done in the agent job, which converts an approved GBP
-    amount into the USD notional it actually submits. Mis-sizing a real order
-    against an unknown-age rate works against the risk engine; skipping a
-    morning does not.
-    """
-    try:
-        return fetch_gbp_usd()
-    except FetchError as exc:
-        with pool().connection() as conn:
-            previous = repo.last_fx_rate(conn, pid)
-        if previous is None:
-            # Nothing to fall back to, so the original failure is the honest
-            # thing to report.
-            raise
-        rate, as_of = previous
-        logger.warning("fx lookup failed (%s); valuing at the stored rate from %s", exc, as_of)
-        return FxRate(gbp_usd=rate, as_of=as_of, source="frankfurter (stored)")
-
-
 def _reconcile(pid: int, broker: Broker) -> int:
     """Ask the broker what became of yesterday's submissions.
 
@@ -218,16 +188,6 @@ def _reconcile(pid: int, broker: Broker) -> int:
                 outcome.filled_at,
             )
             if outcome.status == "filled" and outcome.quantity and outcome.filled_avg_price_usd:
-                repo.apply_fill(
-                    conn,
-                    pid=pid,
-                    ticker=trade["ticker"],
-                    side=trade["side"],
-                    quantity=outcome.quantity,
-                    notional_gbp=trade["notional_gbp"],
-                    price_usd=outcome.filled_avg_price_usd,
-                    price_gbp=money(trade["notional_gbp"] / outcome.quantity),
-                )
                 filled += 1
             conn.commit()
 
@@ -340,20 +300,20 @@ def _facts_table(
         "",
         "| | |",
         "| --- | --- |",
-        f"| Total value | £{state.total_value_gbp} |",
-        f"| Cash | £{state.cash_gbp} |",
-        f"| Positions | £{state.invested_gbp} |",
-        f"| P&L | £{pnl} ({'+' if pnl >= 0 else ''}{pnl_pct}%) |",
-        f"| Started with | £{initial} |",
+        f"| Total value | ${state.total_value_usd} |",
+        f"| Cash | ${state.cash_usd} |",
+        f"| Positions | ${state.invested_usd} |",
+        f"| P&L | ${pnl} ({'+' if pnl >= 0 else ''}{pnl_pct}%) |",
+        f"| Started with | ${initial} |",
         "",
         "## Against the alternatives",
         "",
-        "| Benchmark | Value of £" + str(initial) + " |",
+        "| Benchmark | Value of $" + str(initial) + " |",
         "| --- | --- |",
     ]
     for point in sorted(points, key=lambda p: p.symbol):
         label = "Savings at 5%" if point.symbol == CASH_SYMBOL else f"{point.symbol} (proxy)"
-        lines.append(f"| {label} | £{point.value_gbp} |")
+        lines.append(f"| {label} | ${point.value_usd} |")
 
     lines += _run_section(activity["runs"])
 
@@ -372,7 +332,7 @@ def _facts_table(
         ]
         for ticker, side, status, notional, quantity, _price in trades:
             shares = quantity if quantity is not None else "not yet known"
-            lines.append(f"| {ticker} | {side} | {status} | £{notional} | {shares} |")
+            lines.append(f"| {ticker} | {side} | {status} | ${notional} | {shares} |")
         lines += [
             "",
             f"`simulated` means a dry run: the decision path ran in full and the "
@@ -385,8 +345,8 @@ def _facts_table(
 
     if activity["holdings"]:
         lines += ["", "## Holdings", "", "| Ticker | Quantity | Avg cost |", "| --- | --- | --- |"]
-        for ticker, quantity, avg_gbp, _close in activity["holdings"]:
-            lines.append(f"| {ticker} | {quantity} | £{avg_gbp} |")
+        for ticker, quantity, avg_usd, _close in activity["holdings"]:
+            lines.append(f"| {ticker} | {quantity} | ${avg_usd} |")
 
     if activity["decisions"]:
         lines += [
@@ -397,7 +357,7 @@ def _facts_table(
             "| --- | --- | --- | --- | --- |",
         ]
         for ticker, action, confidence, approved, _reasoning, binding in activity["decisions"]:
-            amount = f"£{approved}" if approved is not None else "—"
+            amount = f"${approved}" if approved is not None else "—"
             lines.append(f"| {ticker} | {action} | {confidence} | {amount} | {binding} |")
 
     if spend is not None:

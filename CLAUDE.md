@@ -6,10 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Azure infrastructure for **MarketAgent**, an AI paper-trading and investment
 research platform: an LLM recommends BUY/SELL/HOLD from news and market data, a
-deterministic risk engine decides what's actually permitted, and simulated trades
-run against a paper-trading broker. No real money, ever — the experiment is
-whether the AI beats a passive index or a savings account over 3–6 months with a
-notional £500.
+deterministic risk engine decides what's actually permitted, and approved orders
+run against Alpaca's paper-trading broker. No real money, ever — the experiment
+mirrors Alpaca's $100,000 paper account and compares it with passive indexes and
+a savings benchmark.
 
 **The application is written, deployed and working.** `apps/marketagent/` is the
 Python package (API, agent job, summary job) and `apps/dashboard/` is the React
@@ -383,8 +383,8 @@ rule.
 
 ## The application package
 
-`apps/marketagent/` is one Python package, one image, four entrypoints
-(`api`, `agent`, `summary`, `weekly`). They share the risk engine, the database
+`apps/marketagent/` is one Python package, one image, five entrypoints
+(`api`, `agent`, `sync`, `summary`, `weekly`). They share the risk engine, the database
 layer, the broker client and the LLM client, so splitting them into four images
 would mean four builds of near-identical layers. Deviates from the brief's suggested
 `apps/{api,agent,dashboard}` deliberately; the dashboard is genuinely separate
@@ -401,7 +401,7 @@ them land rather than declared up front.
   `filterwarnings = ["error"]` so a float sneaking into Decimal arithmetic fails
   rather than warns.
 - **The one place a float is allowed is the LLM's own output.** A
-  `Recommendation.suggested_amount_gbp` arrives as a JSON number and is coerced
+  `Recommendation.suggested_amount_usd` arrives as a JSON number and is coerced
   through a float, which is fine because it is an opinion, not an accounting
   figure — the risk engine quantizes it before using it, and every exact amount
   in the system originates from the engine or the database instead.
@@ -466,7 +466,7 @@ those strings are prompt text, not internal documentation — notes for a future
 maintainer go in a `#` comment instead. The original `Recommendation` docstring
 explained Python `Decimal` coercion and was being sent to the model verbatim.
 
-For the same reason `Recommendation.suggested_amount_gbp` is a **`float`**, the
+For the same reason `Recommendation.suggested_amount_usd` is a **`float`**, the
 only place in the system money is not a `Decimal`: declared as `Decimal` it
 rendered as a three-branch `anyOf` — number, string with a Decimal regex, or
 null — which is a worse thing to hand a model than a plain number. `money()`
@@ -541,8 +541,9 @@ finish first. Crossing it raises `BudgetExceeded`, which the existing handler
 closes the `agent_runs` row with, so the failure reads like any other. `gt=0`
 on the setting rather than "0 disables": a guard that switches off at the value
 which reads like "spend nothing" is the wrong footgun to leave lying around.
-Not wired through Terraform, because `DRY_RUN` is not either — the default
-applies to the deployed job and an override is an env var on the container.
+The cost ceiling is not wired through Terraform — its default applies to the
+deployed job and an override is an env var on the container. `DRY_RUN` is wired
+through Terraform's `agent_dry_run`, which defaults to false for paper trading.
 
 **"Submitted, no fill" is the normal outcome of a scheduled run.** The agent
 runs at 06:00 UTC and the US market opens at 14:30, so a market order sits

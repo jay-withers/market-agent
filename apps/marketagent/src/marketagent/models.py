@@ -32,11 +32,11 @@ Constraint = Literal[
     "daily_trade_limit",
     "no_position_to_sell",
     "no_amount_recommended",
-    "below_min_trade_gbp",
+    "below_min_trade_usd",
     # Caps — each yields a maximum permitted trade size.
     "recommended_amount",
-    "max_trade_gbp",
-    "max_position_gbp",
+    "max_trade_usd",
+    "max_position_usd",
     "max_concentration_pct",
     "max_total_exposure_pct",
     "available_cash",
@@ -81,7 +81,7 @@ class NewsRelevance(BaseModel):
     rationale: str = Field(description="One sentence explaining the relevance decision.")
 
 
-# `suggested_amount_gbp` is a `float`, the one place in this system money is
+# `suggested_amount_usd` is a `float`, the one place in this system money is
 # not a Decimal. A recommendation is an *opinion*, not an accounting figure:
 # the risk engine quantizes it before using it and nothing downstream treats it
 # as authoritative, so the imprecision cannot reach a stored figure. Declaring
@@ -99,9 +99,9 @@ class Recommendation(BaseModel):
     confidence: float = Field(
         ge=0.0, le=1.0, description="0.0 no confidence, 1.0 complete confidence."
     )
-    suggested_amount_gbp: float | None = Field(
+    suggested_amount_usd: float | None = Field(
         default=None,
-        description="Size of the trade in GBP. Omit for HOLD. A deterministic risk "
+        description="Size of the trade in USD. Omit for HOLD. A deterministic risk "
         "engine may reduce or refuse this.",
     )
     reasoning: str = Field(description="What in the evidence drove this call. Be specific.")
@@ -190,8 +190,8 @@ class Position(BaseModel):
     ticker: str
     quantity: Decimal
     # Marked to the latest close, so it moves without any trade happening.
-    value_gbp: Decimal
-    avg_cost_gbp: Decimal
+    value_usd: Decimal
+    avg_cost_usd: Decimal
 
 
 class PortfolioState(BaseModel):
@@ -207,20 +207,23 @@ class PortfolioState(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    cash_gbp: Decimal
+    cash_usd: Decimal
     positions: tuple[Position, ...] = ()
+    equity_usd: Decimal | None = None
 
     @property
-    def invested_gbp(self) -> Decimal:
-        return money(sum((p.value_gbp for p in self.positions), Decimal(0)))
+    def invested_usd(self) -> Decimal:
+        return money(sum((p.value_usd for p in self.positions), Decimal(0)))
 
     @property
-    def total_value_gbp(self) -> Decimal:
-        return money(self.cash_gbp + self.invested_gbp)
+    def total_value_usd(self) -> Decimal:
+        return money(
+            self.equity_usd if self.equity_usd is not None else self.cash_usd + self.invested_usd
+        )
 
     def position_value(self, ticker: str) -> Decimal:
         """Current value of the holding in `ticker`, or zero if none is held."""
-        return money(sum((p.value_gbp for p in self.positions if p.ticker == ticker), Decimal(0)))
+        return money(sum((p.value_usd for p in self.positions if p.ticker == ticker), Decimal(0)))
 
 
 # ---------------------------------------------------------------------------
@@ -237,12 +240,12 @@ class RiskLimits(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     # Largest total value any single holding may reach.
-    max_position_gbp: Decimal
+    max_position_usd: Decimal
     # Largest single trade.
-    max_trade_gbp: Decimal
+    max_trade_usd: Decimal
     # Below this a trade is not worth the spread, so it is refused outright
     # rather than clamped up.
-    min_trade_gbp: Decimal
+    min_trade_usd: Decimal
     max_concentration_pct: Decimal
     max_total_exposure_pct: Decimal
     max_daily_trades: int
@@ -263,7 +266,7 @@ class RiskReason(BaseModel):
     detail: str
     # The maximum this rule allowed, for a cap. None for a gate, which permits
     # nothing rather than some amount.
-    cap_gbp: Decimal | None = None
+    cap_usd: Decimal | None = None
 
 
 class RiskVerdict(BaseModel):
@@ -278,7 +281,7 @@ class RiskVerdict(BaseModel):
     approved: bool
     # None where nothing was permitted, distinguishing "the engine refused" from
     # "the engine approved zero", which cannot happen.
-    approved_amount_gbp: Decimal | None
+    approved_amount_usd: Decimal | None
     reasons: tuple[RiskReason, ...]
     # The rule that decided the outcome: for an approval the tightest cap, for a
     # rejection the gate that refused. Never None — every verdict has a cause.

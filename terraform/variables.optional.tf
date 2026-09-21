@@ -121,6 +121,13 @@ variable "dashboard_custom_domain_name" {
   default     = ""
 }
 
+variable "agent_dry_run" {
+  description = "Simulate trades without submitting orders to Alpaca. Set false to submit to the paper endpoint. Seeds the agent job on creation; existing jobs ignore environment changes, so also update DRY_RUN with az containerapp job update."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 variable "agent_cron_expression" {
   description = "Schedule for the AI trading agent job, as a 5-field cron expression evaluated in UTC."
   type        = string
@@ -174,4 +181,10 @@ variable "budget_start_date" {
     condition     = can(regex("^\\d{4}-\\d{2}-01T00:00:00Z$", var.budget_start_date))
     error_message = "budget_start_date must be the first of a month, as YYYY-MM-01T00:00:00Z."
   }
+}
+
+variable "broker_sync_cron_expression" {
+  description = "Refresh the Alpaca account mirror and order status without placing orders or calling the model."
+  type        = string
+  default     = "*/5 * * * *"
 }

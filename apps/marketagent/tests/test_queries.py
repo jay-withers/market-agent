@@ -38,17 +38,17 @@ def _decision(conn, ticker: str = TICKER, action: str = "BUY", approved: bool = 
             ticker=ticker,
             action=action,
             confidence=0.78,
-            suggested_amount_gbp=40.0,
+            suggested_amount_usd=40.0,
             reasoning="Because of the evidence.",
             risks="It could go down.",
         ),
         verdict=RiskVerdict(
             approved=approved,
-            approved_amount_gbp=D("30.0000") if approved else None,
-            reasons=(RiskReason(constraint="max_trade_gbp", detail="capped"),),
-            binding_constraint="max_trade_gbp",
+            approved_amount_usd=D("30.0000") if approved else None,
+            reasons=(RiskReason(constraint="max_trade_usd", detail="capped"),),
+            binding_constraint="max_trade_usd",
         ),
-        state=PortfolioState(cash_gbp=D("500.0000")),
+        state=PortfolioState(cash_usd=D("500.0000")),
         model="claude-sonnet-5",
         prompt_version="v1",
         news_ids=[],
@@ -61,10 +61,7 @@ def _trade(conn, pid: int, decision_id: int, fx: str = "1.250000", **kwargs) -> 
     defaults = dict(
         ticker=TICKER,
         side="BUY",
-        notional_gbp=D("30.0000"),
-        notional_usd=D("37.5000"),
-        fx_rate=D(fx),
-        fx_rate_as_of=TODAY,
+        notional_usd=D("30.0000"),
         status="submitted",
         dry_run=False,
         client_order_id=f"order-{decision_id}",
@@ -104,56 +101,43 @@ def _price(conn, ticker: str = TICKER, close: str = "100.0000", day: date = TODA
 def test_the_overview_of_an_untouched_portfolio_is_the_notional_and_no_pnl(conn):
     result = queries.overview(conn)
 
-    assert result["cash_gbp"] == 500.0
+    assert result["cash_usd"] == 100000.0
     assert result["position_count"] == 0
-    assert result["pnl_gbp"] == 0.0
+    assert result["pnl_usd"] == 0.0
     assert result["last_run"] is None
 
 
 def test_the_overview_values_positions_at_the_latest_close(conn):
     pid = repo.portfolio_id(conn)
     repo.apply_fill(
-        conn, pid, TICKER, "BUY", D("2.000000"), D("50.0000"), D("100.0000"), D("25.0000")
-    )
-    _price(conn, close="100.0000")
-    _trade(conn, pid, _decision(conn), fx="1.250000")
-
-    result = queries.overview(conn)
-
-    # 2 shares x $100 / 1.25
-    assert result["positions_value_gbp"] == 160.0
-    assert result["position_count"] == 1
-    assert result["total_value_gbp"] == 610.0
-
-
-def test_the_valuation_uses_the_most_recent_rate_and_not_the_highest_ever_seen(conn):
-    """The first version used max(), which is wrong in a way that worsens: it
-    locks onto the highest rate ever recorded and never moves again. A high
-    historical rate must not keep deflating today's valuation."""
-    pid = repo.portfolio_id(conn)
-    repo.apply_fill(
-        conn, pid, TICKER, "BUY", D("2.000000"), D("50.0000"), D("100.0000"), D("25.0000")
-    )
-    _price(conn, close="100.0000")
-    # An old, high rate, then a newer and lower one on a trade recorded now.
-    repo.save_daily_performance(
         conn,
         pid,
-        TODAY - timedelta(days=30),
-        D("500.0000"),
-        D("0.0000"),
-        D("500.0000"),
-        D("0.0000"),
-        D("0.0000"),
+        TICKER,
+        "BUY",
         D("2.000000"),
-        TODAY - timedelta(days=30),
+        D("50.0000"),
+        D("100.0000"),
     )
+    _price(conn, close="100.0000")
     _trade(conn, pid, _decision(conn), fx="1.250000")
 
     result = queries.overview(conn)
 
-    # Under max() this would be 2 x 100 / 2.0 = 100.0 for ever.
-    assert result["positions_value_gbp"] == 160.0
+    # 2 shares x $100; no FX conversion
+    assert result["positions_value_usd"] == 200.0
+    assert result["position_count"] == 1
+    assert result["total_value_usd"] == 100150.0
+
+
+def test_broker_valuation_takes_precedence_over_local_prices(conn):
+    pid = repo.portfolio_id(conn)
+    repo.apply_fill(conn, pid, TICKER, "BUY", D("2"), D("200"), D("100"))
+    _price(conn, close="90")
+    conn.execute("UPDATE positions SET market_value_usd=220 WHERE portfolio_id=%s", (pid,))
+    conn.execute("UPDATE portfolio SET equity_usd=100020 WHERE id=%s", (pid,))
+    result = queries.overview(conn)
+    assert result["positions_value_usd"] == 220
+    assert result["total_value_usd"] == 100020
 
 
 def test_a_position_with_no_price_contributes_nothing_but_still_counts(conn):
@@ -161,13 +145,19 @@ def test_a_position_with_no_price_contributes_nothing_but_still_counts(conn):
     row entirely."""
     pid = repo.portfolio_id(conn)
     repo.apply_fill(
-        conn, pid, TICKER, "BUY", D("2.000000"), D("50.0000"), D("100.0000"), D("25.0000")
+        conn,
+        pid,
+        TICKER,
+        "BUY",
+        D("2.000000"),
+        D("50.0000"),
+        D("100.0000"),
     )
 
     result = queries.overview(conn)
 
     assert result["position_count"] == 1
-    assert result["positions_value_gbp"] == 0.0
+    assert result["positions_value_usd"] == 0.0
 
 
 def test_the_overview_carries_the_most_recent_run(conn):
@@ -185,8 +175,8 @@ def test_money_crosses_the_display_boundary_as_float_not_decimal(conn):
     throws them away, and a Decimal would serialise as a JSON string."""
     result = queries.overview(conn)
 
-    assert isinstance(result["cash_gbp"], float)
-    assert not isinstance(result["cash_gbp"], Decimal)
+    assert isinstance(result["cash_usd"], float)
+    assert not isinstance(result["cash_usd"], Decimal)
 
 
 # ---------------------------------------------------------------------------
@@ -207,14 +197,12 @@ def test_the_performance_series_carries_the_portfolio_and_the_benchmarks(conn):
         D("510.0000"),
         D("10.0000"),
         D("2.0000"),
-        D("1.250000"),
-        TODAY,
     )
-    repo.save_benchmarks(conn, [BenchmarkPoint(symbol="SPY", as_of=TODAY, value_gbp=D("505.0000"))])
+    repo.save_benchmarks(conn, [BenchmarkPoint(symbol="SPY", as_of=TODAY, value_usd=D("505.0000"))])
 
     result = queries.performance(conn, days=30)
 
-    assert [r["total_value_gbp"] for r in result["portfolio"]] == [510.0]
+    assert [r["total_value_usd"] for r in result["portfolio"]] == [510.0]
     assert [r["symbol"] for r in result["benchmarks"]] == ["SPY"]
 
 
@@ -229,8 +217,6 @@ def test_the_performance_window_excludes_anything_older(conn):
         D("500.0000"),
         D("0.0000"),
         D("0.0000"),
-        D("1.250000"),
-        TODAY - timedelta(days=90),
     )
 
     assert queries.performance(conn, days=7)["portfolio"] == []
@@ -239,7 +225,13 @@ def test_the_performance_window_excludes_anything_older(conn):
 def test_holdings_carry_the_company_name_and_the_last_close(conn):
     pid = repo.portfolio_id(conn)
     repo.apply_fill(
-        conn, pid, TICKER, "BUY", D("2.000000"), D("50.0000"), D("100.0000"), D("25.0000")
+        conn,
+        pid,
+        TICKER,
+        "BUY",
+        D("2.000000"),
+        D("50.0000"),
+        D("100.0000"),
     )
     _price(conn, close="100.0000")
 
@@ -259,7 +251,13 @@ def test_the_price_history_covers_held_tickers_only(conn):
     """
     pid = repo.portfolio_id(conn)
     repo.apply_fill(
-        conn, pid, TICKER, "BUY", D("2.000000"), D("50.0000"), D("100.0000"), D("25.0000")
+        conn,
+        pid,
+        TICKER,
+        "BUY",
+        D("2.000000"),
+        D("50.0000"),
+        D("100.0000"),
     )
     _price(conn, ticker=TICKER, close="100.0000", day=TODAY - timedelta(days=1))
     _price(conn, ticker=TICKER, close="104.0000", day=TODAY)
@@ -275,7 +273,13 @@ def test_the_price_history_covers_held_tickers_only(conn):
 def test_the_price_history_window_excludes_older_bars(conn):
     pid = repo.portfolio_id(conn)
     repo.apply_fill(
-        conn, pid, TICKER, "BUY", D("2.000000"), D("50.0000"), D("100.0000"), D("25.0000")
+        conn,
+        pid,
+        TICKER,
+        "BUY",
+        D("2.000000"),
+        D("50.0000"),
+        D("100.0000"),
     )
     _price(conn, ticker=TICKER, close="90.0000", day=TODAY - timedelta(days=40))
     _price(conn, ticker=TICKER, close="110.0000", day=TODAY)
@@ -296,7 +300,7 @@ def test_decisions_are_newest_first_and_report_the_engines_verdict(conn):
     rows = queries.decisions(conn, limit=10)
 
     assert rows[0]["approved"] is False
-    assert rows[0]["binding_constraint"] == "max_trade_gbp"
+    assert rows[0]["binding_constraint"] == "max_trade_usd"
     assert rows[0]["news_count"] == 0
 
 
@@ -342,17 +346,17 @@ def test_one_decision_comes_back_with_the_articles_and_trades_behind_it(conn):
             ticker=TICKER,
             action="BUY",
             confidence=0.8,
-            suggested_amount_gbp=40.0,
+            suggested_amount_usd=40.0,
             reasoning="r",
             risks="k",
         ),
         verdict=RiskVerdict(
             approved=True,
-            approved_amount_gbp=D("30.0000"),
-            reasons=(RiskReason(constraint="max_trade_gbp", detail="capped"),),
-            binding_constraint="max_trade_gbp",
+            approved_amount_usd=D("30.0000"),
+            reasons=(RiskReason(constraint="max_trade_usd", detail="capped"),),
+            binding_constraint="max_trade_usd",
         ),
-        state=PortfolioState(cash_gbp=D("500.0000")),
+        state=PortfolioState(cash_usd=D("500.0000")),
         model="claude-sonnet-5",
         prompt_version="v1",
         news_ids=[news_id],

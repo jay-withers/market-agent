@@ -9,7 +9,7 @@
 import { Fragment, useState } from "react";
 
 import type { Article, Decision, DecisionDetail, Holding, Run, Trade } from "../api";
-import { day, gbp, get, pct, when } from "../api";
+import { day, displayMoney, get, pct, when } from "../api";
 
 export function HoldingsTable({ rows }: { rows: Holding[] }) {
   if (rows.length === 0) return <div className="state">Nothing held yet.</div>;
@@ -33,7 +33,7 @@ export function HoldingsTable({ rows }: { rows: Holding[] }) {
               <td>{row.ticker}</td>
               <td>{row.name}</td>
               <td className="num">{row.quantity.toFixed(6)}</td>
-              <td className="num">{gbp(row.avg_cost_gbp)}</td>
+              <td className="num">{displayMoney(row.avg_cost_usd)}</td>
               <td className="num">
                 {row.last_close_usd === null ? "—" : `$${row.last_close_usd.toFixed(2)}`}
               </td>
@@ -163,10 +163,10 @@ export function DecisionsTable({ rows }: { rows: Decision[] }) {
                 <td className="num">
                   {row.confidence === null ? "—" : row.confidence.toFixed(2)}
                 </td>
-                <td className="num">{gbp(row.recommended_amount_gbp)}</td>
-                {/* A refusal shows a dash, not £0.00: "approved nothing" and
+                <td className="num">{displayMoney(row.recommended_amount_usd)}</td>
+                {/* A refusal shows a dash, not $0.00: "approved nothing" and
                     "approved zero" are different facts. */}
-                <td className="num">{gbp(row.approved_amount_gbp)}</td>
+                <td className="num">{displayMoney(row.approved_amount_usd)}</td>
                 <td>
                   <span className="pill">{row.binding_constraint ?? "—"}</span>
                 </td>
@@ -233,7 +233,7 @@ export function TradesTable({ rows }: { rows: Trade[] }) {
                 <span className="pill">{row.status}</span>
                 {row.dry_run && <span className="pill" style={{ marginLeft: 6 }}>dry run</span>}
               </td>
-              <td className="num">{gbp(row.notional_gbp)}</td>
+              <td className="num">{displayMoney(row.notional_usd)}</td>
               {/* A notional order names no quantity until it fills, and a blank
                   cell would read as zero shares. */}
               <td className="num">
@@ -316,4 +316,4 @@ export function StatTile({
   );
 }
 
-export { gbp, pct };
+export { displayMoney, pct };

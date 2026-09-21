@@ -2,7 +2,7 @@
  * just buying an index, or leaving the money in the bank?
  *
  * A multi-series line chart, because the job is change over time across
- * comparable entities. Every series is the value of the same notional £500, so
+ * comparable entities. Every series is the value of the same notional $500, so
  * they share one axis — a second y-scale would be the single most common way to
  * make two series look related when they are not.
  *
@@ -26,7 +26,7 @@ import {
 } from "recharts";
 
 import type { Performance } from "../api";
-import { gbp } from "../api";
+import { displayMoney } from "../api";
 
 /* Colour follows the entity, in the palette's fixed slot order. The portfolio
  * takes slot 1 because it is the subject; the benchmarks follow in a stable
@@ -48,7 +48,7 @@ function toRows(data: Performance): Row[] {
   const byDate = new Map<string, Row>();
 
   for (const point of data.portfolio) {
-    byDate.set(point.as_of, { as_of: point.as_of, portfolio: point.total_value_gbp });
+    byDate.set(point.as_of, { as_of: point.as_of, portfolio: point.total_value_usd });
   }
   const known = new Set<string>(SERIES.map((s) => s.key));
   for (const point of data.benchmarks) {
@@ -56,7 +56,7 @@ function toRows(data: Performance): Row[] {
     // plotted in a colour outside the validated palette.
     if (!known.has(point.symbol)) continue;
     const row: Row = byDate.get(point.as_of) ?? { as_of: point.as_of };
-    row[point.symbol as SeriesKey] = point.value_gbp;
+    row[point.symbol as SeriesKey] = point.value_usd;
     byDate.set(point.as_of, row);
   }
 
@@ -74,7 +74,7 @@ function ChartTooltip({ active, payload, label }: any) {
             <span className="swatch" style={{ background: entry.color }} />
             {SERIES.find((s) => s.key === entry.dataKey)?.label ?? entry.dataKey}
           </span>
-          <span className="t-val">{gbp(entry.value)}</span>
+          <span className="t-val">{displayMoney(entry.value)}</span>
         </div>
       ))}
     </div>
@@ -133,7 +133,7 @@ export function PerformanceChart({ data }: { data: Performance }) {
                   <td>{row.as_of}</td>
                   {present.map((s) => (
                     <td className="num" key={s.key}>
-                      {row[s.key] === undefined ? "—" : gbp(row[s.key])}
+                      {row[s.key] === undefined ? "—" : displayMoney(row[s.key])}
                     </td>
                   ))}
                 </tr>
@@ -159,8 +159,8 @@ export function PerformanceChart({ data }: { data: Performance }) {
                 tickLine={false}
                 axisLine={false}
                 width={64}
-                tickFormatter={(v) => `£${Math.round(v)}`}
-                // Not from zero: every series starts near £500 and a zero
+                tickFormatter={(v) => `$${Math.round(v)}`}
+                // Not from zero: every series starts near $500 and a zero
                 // baseline would compress the entire experiment into the top
                 // few pixels. Honest here because these are indexed values
                 // being compared with each other, not magnitudes.

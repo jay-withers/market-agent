@@ -74,3 +74,8 @@ output "identity_client_id" {
   description = "Client ID of the workload identity, which the containers receive as `AZURE_CLIENT_ID` and use to acquire Key Vault and PostgreSQL tokens."
   value       = azurerm_user_assigned_identity.this.client_id
 }
+
+output "broker_sync_job_name" {
+  description = "Name of the account synchronization job, used by make deploy."
+  value       = azurerm_container_app_job.broker_sync.name
+}

@@ -182,3 +182,22 @@ test.describe("navigation", () => {
     }
   });
 });
+
+test.describe("display currency", () => {
+  test("converts account values to GBP and remembers the choice", async ({ page }) => {
+    await stubApi(page);
+    await page.goto("/");
+
+    await expect(page.getByText("$102,480.00", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "£ GBP" }).click();
+    await expect(page.getByText("£76,477.61", { exact: true })).toBeVisible();
+    await expect(page.getByText(/Trading and accounting remain in USD/)).toBeVisible();
+
+    await page.reload();
+    await expect(page.getByRole("button", { name: "£ GBP" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await expect(page.getByText("£76,477.61", { exact: true })).toBeVisible();
+  });
+});

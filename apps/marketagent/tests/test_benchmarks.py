@@ -80,7 +80,7 @@ def test_a_zero_inception_price_falls_back_to_the_notional():
 
 
 def test_the_index_ratio_needs_no_fx_because_the_currency_cancels():
-    """Both ends are USD, so the GBP return is the ratio times the notional.
+    """Both ends are USD, so the USD return is the ratio times the notional.
 
     An earlier version applied today's rate to both ends, producing a series
     that moved with sterling rather than with the index.
@@ -102,7 +102,7 @@ def test_the_cash_arm_is_always_present_and_carries_no_price():
 
 
 def test_an_index_with_no_current_price_is_skipped_not_flat_lined():
-    """A flat £500 would read as "the index did nothing", which is a different
+    """A flat $500 would read as "the index did nothing", which is a different
     and wrong claim from "we have no data"."""
     points = build(["SPY"], [], {"SPY": D(400)}, D(500), D(5), 10, TODAY)
 
@@ -125,7 +125,7 @@ def test_a_full_set_indexes_every_arm_from_inception():
         0,
         TODAY,
     )
-    values = {p.symbol: p.value_gbp for p in points}
+    values = {p.symbol: p.value_usd for p in points}
 
     assert values["SPY"] == D("600.0000")  # up 20%
     assert values["EWU"] == D("400.0000")  # down 20%
@@ -147,4 +147,4 @@ def test_a_cash_only_benchmark_list_makes_no_request():
 def test_the_planned_proxies_all_index_cleanly(symbol):
     points = build([symbol], [bar(symbol, D(110))], {symbol: D(100)}, D(500), D(5), 1, TODAY)
 
-    assert next(p for p in points if p.symbol == symbol).value_gbp == D("550.0000")
+    assert next(p for p in points if p.symbol == symbol).value_usd == D("550.0000")

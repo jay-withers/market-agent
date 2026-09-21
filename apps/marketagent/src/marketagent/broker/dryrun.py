@@ -1,7 +1,7 @@
 """A broker that records what it would have done.
 
-`DRY_RUN` defaults on, so this is the first thing a deploy exercises. It is a
-separate implementation of the same protocol rather than an `if dry_run:` in
+Set `DRY_RUN=true` to opt into this broker. It is a separate implementation
+of the same protocol rather than an `if dry_run:` in
 the agent job, which keeps the execution branch out of the loop and makes the
 safe path as testable as the real one.
 """

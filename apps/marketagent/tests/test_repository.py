@@ -70,7 +70,7 @@ def _recommendation(action: str = "BUY", amount: float | None = 40.0) -> Recomme
         ticker=TICKER,
         action=action,
         confidence=0.78,
-        suggested_amount_gbp=amount,
+        suggested_amount_usd=amount,
         reasoning="Because of the evidence.",
         risks="It could go down.",
     )
@@ -79,18 +79,18 @@ def _recommendation(action: str = "BUY", amount: float | None = 40.0) -> Recomme
 def _verdict(
     approved: bool = True,
     amount: str | None = "30.0000",
-    constraint: str = "max_trade_gbp",
+    constraint: str = "max_trade_usd",
 ) -> RiskVerdict:
     return RiskVerdict(
         approved=approved,
-        approved_amount_gbp=D(amount) if amount else None,
-        reasons=(RiskReason(constraint=constraint, detail="capped", cap_gbp=D("30.0000")),),
+        approved_amount_usd=D(amount) if amount else None,
+        reasons=(RiskReason(constraint=constraint, detail="capped", cap_usd=D("30.0000")),),
         binding_constraint=constraint,
     )
 
 
-def _fill(conn, pid, side: str, qty: str, gbp: str, usd: str, cost_gbp: str) -> None:
-    repo.apply_fill(conn, pid, TICKER, side, D(qty), D(gbp), D(usd), D(cost_gbp))
+def _fill(conn, pid, side: str, qty: str, notional: str, price: str, cost_usd: str) -> None:
+    repo.apply_fill(conn, pid, TICKER, side, D(qty), D(notional), D(price))
 
 
 def _decision(conn, run_id: int, **kwargs) -> int:
@@ -99,7 +99,7 @@ def _decision(conn, run_id: int, **kwargs) -> int:
         run_id=run_id,
         rec=kwargs.pop("rec", _recommendation()),
         verdict=kwargs.pop("verdict", _verdict()),
-        state=kwargs.pop("state", PortfolioState(cash_gbp=D("500.0000"))),
+        state=kwargs.pop("state", PortfolioState(cash_usd=D("500.0000"))),
         model="claude-sonnet-5",
         prompt_version="v1",
         news_ids=kwargs.pop("news_ids", []),
@@ -132,11 +132,11 @@ def test_an_unknown_portfolio_names_the_migration_that_creates_one(conn):
         repo.portfolio_id(conn, "no-such-portfolio")
 
 
-def test_the_seeded_portfolio_starts_at_the_notional_five_hundred(conn):
+def test_the_seeded_portfolio_starts_at_the_paper_account_default(conn):
     pid = repo.portfolio_id(conn)
 
-    assert repo.load_cash(conn, pid) == D("500.0000")
-    assert repo.initial_cash(conn, pid) == D("500.0000")
+    assert repo.load_cash(conn, pid) == D("100000.0000")
+    assert repo.initial_cash(conn, pid) == D("100000.0000")
 
 
 # ---------------------------------------------------------------------------
@@ -209,21 +209,29 @@ def test_a_holding_with_no_price_is_reported_rather_than_valued_at_zero(conn):
     pid = repo.portfolio_id(conn)
     _fill(conn, pid, "BUY", "2.000000", "50.0000", "100.0000", "25.0000")
 
-    state, unpriced = repo.build_state(conn, pid, {}, D("1.2500"))
+    state, unpriced = repo.build_state(
+        conn,
+        pid,
+        {},
+    )
 
     assert unpriced == [TICKER]
     assert state.positions == ()
 
 
-def test_a_priced_holding_is_valued_through_the_fx_rate(conn):
+def test_a_priced_holding_is_valued_in_usd(conn):
     pid = repo.portfolio_id(conn)
     _fill(conn, pid, "BUY", "2.000000", "50.0000", "100.0000", "25.0000")
 
-    state, unpriced = repo.build_state(conn, pid, {TICKER: _bar(close="100.0000")}, D("1.2500"))
+    state, unpriced = repo.build_state(
+        conn,
+        pid,
+        {TICKER: _bar(close="100.0000")},
+    )
 
     assert unpriced == []
-    # 2 shares x $100 / 1.25 = GBP 160
-    assert state.positions[0].value_gbp == D("160.0000")
+    # 2 shares x $100 = USD 200
+    assert state.positions[0].value_usd == D("200.0000")
 
 
 # ---------------------------------------------------------------------------
@@ -238,8 +246,8 @@ def test_a_buy_takes_cash_and_creates_the_position(conn):
 
     _fill(conn, pid, "BUY", "2.000000", "50.0000", "100.0000", "25.0000")
 
-    assert repo.load_cash(conn, pid) == D("450.0000")
-    assert repo.load_positions(conn, pid) == [(TICKER, D("2.000000"), D("100.0000"), D("25.0000"))]
+    assert repo.load_cash(conn, pid) == D("99950.0000")
+    assert repo.load_positions(conn, pid) == [(TICKER, D("2.000000"), D("100.0000"))]
 
 
 def test_a_sell_returns_cash_and_reduces_the_position(conn):
@@ -248,7 +256,7 @@ def test_a_sell_returns_cash_and_reduces_the_position(conn):
 
     _fill(conn, pid, "SELL", "1.000000", "30.0000", "120.0000", "30.0000")
 
-    assert repo.load_cash(conn, pid) == D("480.0000")
+    assert repo.load_cash(conn, pid) == D("99980.0000")
     assert repo.load_positions(conn, pid)[0][1] == D("1.000000")
 
 
@@ -310,7 +318,7 @@ def test_a_decision_stores_the_state_and_the_verdict_it_was_made_under(conn):
     did = _decision(conn, run_id, prompt_context={"recent_decisions": [{"action": "BUY"}]})
 
     row = conn.execute(
-        "SELECT ticker, action, recommended_amount_gbp, approved_amount_gbp,"
+        "SELECT ticker, action, recommended_amount_usd, approved_amount_usd,"
         "  portfolio_state, risk_verdict, prompt_context FROM ai_decisions WHERE id = %s",
         (did,),
     ).fetchone()
@@ -319,13 +327,13 @@ def test_a_decision_stores_the_state_and_the_verdict_it_was_made_under(conn):
     assert row[2] == D("40.0000")
     assert row[3] == D("30.0000")
     # mode="json", so the Decimal is a string rather than a float that lost it.
-    assert row[4]["cash_gbp"] == "500.0000"
-    assert row[5]["binding_constraint"] == "max_trade_gbp"
+    assert row[4]["cash_usd"] == "500.0000"
+    assert row[5]["binding_constraint"] == "max_trade_usd"
     assert row[6] == {"recent_decisions": [{"action": "BUY"}]}
 
 
 def test_a_hold_stores_no_recommended_amount(conn):
-    """`suggested_amount_gbp` is None on a HOLD, and 0 would read as a real
+    """`suggested_amount_usd` is None on a HOLD, and 0 would read as a real
     figure the model proposed."""
     run_id = repo.open_run(conn, "manual", dry_run=True, image_tag=None)
 
@@ -337,7 +345,7 @@ def test_a_hold_stores_no_recommended_amount(conn):
     )
 
     row = conn.execute(
-        "SELECT recommended_amount_gbp, approved_amount_gbp FROM ai_decisions WHERE id = %s",
+        "SELECT recommended_amount_usd, approved_amount_usd FROM ai_decisions WHERE id = %s",
         (did,),
     ).fetchone()
     assert row == (None, None)
@@ -347,10 +355,7 @@ def _trade(conn, pid, decision_id, **kwargs) -> int:
     defaults = dict(
         ticker=TICKER,
         side="BUY",
-        notional_gbp=D("30.0000"),
-        notional_usd=D("37.5000"),
-        fx_rate=D("1.250000"),
-        fx_rate_as_of=date(2026, 9, 14),
+        notional_usd=D("30.0000"),
         status="submitted",
         dry_run=False,
         client_order_id=f"decision-{decision_id}",
@@ -455,7 +460,7 @@ def test_recent_decisions_are_newest_first_and_carry_the_orders_status(conn):
     rows = repo.recent_decisions(conn, TICKER, limit=5)
 
     assert [r["trade_status"] for r in rows] == ["filled", None]
-    assert rows[0]["binding_constraint"] == "max_trade_gbp"
+    assert rows[0]["binding_constraint"] == "max_trade_usd"
     assert rows[0]["on_date"] == date.today()
 
 
@@ -566,8 +571,6 @@ def test_re_running_a_day_overwrites_its_performance_row(conn):
         D("510.0000"),
         D("10.0000"),
         D("2.0000"),
-        D("1.250000"),
-        date(2026, 9, 14),
     )
     repo.save_daily_performance(
         conn,
@@ -577,42 +580,13 @@ def test_re_running_a_day_overwrites_its_performance_row(conn):
         D("520.0000"),
         D("20.0000"),
         D("4.0000"),
-        D("1.300000"),
-        date(2026, 9, 14),
     )
 
     rows = conn.execute(
-        "SELECT total_value_gbp FROM daily_performance WHERE portfolio_id = %s AND as_of = %s",
+        "SELECT total_value_usd FROM daily_performance WHERE portfolio_id = %s AND as_of = %s",
         args,
     ).fetchall()
     assert rows == [(D("520.0000"),)]
-
-
-def test_the_fallback_fx_rate_is_the_most_recent_one_stored(conn):
-    """The summary falls back to this when Frankfurter is unreachable, so a
-    day's valuation survives an upstream outage."""
-    pid = repo.portfolio_id(conn)
-    for day, rate in ((date(2026, 9, 12), "1.200000"), (date(2026, 9, 14), "1.300000")):
-        repo.save_daily_performance(
-            conn,
-            pid,
-            day,
-            D("500.0000"),
-            D("0.0000"),
-            D("500.0000"),
-            D("0.0000"),
-            D("0.0000"),
-            D(rate),
-            day,
-        )
-
-    assert repo.last_fx_rate(conn, pid) == (D("1.300000"), date(2026, 9, 14))
-
-
-def test_there_is_no_fallback_rate_before_the_first_summary_has_run(conn):
-    pid = repo.portfolio_id(conn)
-
-    assert repo.last_fx_rate(conn, pid) is None
 
 
 def test_a_benchmark_arm_is_overwritten_rather_than_duplicated_per_day(conn):
@@ -620,15 +594,14 @@ def test_a_benchmark_arm_is_overwritten_rather_than_duplicated_per_day(conn):
     point = BenchmarkPoint(
         symbol="SPY",
         as_of=date(2026, 9, 14),
-        value_gbp=D("505.0000"),
+        value_usd=D("505.0000"),
         close_usd=D("560.0000"),
-        fx_rate_gbp_usd=D("1.250000"),
     )
     assert repo.save_benchmarks(conn, [point]) == 1
-    repo.save_benchmarks(conn, [replace(point, value_gbp=D("511.0000"))])
+    repo.save_benchmarks(conn, [replace(point, value_usd=D("511.0000"))])
 
     rows = conn.execute(
-        "SELECT value_gbp FROM benchmarks WHERE symbol = 'SPY' AND as_of = %s",
+        "SELECT value_usd FROM benchmarks WHERE symbol = 'SPY' AND as_of = %s",
         (date(2026, 9, 14),),
     ).fetchall()
     assert rows == [(D("511.0000"),)]
@@ -741,8 +714,8 @@ def test_the_binding_constraint_histogram_splits_approvals_from_refusals(conn):
     refusing one are opposite facts, and one table would read as a single
     ranking of "constraints that fired"."""
     run_id = repo.open_run(conn, "schedule", dry_run=False, image_tag=None)
-    _decision(conn, run_id, verdict=_verdict(approved=True, constraint="max_trade_gbp"))
-    _decision(conn, run_id, verdict=_verdict(approved=True, constraint="max_trade_gbp"))
+    _decision(conn, run_id, verdict=_verdict(approved=True, constraint="max_trade_usd"))
+    _decision(conn, run_id, verdict=_verdict(approved=True, constraint="max_trade_usd"))
     _decision(
         conn,
         run_id,
@@ -754,7 +727,7 @@ def test_the_binding_constraint_histogram_splits_approvals_from_refusals(conn):
     metrics = repo.week_metrics(conn, pid, today - timedelta(days=6), today)
 
     by_outcome = {(c["binding"], c["approved"]): c["decisions"] for c in metrics["constraints"]}
-    assert by_outcome[("max_trade_gbp", True)] == 2
+    assert by_outcome[("max_trade_usd", True)] == 2
     assert by_outcome[("daily_trade_limit", False)] == 1
 
 
@@ -943,18 +916,17 @@ def _valuation(conn, pid: int, day: date) -> None:
         conn,
         pid,
         day,
-        cash_gbp=D("500.0000"),
-        positions_value_gbp=D("0.0000"),
-        total_value_gbp=D("500.0000"),
-        pnl_gbp=D("0.0000"),
+        cash_usd=D("500.0000"),
+        positions_value_usd=D("0.0000"),
+        total_value_usd=D("500.0000"),
+        pnl_usd=D("0.0000"),
         pnl_pct=D("0.0000"),
-        fx_rate=D("1.300000"),
-        fx_rate_as_of=day,
     )
 
 
 def _clean_week(conn, pid: int, start: date, end: date) -> None:
     """A week with nothing wrong with it: a valuation and a run every day."""
+    conn.execute("UPDATE portfolio SET broker_synced_at=now() WHERE id=%s", (pid,))
     day = start
     while day <= end:
         _valuation(conn, pid, day)
@@ -1049,7 +1021,13 @@ def test_a_holding_that_has_stopped_being_priced_is_caught(conn):
     start = end - timedelta(days=6)
     _clean_week(conn, pid, start, end)
     repo.apply_fill(
-        conn, pid, TICKER, "BUY", D("1.000000"), D("50.0000"), D("100.0000"), D("50.0000")
+        conn,
+        pid,
+        TICKER,
+        "BUY",
+        D("1.000000"),
+        D("50.0000"),
+        D("100.0000"),
     )
     repo.save_prices(conn, [_bar(day=end - timedelta(days=30))])
 
@@ -1065,7 +1043,13 @@ def test_a_holding_priced_today_is_not_reported_stale(conn):
     start = end - timedelta(days=6)
     _clean_week(conn, pid, start, end)
     repo.apply_fill(
-        conn, pid, TICKER, "BUY", D("1.000000"), D("50.0000"), D("100.0000"), D("50.0000")
+        conn,
+        pid,
+        TICKER,
+        "BUY",
+        D("1.000000"),
+        D("50.0000"),
+        D("100.0000"),
     )
     repo.save_prices(conn, [_bar(day=end)])
 
@@ -1079,7 +1063,13 @@ def test_a_split_sized_price_move_is_caught(conn):
     start = end - timedelta(days=6)
     _clean_week(conn, pid, start, end)
     repo.apply_fill(
-        conn, pid, TICKER, "BUY", D("1.000000"), D("50.0000"), D("100.0000"), D("50.0000")
+        conn,
+        pid,
+        TICKER,
+        "BUY",
+        D("1.000000"),
+        D("50.0000"),
+        D("100.0000"),
     )
     repo.save_prices(
         conn,
@@ -1102,7 +1092,13 @@ def test_an_ordinary_large_move_does_not_fire_the_split_check(conn):
     start = end - timedelta(days=6)
     _clean_week(conn, pid, start, end)
     repo.apply_fill(
-        conn, pid, TICKER, "BUY", D("1.000000"), D("50.0000"), D("100.0000"), D("50.0000")
+        conn,
+        pid,
+        TICKER,
+        "BUY",
+        D("1.000000"),
+        D("50.0000"),
+        D("100.0000"),
     )
     repo.save_prices(
         conn,
@@ -1115,18 +1111,13 @@ def test_an_ordinary_large_move_does_not_fire_the_split_check(conn):
     assert _week(conn, pid, start, end)["price_spike"]["ok"]
 
 
-def test_cash_that_disagrees_with_the_trade_log_is_caught(conn):
-    """What an apply_fill regression would look like from outside."""
+def test_an_old_broker_snapshot_is_reported(conn):
     pid = repo.portfolio_id(conn)
     end = date.today()
     start = end - timedelta(days=6)
     _clean_week(conn, pid, start, end)
-    assert _week(conn, pid, start, end)["cash_drift"]["ok"]
-
-    # Cash moved without a trade behind it.
-    conn.execute("UPDATE portfolio SET cash_gbp = cash_gbp - 25 WHERE id = %s", (pid,))
-
-    check = _week(conn, pid, start, end)["cash_drift"]
-
-    assert not check["ok"]
-    assert "25" in check["detail"]
+    assert _week(conn, pid, start, end)["broker_sync"]["ok"]
+    conn.execute(
+        "UPDATE portfolio SET broker_synced_at=now()-interval '2 days' WHERE id=%s", (pid,)
+    )
+    assert not _week(conn, pid, start, end)["broker_sync"]["ok"]
