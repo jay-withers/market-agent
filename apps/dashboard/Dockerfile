@@ -19,7 +19,7 @@ COPY src ./src
 RUN npm run build
 
 
-FROM nginxinc/nginx-unprivileged:1.31-alpine@sha256:b54ac358b83fc6c965793fd271839b4ea4cdb6e99895bb19618cbc2ca152d972 AS runtime
+FROM nginxinc/nginx-unprivileged:1.31-alpine@sha256:e75f89810bf5bfbcf58a1cfb32a1a11de55b7623d732e67735d513b720d7436a AS runtime
 
 # Connects the pushed package to this repository, which is what gives a
 # workflow's GITHUB_TOKEN write access to it — see the same label in

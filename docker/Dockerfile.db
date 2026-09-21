@@ -15,7 +15,7 @@
 #    after the Azure server. As an initdb script it would fail the whole
 #    initialisation.
 
-FROM postgres:18-alpine@sha256:6c538e7206ea40ff740ef27883529390a690b6ead6ba96b44c67a9f7c638e8fd
+FROM postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
 
 # Numbered files only, applied by initdb in filename order — the same order the
 # Invoke-DbSql.ps1 runner uses against Azure.
