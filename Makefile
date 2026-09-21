@@ -199,7 +199,11 @@ deploy: ## Deploy built images to Container Apps via az cli (needs IMAGE_TAG=vX.
 	AGENT=$$(terraform -chdir=$(TF_DIR) output -raw agent_job_name); \
 	SUMMARY=$$(terraform -chdir=$(TF_DIR) output -raw summary_job_name); \
 	WEEKLY=$$(terraform -chdir=$(TF_DIR) output -raw weekly_review_job_name); \
-	SYNC=$$(terraform -chdir=$(TF_DIR) output -raw broker_sync_job_name); \
+	SYNC=$$(terraform -chdir=$(TF_DIR) output -raw broker_sync_job_name 2>/dev/null) || { \
+	  echo "error: broker sync job is not in Terraform state — apply the infrastructure change before make deploy" >&2; \
+	  echo "run: make apply ENV=$(ENV)" >&2; \
+	  exit 1; \
+	}; \
 	az containerapp update --name $$API --resource-group $$RG \
 	  --image $(IMAGE_REGISTRY)/marketagent:$(MARKETAGENT_IMAGE_TAG) \
 	  --set-env-vars IMAGE_TAG=$(MARKETAGENT_IMAGE_TAG); \
