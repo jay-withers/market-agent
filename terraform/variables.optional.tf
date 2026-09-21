@@ -96,7 +96,7 @@ variable "marketagent_image_tag" {
   # published a genuine vX.Y.Z under the new name.
   description = "Immutable tag of the marketagent image — the API and all three jobs — used only to seed the first revision on create. `make deploy` (az cli) owns it on every environment after that; see lifecycle.ignore_changes on azurerm_container_app.api and the three azurerm_container_app_job resources. Must not be `latest`: Container Apps creates a revision only when the template changes, so re-pushing a moving tag deploys nothing at all and reports success."
   type        = string
-  default     = "v0.5.1"
+  default     = "v0.12.0"
 
   validation {
     condition     = !contains(["latest", "main", "unset"], var.marketagent_image_tag)
@@ -107,7 +107,7 @@ variable "marketagent_image_tag" {
 variable "dashboard_image_tag" {
   description = "Immutable tag of the dashboard image, used only to seed the first revision on create. `make deploy` (az cli) owns it after that; see lifecycle.ignore_changes on azurerm_container_app.dashboard. Must not be `latest`, for the same reason as marketagent_image_tag."
   type        = string
-  default     = "v0.5.1"
+  default     = "v0.12.0"
 
   validation {
     condition     = !contains(["latest", "main", "unset"], var.dashboard_image_tag)

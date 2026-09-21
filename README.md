@@ -133,7 +133,7 @@ release (`v1.2.3`) and the commit's short SHA, which is what `IMAGE_TAG`
 already defaults to. Deploying is then:
 
 ```bash
-make deploy IMAGE_TAG=v1.2.3   # terraform apply with a published tag
+make deploy IMAGE_TAG=v1.2.3   # update existing apps and jobs to a published tag
 ```
 
 Building locally is still there for iteration, and is the only way to test an
@@ -141,7 +141,7 @@ image before merge:
 
 ```bash
 make build push   # linux/amd64, tagged with the git SHA
-make deploy       # terraform apply with that same tag
+make deploy       # update existing apps and jobs to that same tag
 ```
 
 The push needs a `gh` token carrying `write:packages`
@@ -164,6 +164,19 @@ by the deploy, and the schema is not versioned with the image — a migration th
 code depends on has to land first. The agent job queries `companies.is_benchmark`,
 for instance, and would fail outright against a database without
 `004-benchmark-companies.sql`.
+
+When a release adds a Terraform resource or output, bootstrap it before
+`make deploy`. For this USD migration, after the release image is published:
+
+```bash
+make sql
+TF_VAR_marketagent_image_tag=v1.2.3 TF_VAR_dashboard_image_tag=v1.2.3 make apply ENV=dev
+make deploy IMAGE_TAG=v1.2.3 ENV=dev
+```
+
+The apply creates the broker-sync job and records its output in state. Until
+then, `make deploy` stops before changing any running workload and explains
+that the infrastructure apply is required.
 
 **Expect the first request after idle to be slow.** `min_replicas = 0` means a
 cold start, and the first call can take long enough to look like a failure. That
