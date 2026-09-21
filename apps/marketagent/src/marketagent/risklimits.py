@@ -20,7 +20,12 @@ class RiskSettings(BaseSettings):
     USD 20,000 per position is 20% of the pot, which with a 25% concentration
     ceiling means the absolute cap binds first in an untouched portfolio and
     concentration takes over as the pot grows. USD 5 minimum keeps a trade from
-    being all spread; three trades a day bounds a bad news day.
+    being all spread; six trades a day bounds a bad news day while still
+    letting most of a ten-name watchlist's approved BUYs reach sizing and
+    concentration checks rather than being discarded by the throughput cap
+    alone — raised from 3 after the first week's review found half the
+    model's approved-confidence recommendations were being refused solely by
+    this limit.
     """
 
     model_config = SettingsConfigDict(env_prefix="RISK_", env_file=".env", extra="ignore")
@@ -32,7 +37,7 @@ class RiskSettings(BaseSettings):
     # Leaves a fifth in cash, so a sell is always possible without waiting for
     # settlement and the engine is never forced to refuse for lack of cash.
     max_total_exposure_pct: Decimal = Decimal(80)
-    max_daily_trades: int = 3
+    max_daily_trades: int = 6
     # Below this the model is guessing, and a guess that survives the caps is
     # still a trade. 0.6 is deliberately not a round 0.5.
     min_confidence: float = 0.6
