@@ -89,6 +89,48 @@ def get_json(
             session.close()
 
 
+def get_text(
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    client: httpx.Client | None = None,
+    attempts: int = DEFAULT_ATTEMPTS,
+) -> str:
+    """GET `url` and return the response body as text, retrying transient failures.
+
+    Same retry policy as `get_json`, split out rather than parameterised over
+    it: the only caller today is `indices.py` scraping a Wikipedia page, which
+    is HTML, not JSON, and forcing that through `.json()` would just fail.
+    """
+    owned = client is None
+    session = client or httpx.Client(timeout=TIMEOUT_SECONDS)
+    try:
+        last: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                response = session.get(url, headers=headers)
+                if response.status_code in RETRYABLE_STATUS:
+                    raise FetchError(f"{response.status_code} from {url}")
+                response.raise_for_status()
+                return response.text
+            except (httpx.TransportError, FetchError) as exc:
+                last = exc
+                if attempt == attempts:
+                    break
+                delay = BACKOFF_SECONDS * attempt
+                logger.warning(
+                    "%s (attempt %d/%d), retrying in %.0fs", exc, attempt, attempts, delay
+                )
+                time.sleep(delay)
+            except httpx.HTTPStatusError as exc:
+                raise FetchError(f"{exc.response.status_code} from {url}") from exc
+
+        raise FetchError(f"{url} failed after {attempts} attempts: {last}") from last
+    finally:
+        if owned:
+            session.close()
+
+
 def post_json(
     url: str,
     *,

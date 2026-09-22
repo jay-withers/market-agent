@@ -121,11 +121,14 @@ resource "azurerm_monitor_metric_alert" "this" {
 # `ContainerCrashing` (the exec/OCI failure itself), `BackoffLimitExceeded`
 # (the job giving up), and `StartError` (the replica's own failure record).
 #
-# One rule for all three jobs, not three rules, the same DRY reasoning as the
+# One rule for every job, not one rule each, the same DRY reasoning as the
 # metric alert above — but a log query has no `dimension` block, so
 # `resource_id_column` does the equivalent job: it is what makes this fire as
-# three independently tracked alerts, one per job ARM ID, rather than a single
-# alert that can only ever say "one of the three jobs failed."
+# independently tracked alerts, one per job ARM ID, rather than a single
+# alert that can only ever say "one of the jobs failed." Covers all seven
+# jobs, including sync100/sync500/rebalance, which this rule never covered
+# even in its single-account broker_sync form — closed here rather than
+# carried forward as a gap.
 resource "azurerm_monitor_scheduled_query_rules_alert_v2" "job_failed" {
   name                = "alert-${local.alert_name_prefix}-job-failed"
   resource_group_name = azurerm_resource_group.this.name
@@ -145,9 +148,13 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "job_failed" {
       ContainerAppSystemLogs_CL
       | where Reason_s in ("ContainerCrashing", "BackoffLimitExceeded", "StartError")
       | extend JobArmId = case(
-          JobName_s == "${azurerm_container_app_job.agent.name}", "${azurerm_container_app_job.agent.id}",
+          JobName_s == "${azurerm_container_app_job.agent100.name}", "${azurerm_container_app_job.agent100.id}",
+          JobName_s == "${azurerm_container_app_job.agent500.name}", "${azurerm_container_app_job.agent500.id}",
           JobName_s == "${azurerm_container_app_job.daily_summary.name}", "${azurerm_container_app_job.daily_summary.id}",
           JobName_s == "${azurerm_container_app_job.weekly_review.name}", "${azurerm_container_app_job.weekly_review.id}",
+          JobName_s == "${azurerm_container_app_job.sync100.name}", "${azurerm_container_app_job.sync100.id}",
+          JobName_s == "${azurerm_container_app_job.sync500.name}", "${azurerm_container_app_job.sync500.id}",
+          JobName_s == "${azurerm_container_app_job.rebalance.name}", "${azurerm_container_app_job.rebalance.id}",
           ""
         )
       | where JobArmId != ""

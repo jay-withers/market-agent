@@ -1,7 +1,7 @@
-"""One entrypoint, four commands — `marketagent api|agent|summary|weekly`.
+"""One entrypoint, six commands — `marketagent api|agent|summary|weekly|sync|rebalance`.
 
-The five workloads share one image and differ only by the container's `args`,
-so this is what Terraform's `command = ["marketagent"]` reaches.
+The workloads share one image and differ only by the container's `args`, so
+this is what Terraform's `command = ["marketagent"]` reaches.
 """
 
 from __future__ import annotations
@@ -15,6 +15,11 @@ from datetime import date
 
 from . import telemetry
 from .settings import settings
+
+# The two accounts, each run by its own scheduled job. No default anywhere
+# this appears — a forgotten --portfolio must fail loudly, not silently pick
+# one account over the other.
+ACCOUNTS = ("static-100", "dynamic-500")
 
 
 def _configure_logging() -> None:
@@ -68,11 +73,20 @@ def main(argv: list[str] | None = None) -> int:
 
     agent = sub.add_parser("agent", help="run the agent once")
     agent.add_argument("--trigger", default="manual", choices=["manual", "schedule"])
+    agent.add_argument("--portfolio", required=True, choices=ACCOUNTS)
 
-    sub.add_parser("summary", help="produce and send the daily summary")
-    sub.add_parser("sync", help="refresh cash, positions and order status from Alpaca")
+    sub.add_parser("summary", help="produce and send the combined daily summary")
 
-    weekly = sub.add_parser("weekly", help="produce and send the weekly review")
+    sync_parser = sub.add_parser(
+        "sync", help="refresh cash, positions and order status from Alpaca"
+    )
+    sync_parser.add_argument("--portfolio", required=True, choices=ACCOUNTS)
+
+    sub.add_parser(
+        "rebalance", help="refresh dynamic-500's watchlist against current S&P 500 membership"
+    )
+
+    weekly = sub.add_parser("weekly", help="produce and send the combined weekly review")
     # A date rather than always "today", so a week can be reviewed after the
     # fact — the review reads only stored rows, so an older window is as
     # answerable as the current one.
@@ -116,7 +130,11 @@ def main(argv: list[str] | None = None) -> int:
         signal.signal(signal.SIGTERM, _terminate)
         try:
             # The immutable image tag, so a run records which build produced it.
-            agent_job.run(trigger=args.trigger, image_tag=os.environ.get("IMAGE_TAG"))
+            agent_job.run(
+                portfolio=args.portfolio,
+                trigger=args.trigger,
+                image_tag=os.environ.get("IMAGE_TAG"),
+            )
         except (Exception, SystemExit) as exc:
             # The job has already logged the traceback and closed its
             # `agent_runs` row with the error. Letting the exception escape
@@ -134,13 +152,26 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "sync":
-        from . import sync
+        from . import sync as sync_job
 
         signal.signal(signal.SIGTERM, _terminate)
         try:
-            sync.run()
+            sync_job.run(portfolio=args.portfolio)
         except (Exception, SystemExit) as exc:
             logging.getLogger("marketagent").error("broker sync failed: %s", exc)
+            return 1
+        finally:
+            telemetry.flush()
+        return 0
+
+    if args.command == "rebalance":
+        from .jobs import rebalance as rebalance_job
+
+        signal.signal(signal.SIGTERM, _terminate)
+        try:
+            rebalance_job.run()
+        except (Exception, SystemExit) as exc:
+            logging.getLogger("marketagent").exception("rebalance failed: %s", exc)
             return 1
         finally:
             telemetry.flush()

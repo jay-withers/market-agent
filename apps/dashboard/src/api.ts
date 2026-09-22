@@ -52,6 +52,23 @@ export type Performance = {
   benchmarks: BenchmarkPoint[];
 };
 
+/* The two paper accounts this experiment compares. No default anywhere this
+ * appears — every per-account fetch names one explicitly, matching the API's
+ * own `?account=` parameter, which has no default either. */
+export type Account = "static-100" | "dynamic-500";
+export const ACCOUNTS: readonly Account[] = ["static-100", "dynamic-500"];
+
+/* One account's point in the comparison series — a narrower shape than
+ * `PerformancePoint`, matching exactly what `/api/comparison` selects. */
+export type ComparisonPoint = {
+  as_of: string;
+  total_value_usd: number;
+  pnl_usd: number;
+  pnl_pct: number;
+};
+
+export type Comparison = Record<Account, ComparisonPoint[]>;
+
 export type Holding = {
   ticker: string;
   name: string;
@@ -167,6 +184,12 @@ async function apiCredentials(): Promise<{ origin: string; token: string }> {
 function authHeaders(token: string): HeadersInit {
   return token ? { accept: "application/json", authorization: `Bearer ${token}` } : { accept: "application/json" };
 }
+
+/* Appends `?account=`/`&account=` to a path that may or may not already carry
+ * a query string, so call sites can build a per-account URL without caring
+ * which. */
+export const withAccount = (path: string, account: Account): string =>
+  `${path}${path.includes("?") ? "&" : "?"}account=${account}`;
 
 export async function get<T>(path: string): Promise<T> {
   const { origin: base, token } = await apiCredentials();

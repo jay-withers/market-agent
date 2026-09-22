@@ -4,17 +4,23 @@ The governing rule is that **every figure the reader sees comes from the
 database**. The model writes commentary and is shown the numbers as a table it
 is told not to restate, so what goes into that table decides what the narrative
 can truthfully say.
+
+Covers both accounts in one combined email now, so most tests build a full
+`accounts` dict (both 'static-100' and 'dynamic-500') via the helpers below,
+usually overriding only one account and leaving the other at a clean default —
+which is also what proves the two accounts render independently rather than
+bleeding into each other.
 """
 
 from __future__ import annotations
 
-from contextlib import contextmanager
 from datetime import date, datetime
 from decimal import Decimal
 
 from marketagent.benchmarks import CASH_SYMBOL, BenchmarkPoint
-from marketagent.jobs import summary
 from marketagent.jobs.summary import (
+    ACCOUNTS,
+    _account_run_alert,
     _facts_table,
     _prompt,
     _run_alert,
@@ -64,17 +70,51 @@ def _activity(trades=None, decisions=None, holdings=None, runs=None) -> dict:
     }
 
 
-def _table(**kwargs) -> str:
-    return _facts_table(
-        TODAY,
-        _state(),
-        D("500.0000"),
-        D("-0.0050"),
-        D("-0.0010"),
-        _points(),
-        kwargs.pop("filled", 0),
-        _activity(**kwargs),
+def _spend(**overrides) -> dict:
+    """A row as `repository.spend` returns it."""
+    defaults = dict(
+        today_usd=D("0.190000"),
+        last_7_days_usd=D("1.400000"),
+        to_date_usd=D("5.000000"),
+        known_from=date(2026, 8, 20),
     )
+    return {**defaults, **overrides}
+
+
+def _account_data(
+    trades=None,
+    decisions=None,
+    holdings=None,
+    runs=None,
+    filled=0,
+    state=None,
+    initial=None,
+    pnl=None,
+    pnl_pct=None,
+    points=None,
+    spend=None,
+) -> dict:
+    """One account's contribution to the `accounts` dict `_facts_table` takes."""
+    return {
+        "state": state or _state(),
+        "initial": initial if initial is not None else D("500.0000"),
+        "pnl": pnl if pnl is not None else D("-0.0050"),
+        "pnl_pct": pnl_pct if pnl_pct is not None else D("-0.0010"),
+        "points": points if points is not None else _points(),
+        "filled": filled,
+        "activity": _activity(trades=trades, decisions=decisions, holdings=holdings, runs=runs),
+        "spend": spend or _spend(),
+    }
+
+
+def _accounts(**overrides) -> dict:
+    """Both accounts, clean by default. `overrides['static-100']` etc. replace one."""
+    return {name: overrides.get(name) or _account_data() for name in ACCOUNTS}
+
+
+def _table(**kwargs) -> str:
+    """The facts table with 'static-100' overridden and 'dynamic-500' left clean."""
+    return _facts_table(TODAY, _accounts(**{"static-100": _account_data(**kwargs)}), _spend(), None)
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +129,7 @@ def test_a_simulated_trade_is_reported_as_having_happened():
     and positions were unchanged — on a day three trades had executed."""
     table = _table(trades=[("AVGO", "BUY", "simulated", D("40.0000"), D("0.146852"), D("272.38"))])
 
-    assert "## Trades today" in table
+    assert "### Trades today" in table
     assert "| AVGO | BUY | simulated | $40.0000 | 0.146852 |" in table
     # And the meaning of `simulated` is spelled out, not left to be inferred.
     assert "no order was sent to the broker" in table
@@ -128,6 +168,21 @@ def test_the_headline_figures_come_from_the_database():
     assert "| Started with | $500.0000 |" in table
 
 
+def test_both_accounts_get_their_own_labelled_section():
+    table = _table()
+
+    assert "## static-100" in table
+    assert "## dynamic-500" in table
+
+
+def test_the_comparison_section_names_the_leader():
+    """The reason this report exists: which account is ahead, stated plainly."""
+    table = _table(state=PortfolioState(cash_usd=D("600.0000"), positions=()))
+
+    assert "## static-100 vs dynamic-500" in table
+    assert "**static-100** is ahead of **dynamic-500**" in table
+
+
 def test_benchmarks_are_labelled_and_the_cash_arm_is_named():
     table = _table()
 
@@ -144,19 +199,27 @@ def test_a_refused_decision_shows_a_dash_rather_than_a_zero():
     assert "| MSFT | BUY | 0.62 | — | daily_trade_limit |" in table
 
 
-def test_the_prompt_carries_the_models_own_reasoning():
-    activity = _activity(
-        decisions=[("AVGO", "BUY", D("0.62"), D("40"), "Raised AI guidance.", "recommended")]
+def test_the_prompt_carries_each_accounts_own_reasoning():
+    accounts = _accounts(
+        **{
+            "static-100": _account_data(
+                decisions=[
+                    ("AVGO", "BUY", D("0.62"), D("40"), "Raised AI guidance.", "recommended")
+                ]
+            )
+        }
     )
 
-    prompt = _prompt("FACTS", activity)
+    prompt = _prompt("FACTS", accounts)
 
     assert "FACTS" in prompt
+    assert "### static-100" in prompt
     assert "- AVGO (BUY): Raised AI guidance." in prompt
+    assert "### dynamic-500" in prompt
 
 
-def test_the_prompt_handles_a_day_with_no_decisions():
-    assert "No decisions were taken." in _prompt("FACTS", _activity())
+def test_the_prompt_handles_a_day_with_no_decisions_for_either_account():
+    assert "No decisions were taken." in _prompt("FACTS", _accounts())
 
 
 # ---------------------------------------------------------------------------
@@ -164,19 +227,14 @@ def test_the_prompt_handles_a_day_with_no_decisions():
 # ---------------------------------------------------------------------------
 
 
-def _spend(**overrides) -> dict:
-    """A row as `repository.spend` returns it."""
-    defaults = dict(
-        today_usd=D("0.190000"),
-        last_7_days_usd=D("1.400000"),
-        to_date_usd=D("5.000000"),
-        known_from=date(2026, 8, 20),
+def _spend_by_account(**overrides) -> dict:
+    return {name: overrides.get(name) or _spend() for name in ACCOUNTS}
+
+
+def _spend_text(spend_by_account=None, total_spend=None, credit=None) -> str:
+    return "\n".join(
+        _spend_section(spend_by_account or _spend_by_account(), total_spend or _spend(), credit)
     )
-    return {**defaults, **overrides}
-
-
-def _spend_text(spend=None, credit=None) -> str:
-    return "\n".join(_spend_section(spend or _spend(), credit))
 
 
 def test_the_spend_figures_are_the_stored_ones():
@@ -189,6 +247,7 @@ def test_the_spend_figures_are_the_stored_ones():
 def test_the_daily_rate_is_the_last_seven_days_not_all_time():
     # The question behind the figure is "how long does this last at the rate it
     # is going now", which an average over the whole experiment answers wrongly.
+    # The rate is computed from the *combined* total, not either account's own.
     assert "$0.20/day" in _spend_text()
 
 
@@ -210,18 +269,18 @@ def test_the_runway_is_rounded_down_rather_than_up():
     # A runway is a limit like any other here: rounding it up would promise a
     # day that is not paid for.
     # $5.00 left at $0.30/day is 16.67 days, and 16 is the honest half.
-    text = _spend_text(spend=_spend(last_7_days_usd=D("2.100000")), credit=D("10.000000"))
+    text = _spend_text(total_spend=_spend(last_7_days_usd=D("2.100000")), credit=D("10.000000"))
     assert "about 16 days" in text
 
 
 def test_exhausted_credit_says_so_rather_than_reporting_zero_days():
-    text = _spend_text(spend=_spend(to_date_usd=D("30.000000")), credit=D("25.00"))
+    text = _spend_text(total_spend=_spend(to_date_usd=D("30.000000")), credit=D("25.00"))
     assert "none — the recorded spend has reached the credit" in text
     assert "about" not in text
 
 
 def test_a_week_with_no_spend_reports_no_runway_rather_than_dividing_by_zero():
-    text = _spend_text(spend=_spend(last_7_days_usd=D("0")), credit=D("25.00"))
+    text = _spend_text(total_spend=_spend(last_7_days_usd=D("0")), credit=D("25.00"))
     assert "not estimable" in text
 
 
@@ -234,58 +293,18 @@ def test_the_scope_of_the_figures_is_stated_not_left_to_be_inferred():
     assert "excludes the call that writes this email" in text
     assert "no balance endpoint" in text
     assert "from 2026-08-20 onwards" in text
+    assert "share one Anthropic API key and one credit balance" in text
 
 
 def test_a_database_with_no_recorded_spend_says_so():
-    text = _spend_text(spend=_spend(known_from=None))
+    text = _spend_text(total_spend=_spend(known_from=None))
     assert "No spend has been recorded yet" in text
 
 
-def test_the_spend_section_is_omitted_when_the_caller_passes_none():
-    # The facts table is built by the weekly review's tests and by anything
-    # else that renders a day; a missing spend must not become "$0 spent".
-    assert "Model spend" not in _table()
-
-
-def test_the_facts_table_carries_the_spend_section_when_given_one():
-    table = _facts_table(
-        TODAY,
-        _state(),
-        D("500.0000"),
-        D("-0.0050"),
-        D("-0.0010"),
-        _points(),
-        0,
-        _activity(),
-        _spend(),
-        D("25.00"),
-    )
+def test_the_facts_table_always_carries_the_spend_section():
+    table = _facts_table(TODAY, _accounts(), _spend(), D("25.00"))
     assert "## Model spend" in table
     assert "Credit remaining" in table
-
-
-# ---------------------------------------------------------------------------
-# The FX fallback: an upstream outage costs accuracy, not the whole day
-# ---------------------------------------------------------------------------
-
-
-@contextmanager
-def _fake_pool(_conn=None):
-    """Stands in for `pool().connection()`, which the fallback path reaches for."""
-
-    class _Pool:
-        @staticmethod
-        @contextmanager
-        def connection():
-            yield _conn
-
-    yield _Pool
-
-
-def _patch_fx(monkeypatch, *, fetch, stored):
-    monkeypatch.setattr(summary, "fetch_gbp_usd", fetch)
-    monkeypatch.setattr(summary, "pool", lambda: _fake_pool().__enter__())
-    monkeypatch.setattr(summary.repo, "last_fx_rate", lambda _conn, _pid: stored)
 
 
 # ---------------------------------------------------------------------------
@@ -338,27 +357,36 @@ def test_a_dry_run_is_marked_as_one():
     assert "succeeded (dry run)" in table
 
 
+def test_every_run_of_the_day_is_listed():
+    """A scheduled run and a manual retry are two rows, and collapsing them
+    would hide either the failure or the recovery."""
+    section = "\n".join(_run_section([_run(status="failed", error="boom"), _run()]))
+
+    assert section.count("| 06:00 |") == 2
+
+
 # ---------------------------------------------------------------------------
 # The subject line, which is the part that reaches a phone's lock screen
 # ---------------------------------------------------------------------------
 
 
-def test_a_clean_day_earns_no_subject_warning():
-    assert _run_alert([_run()]) is None
+def test_a_clean_day_earns_no_subject_warning_for_one_account():
+    assert _account_run_alert([_run()]) is None
 
 
 def test_the_subject_warns_when_nothing_ran():
     """A day the agent died still has a valuation, so the subject is otherwise
     indistinguishable in an inbox from a day it worked."""
-    assert _run_alert([]) == "no agent run"
+    assert _account_run_alert([]) == "no agent run"
 
 
 def test_the_subject_warns_on_a_failed_run():
-    assert _run_alert([_run(status="failed", error="boom")]) == "agent run failed"
+    assert _account_run_alert([_run(status="failed", error="boom")]) == "agent run failed"
 
 
 def test_the_subject_warns_on_an_abandoned_run():
-    assert _run_alert([_run(status="running", finished=None, stale=True)]) == "agent run abandoned"
+    alert = _account_run_alert([_run(status="running", finished=None, stale=True)])
+    assert alert == "agent run abandoned"
 
 
 def test_a_failure_outranks_a_success_on_the_same_day():
@@ -366,20 +394,38 @@ def test_a_failure_outranks_a_success_on_the_same_day():
     did not — the subject reports the worst outcome of the day, not the last."""
     runs = [_run(status="failed", error="boom"), _run()]
 
-    assert _run_alert(runs) == "agent run failed"
+    assert _account_run_alert(runs) == "agent run failed"
+
+
+def test_both_accounts_clean_earns_no_subject_warning():
+    assert _run_alert(_accounts()) is None
+
+
+def test_one_accounts_failure_is_named_in_the_combined_alert():
+    accounts = _accounts(
+        **{"static-100": _account_data(runs=[_run(status="failed", error="boom")])}
+    )
+
+    assert _run_alert(accounts) == "static-100: agent run failed"
+
+
+def test_both_accounts_failing_are_both_named():
+    accounts = _accounts(
+        **{
+            "static-100": _account_data(runs=[]),
+            "dynamic-500": _account_data(runs=[_run(status="failed", error="boom")]),
+        }
+    )
+
+    alert = _run_alert(accounts)
+    assert "static-100: no agent run" in alert
+    assert "dynamic-500: agent run failed" in alert
 
 
 def test_the_run_section_reaches_the_model():
     """The commentary is written from the facts table, so a failed run has to
     be visible there or the model narrates a quiet day."""
-    prompt = _prompt(_table(runs=[]), _activity())
+    accounts = _accounts(**{"static-100": _account_data(runs=[])})
+    prompt = _prompt(_table(runs=[]), accounts)
 
     assert "No agent run is recorded for today." in prompt
-
-
-def test_every_run_of_the_day_is_listed():
-    """A scheduled run and a manual retry are two rows, and collapsing them
-    would hide either the failure or the recovery."""
-    section = "\n".join(_run_section([_run(status="failed", error="boom"), _run()]))
-
-    assert section.count("| 06:00 |") == 2

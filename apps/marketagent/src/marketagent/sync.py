@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from . import alpaca_api
 from . import repository as repo
 from .broker.base import BrokerSnapshot
 from .db import pool
@@ -32,12 +33,13 @@ def synchronize(pid, broker, connection_pool=None) -> BrokerSnapshot:
     return snapshot
 
 
-def run() -> None:
+def run(portfolio: str) -> None:
     from .broker.alpaca import AlpacaBroker
     from .jobs.summary import _reconcile
 
+    alpaca_api.use_account(portfolio)
     with pool().connection() as conn:
-        pid = repo.portfolio_id(conn)
+        pid = repo.portfolio_id(conn, name=portfolio)
     broker = AlpacaBroker()
     _reconcile(pid, broker)
     synchronize(pid, broker)

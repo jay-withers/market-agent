@@ -6,12 +6,17 @@ from decimal import Decimal as D
 import httpx
 import pytest
 
-from marketagent import queries
+from marketagent import alpaca_api, queries
 from marketagent import repository as repo
 from marketagent.broker.alpaca import AlpacaBroker
 from marketagent.broker.base import BrokerAccount, BrokerPosition, BrokerSnapshot, OpenOrder
 from marketagent.models import PortfolioState, Position
 from marketagent.sync import risk_state
+
+# Neither of these tests depends on watchlist contents, only on the portfolio
+# row itself, so either seeded account would do; static-100 is used throughout
+# for consistency with the other two test files.
+PORTFOLIO = "static-100"
 
 
 def snapshot(cash="100000", equity="100000", positions=(), account_id="paper-account"):
@@ -21,10 +26,10 @@ def snapshot(cash="100000", equity="100000", positions=(), account_id="paper-acc
 
 
 def test_first_sync_uses_account_equity_as_baseline_and_preserves_it(conn):
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     repo.save_broker_snapshot(conn, pid, snapshot())
     repo.save_broker_snapshot(conn, pid, snapshot(cash="99000", equity="100025"))
-    result = queries.overview(conn)
+    result = queries.overview(conn, PORTFOLIO)
     assert result["portfolio"]["initial_cash_usd"] == 100000
     assert result["cash_usd"] == 99000
     assert result["total_value_usd"] == 100025
@@ -34,7 +39,7 @@ def test_first_sync_uses_account_equity_as_baseline_and_preserves_it(conn):
 
 
 def test_sync_imports_manual_holdings_and_removes_closed_positions(conn):
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     position = BrokerPosition("MANUAL", D("1.123456789"), D("120.25"), D("100.123456789"))
     data = snapshot("99880", "100000.25", [position])
     repo.save_broker_snapshot(conn, pid, data)
@@ -42,7 +47,7 @@ def test_sync_imports_manual_holdings_and_removes_closed_positions(conn):
     assert repo.load_positions(conn, pid) == [
         ("MANUAL", position.quantity, position.avg_entry_price_usd)
     ]
-    assert "MANUAL" not in repo.active_tickers(conn)
+    assert "MANUAL" not in repo.active_tickers(conn, pid)
     state, missing = repo.build_state(conn, pid, {})
     assert not missing
     assert state.positions[0].value_usd == D("120.25")
@@ -52,7 +57,7 @@ def test_sync_imports_manual_holdings_and_removes_closed_positions(conn):
 
 
 def test_sync_refuses_to_overwrite_with_another_account(conn):
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     repo.save_broker_snapshot(conn, pid, snapshot())
     with pytest.raises(RuntimeError, match="account changed"):
         repo.save_broker_snapshot(conn, pid, snapshot(account_id="different"))
@@ -89,7 +94,20 @@ def test_blocked_account_cannot_be_used_for_new_orders():
         risk_state(PortfolioState(cash_usd=D(100000)), data)
 
 
-def test_snapshot_parses_the_account_and_pending_orders_without_posting():
+def test_snapshot_parses_the_account_and_pending_orders_without_posting(monkeypatch):
+    # AlpacaBroker authenticates through alpaca_api.headers(), which now needs
+    # an account selected first — the process-scoped setter that lets the two
+    # accounts share credential-fetching code without threading an explicit
+    # account argument through every call site. monkeypatch rather than
+    # `use_account` directly so the module-level state does not leak into
+    # whatever test runs next.
+    monkeypatch.setattr(alpaca_api, "_account", "static-100")
+    # conftest.py's fake_secrets fixture only sets the pre-two-account
+    # ALPACA_API_KEY/ALPACA_SECRET_KEY names; headers() now looks up the
+    # account-suffixed ones.
+    monkeypatch.setenv("ALPACA_API_KEY_STATIC100", "test-alpaca-key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY_STATIC100", "test-alpaca-secret")
+
     def handler(request):
         assert request.method == "GET"
         assert request.url.host == "paper-api.alpaca.markets"
@@ -120,7 +138,7 @@ def test_snapshot_parses_the_account_and_pending_orders_without_posting():
 
 
 def test_failed_snapshot_does_not_overwrite_existing_balances(conn):
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     repo.save_broker_snapshot(conn, pid, snapshot())
     from marketagent.sync import synchronize
 

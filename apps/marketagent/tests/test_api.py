@@ -18,6 +18,10 @@ from marketagent import settings as settings_module
 from marketagent.api import deps
 from marketagent.api.main import create_app
 
+# One of the two valid values `deps.Account` accepts — used to build request
+# paths for every per-account endpoint below.
+ACCOUNT = "static-100"
+
 
 class FakeConn:
     """Stands in for a connection; `SELECT 1` is all /readyz needs."""
@@ -40,16 +44,19 @@ def client(monkeypatch):
     app = create_app()
     app.dependency_overrides[deps.connection] = lambda: conn
 
-    monkeypatch.setattr(queries, "overview", lambda c: {"portfolio": {"name": "default"}})
-    monkeypatch.setattr(queries, "holdings", lambda c: [{"ticker": "NVDA"}])
-    monkeypatch.setattr(queries, "performance", lambda c, days: {"days": days})
-    monkeypatch.setattr(queries, "decisions", lambda c, limit, ticker: [{"limit": limit}])
+    monkeypatch.setattr(queries, "overview", lambda c, account: {"portfolio": {"name": account}})
+    monkeypatch.setattr(queries, "holdings", lambda c, account: [{"ticker": "NVDA"}])
+    monkeypatch.setattr(queries, "performance", lambda c, account, days: {"days": days})
+    monkeypatch.setattr(queries, "decisions", lambda c, account, limit, ticker: [{"limit": limit}])
     monkeypatch.setattr(queries, "decision", lambda c, i: None if i == 404 else {"id": i})
     monkeypatch.setattr(queries, "news", lambda c, limit, relevant_only: [])
-    monkeypatch.setattr(queries, "trades", lambda c, limit: [])
-    monkeypatch.setattr(queries, "runs", lambda c, limit: [])
+    monkeypatch.setattr(queries, "trades", lambda c, account, limit: [])
+    monkeypatch.setattr(queries, "runs", lambda c, account, limit: [])
     monkeypatch.setattr(queries, "latest_summary", lambda c: None)
     monkeypatch.setattr(queries, "latest_review", lambda c: None)
+    monkeypatch.setattr(
+        queries, "comparison", lambda c, days: {"static-100": [], "dynamic-500": []}
+    )
 
     with TestClient(app) as test_client:
         test_client.conn = conn
@@ -102,17 +109,50 @@ def test_readyz_reports_503_when_the_database_is_down():
 @pytest.mark.parametrize(
     "path",
     [
-        "/api/overview",
-        "/api/holdings",
-        "/api/performance",
-        "/api/decisions",
+        f"/api/overview?account={ACCOUNT}",
+        f"/api/holdings?account={ACCOUNT}",
+        f"/api/performance?account={ACCOUNT}",
+        f"/api/decisions?account={ACCOUNT}",
         "/api/news",
-        "/api/trades",
-        "/api/runs",
+        f"/api/trades?account={ACCOUNT}",
+        f"/api/runs?account={ACCOUNT}",
+        "/api/comparison",
     ],
 )
 def test_every_read_endpoint_answers(client, path):
     assert client.get(path).status_code == 200
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/overview",
+        "/api/holdings",
+        "/api/performance",
+        "/api/decisions",
+        "/api/trades",
+        "/api/runs",
+    ],
+)
+def test_a_per_account_endpoint_requires_the_account_parameter(client, path):
+    """No default account: a forgotten `?account=` must fail loudly rather
+    than silently answer for one of the two accounts."""
+    assert client.get(path).status_code == 422
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/overview",
+        "/api/holdings",
+        "/api/performance",
+        "/api/decisions",
+        "/api/trades",
+        "/api/runs",
+    ],
+)
+def test_an_unknown_account_value_is_rejected(client, path):
+    assert client.get(f"{path}?account=made-up").status_code == 422
 
 
 def test_a_missing_decision_is_a_404_not_a_null_body(client):
@@ -147,16 +187,17 @@ def test_a_weekly_review_is_returned_without_its_rendered_html(client, monkeypat
 @pytest.mark.parametrize(("limit", "expected"), [(1, 200), (500, 200), (0, 422), (501, 422)])
 def test_the_limit_parameter_is_bounded(client, limit, expected):
     """An unbounded limit is how a read-only API becomes a denial of service."""
-    assert client.get(f"/api/decisions?limit={limit}").status_code == expected
+    response = client.get(f"/api/decisions?account={ACCOUNT}&limit={limit}")
+    assert response.status_code == expected
 
 
 def test_the_limit_reaches_the_query(client):
-    assert client.get("/api/decisions?limit=7").json() == [{"limit": 7}]
+    assert client.get(f"/api/decisions?account={ACCOUNT}&limit=7").json() == [{"limit": 7}]
 
 
 def test_only_get_is_allowed(client):
     """Nothing here writes, so anything else must not even route."""
-    assert client.post("/api/overview").status_code == 405
+    assert client.post(f"/api/overview?account={ACCOUNT}").status_code == 405
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +207,7 @@ def test_only_get_is_allowed(client):
 
 def test_the_api_is_open_by_default(client):
     """Documented position: no PII, no money, no secret in any response."""
-    assert client.get("/api/overview").status_code == 200
+    assert client.get(f"/api/overview?account={ACCOUNT}").status_code == 200
 
 
 @pytest.fixture
@@ -178,7 +219,7 @@ def guarded(monkeypatch):
 
     app = create_app()
     app.dependency_overrides[deps.connection] = lambda: FakeConn()
-    monkeypatch.setattr(queries, "overview", lambda c: {"ok": True})
+    monkeypatch.setattr(queries, "overview", lambda c, account: {"ok": True})
     with TestClient(app) as test_client:
         yield test_client
 
@@ -187,21 +228,26 @@ def guarded(monkeypatch):
 
 
 def test_a_guarded_api_refuses_a_request_with_no_token(guarded):
-    assert guarded.get("/api/overview").status_code == 401
+    assert guarded.get(f"/api/overview?account={ACCOUNT}").status_code == 401
 
 
 def test_a_guarded_api_refuses_a_wrong_token(guarded):
-    response = guarded.get("/api/overview", headers={"Authorization": "Bearer wrong"})
+    response = guarded.get(
+        f"/api/overview?account={ACCOUNT}", headers={"Authorization": "Bearer wrong"}
+    )
 
     assert response.status_code == 401
 
 
 def test_a_guarded_api_refuses_a_token_without_the_bearer_scheme(guarded):
-    assert guarded.get("/api/overview", headers={"Authorization": "sekrit"}).status_code == 401
+    response = guarded.get(f"/api/overview?account={ACCOUNT}", headers={"Authorization": "sekrit"})
+    assert response.status_code == 401
 
 
 def test_a_guarded_api_accepts_the_right_token(guarded):
-    response = guarded.get("/api/overview", headers={"Authorization": "Bearer sekrit"})
+    response = guarded.get(
+        f"/api/overview?account={ACCOUNT}", headers={"Authorization": "Bearer sekrit"}
+    )
 
     assert response.status_code == 200
 

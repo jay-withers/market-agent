@@ -6,6 +6,10 @@ shown the numbers as tables it is told not to restate, so what goes into those
 tables decides what the review can truthfully say — and the subject line is
 built here rather than by the model.
 
+Covers both accounts in one combined review now, so most tests build a full
+`accounts` dict (both 'static-100' and 'dynamic-500') via the helpers below,
+usually overriding only one account and leaving the other at a clean default.
+
 Nothing in this file touches a database or the network.
 """
 
@@ -109,8 +113,29 @@ def _metrics(**overrides) -> dict:
     return {**defaults, **overrides}
 
 
+def _account_data(initial=None, inception=INCEPTION, lim=None, **metrics_overrides) -> dict:
+    """One account's contribution to the `accounts` dict `_facts_table` takes."""
+    return {
+        "initial": initial if initial is not None else D("500.0000"),
+        "inception": inception,
+        "lim": lim or _limits(),
+        "metrics": _metrics(**metrics_overrides),
+    }
+
+
+def _accounts(**overrides) -> dict:
+    """Both accounts, clean by default. `overrides['static-100']` etc. replace one."""
+    return {name: overrides.get(name) or _account_data() for name in weekly.ACCOUNTS}
+
+
 def _table(**overrides) -> str:
-    return _facts_table(START, END, _metrics(**overrides), D("500.0000"), INCEPTION, _limits())
+    """The facts table with 'static-100' overridden and 'dynamic-500' left clean."""
+    return _facts_table(START, END, _accounts(**{"static-100": _account_data(**overrides)}))
+
+
+def _subject_accounts(**overrides) -> dict:
+    """Just enough of the `accounts` shape for `_subject`, which reads `metrics` only."""
+    return {name: {"metrics": overrides.get(name) or _metrics()} for name in weekly.ACCOUNTS}
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +177,31 @@ def test_a_week_with_no_stored_valuation_says_so_instead_of_inventing_one():
     assert "$0.0000" not in table
 
 
+def test_both_accounts_get_their_own_labelled_section():
+    table = _table()
+
+    assert "## static-100" in table
+    assert "## dynamic-500" in table
+
+
+def test_the_comparison_section_names_the_leader():
+    """The reason this review covers both accounts: which is ahead, and by
+    how much, stated before either account's own detail."""
+    table = _table(
+        valuation={
+            "as_of": END,
+            "total_value_usd": D("600.0000"),
+            "cash_usd": D("600.0000"),
+            "positions_value_usd": D("0.0000"),
+            "pnl_usd": D("100.0000"),
+            "pnl_pct": D("20.0000"),
+        }
+    )
+
+    assert "## static-100 vs dynamic-500" in table
+    assert "**static-100** is ahead of **dynamic-500**" in table
+
+
 # ---------------------------------------------------------------------------
 # Benchmarks
 # ---------------------------------------------------------------------------
@@ -176,7 +226,7 @@ def test_a_week_with_no_benchmark_data_says_so_rather_than_drawing_a_flat_line()
     assert "No benchmark data for this week." in _table(benchmarks=[])
 
 
-def test_the_portfolios_own_week_is_stated_beside_the_alternatives():
+def test_the_accounts_own_week_is_stated_beside_the_alternatives():
     """Otherwise the model has to subtract two rows itself to answer the one
     question the section exists for."""
     assert "change over the same week was +1.0756%" in _table()
@@ -211,7 +261,9 @@ def test_refusals_and_approvals_are_split_rather_than_pooled():
     refusing one are opposite facts about the engine, and one table would read
     as a single ranking of "constraints that fired"."""
     table = _table()
-    refused, approved = table.split("| Approved, bound by | Decisions |")
+    # Both accounts render the same section heading, so split on the last
+    # occurrence to isolate the overridden 'static-100' account's table.
+    refused, approved = table.rsplit("| Approved, bound by | Decisions |", 1)
 
     assert "| action_is_hold | 45 |" in refused
     assert "| action_is_hold | 45 |" not in approved
@@ -251,13 +303,13 @@ def test_the_weeks_activity_is_stated_before_anything_readable_as_idleness():
     assert "| Decisions | 63 |" in table
     assert "(6 succeeded, 1 failed, 0 never finished)" in table
     assert "| LLM cost | $1.310000 (599501 input, 81606 output tokens) |" in table
-    assert "246s against a 1800s timeout" in table
+    assert "246s against its" in table
 
 
 def test_a_run_that_never_finished_leaves_no_average_rather_than_a_zero():
     runs = {**_metrics()["runs"], "avg_seconds": None}
 
-    assert "| Average run | — against a 1800s timeout |" in _table(runs=runs)
+    assert "| Average run | — against its" in _table(runs=runs)
 
 
 def test_a_simulated_trade_is_reported_as_having_happened():
@@ -276,7 +328,7 @@ def test_a_week_with_no_trades_says_so_explicitly():
 
 
 def test_a_watchlist_name_the_agent_never_reached_appears_as_a_row_of_zeros():
-    """Driven by `companies`, not by the decisions — a ticker with nothing
+    """Driven by the watchlist, not by the decisions — a ticker with nothing
     against it is precisely the row worth reading, and a join from
     `ai_decisions` would omit it."""
     table = _table()
@@ -306,26 +358,43 @@ def _proposal(**overrides) -> ProposedChange:
     return ProposedChange(**{**defaults, **overrides})
 
 
-def test_the_subject_carries_the_stored_total_and_the_count_of_proposals():
-    subject = _subject(END, _metrics(), [_proposal(), _proposal()])
+def test_the_subject_carries_each_accounts_stored_total_and_the_count_of_proposals():
+    subject = _subject(END, _subject_accounts(), [_proposal(), _proposal()])
 
-    assert subject == "MarketAgent week to 2026-09-06: $507.4000 (+1.0756% this week), 2 proposals"
+    assert subject == (
+        "MarketAgent week to 2026-09-06: "
+        "static-100 $507.4000 (+1.0756%), dynamic-500 $507.4000 (+1.0756%), 2 proposals"
+    )
+
+
+def test_the_subject_shows_each_accounts_own_figures_independently():
+    subject = _subject(END, _subject_accounts(**{"dynamic-500": _metrics(valuation=None)}), [])
+
+    assert "static-100 $507.4000 (+1.0756%)" in subject
+    assert "dynamic-500 no valuation" in subject
 
 
 def test_the_subject_is_singular_for_one_proposal():
-    assert _subject(END, _metrics(), [_proposal()]).endswith("1 proposal")
+    assert _subject(END, _subject_accounts(), [_proposal()]).endswith("1 proposal")
 
 
 def test_a_subject_with_no_valuation_says_so_rather_than_carrying_a_figure():
-    subject = _subject(END, _metrics(valuation=None), [])
+    accounts = _subject_accounts(**{n: _metrics(valuation=None) for n in weekly.ACCOUNTS})
+    subject = _subject(END, accounts, [])
 
-    assert subject == "MarketAgent week to 2026-09-06: no valuation recorded, 0 proposals"
+    assert subject == (
+        "MarketAgent week to 2026-09-06: "
+        "static-100 no valuation, dynamic-500 no valuation, 0 proposals"
+    )
 
 
 def test_a_first_week_subject_carries_the_total_without_a_change():
-    subject = _subject(END, _metrics(opening_total_usd=None), [])
+    accounts = _subject_accounts(**{n: _metrics(opening_total_usd=None) for n in weekly.ACCOUNTS})
+    subject = _subject(END, accounts, [])
 
-    assert subject == "MarketAgent week to 2026-09-06: $507.4000, 0 proposals"
+    assert subject == (
+        "MarketAgent week to 2026-09-06: static-100 $507.4000, dynamic-500 $507.4000, 0 proposals"
+    )
 
 
 def test_every_field_of_a_proposal_is_rendered():
@@ -361,6 +430,7 @@ def test_the_prompt_carries_the_facts_and_asks_for_the_assessment():
     assert "FACTS" in prompt
     assert "propose the changes" in prompt
     assert "previous review" not in prompt
+    assert "Address both accounts explicitly" in prompt
 
 
 def test_last_weeks_proposals_are_included_so_the_review_compounds():
@@ -384,7 +454,7 @@ class _ExplodingLlm:
 
 def test_a_week_with_no_agent_runs_is_not_reviewed_at_all(monkeypatch):
     """An LLM call to say nothing happened is worth neither the money nor the
-    credibility of a stored row that reviews nothing."""
+    credibility of a stored row that reviews nothing — for either account."""
     import contextlib
 
     class _Pool:
@@ -392,10 +462,10 @@ def test_a_week_with_no_agent_runs_is_not_reviewed_at_all(monkeypatch):
             return contextlib.nullcontext(object())
 
     monkeypatch.setattr(weekly, "pool", lambda: _Pool())
-    monkeypatch.setattr(weekly.repo, "portfolio_id", lambda _c: 1)
+    monkeypatch.setattr(weekly.repo, "portfolio_id", lambda _c, name=None: 1)
     monkeypatch.setattr(weekly.repo, "initial_cash", lambda _c, _p: D("500.0000"))
     monkeypatch.setattr(weekly.repo, "portfolio_inception", lambda _c, _p: INCEPTION)
-    monkeypatch.setattr(weekly.repo, "active_tickers", lambda _c: ["NVDA"])
+    monkeypatch.setattr(weekly.repo, "active_tickers", lambda _c, _p: ["NVDA"])
     monkeypatch.setattr(weekly.repo, "last_recommendations", lambda _c, before: [])
     monkeypatch.setattr(
         weekly.repo,
@@ -423,34 +493,20 @@ def _check(name: str = "missing_valuations", ok: bool = True, detail: str = "fin
 def test_every_integrity_check_is_listed_even_when_they_all_pass():
     """A section that appears only on a bad week is one nobody learns to read,
     and its absence then looks the same as the job having skipped it."""
-    table = _facts_table(
-        START,
-        END,
-        _metrics(integrity=[_check("missing_valuations"), _check("cash_drift")]),
-        D(500),
-        INCEPTION,
-        _limits(),
-    )
+    table = _table(integrity=[_check("missing_valuations"), _check("cash_drift")])
 
-    assert "## Data integrity" in table
+    assert "### Data integrity" in table
     assert "missing_valuations" in table
     assert "cash_drift" in table
     assert "FAILED" not in table
 
 
 def test_a_failed_check_is_called_out_above_the_table():
-    table = _facts_table(
-        START,
-        END,
-        _metrics(
-            integrity=[
-                _check("missing_valuations", ok=False, detail="no row for 2026-09-17"),
-                _check("cash_drift"),
-            ]
-        ),
-        D(500),
-        INCEPTION,
-        _limits(),
+    table = _table(
+        integrity=[
+            _check("missing_valuations", ok=False, detail="no row for 2026-09-17"),
+            _check("cash_drift"),
+        ]
     )
 
     assert "1 of 2 checks failed" in table
@@ -461,38 +517,41 @@ def test_a_failed_check_is_called_out_above_the_table():
 def test_a_failed_check_reaches_the_subject_line():
     """A week that lost a day still produces an entirely ordinary subject
     otherwise, which is the one case where ordinary-looking is wrong."""
-    subject = _subject(
-        END,
-        _metrics(integrity=[_check("missing_valuations", ok=False), _check("cash_drift")]),
-        [_proposal()],
+    accounts = _subject_accounts(
+        **{
+            "static-100": _metrics(
+                integrity=[_check("missing_valuations", ok=False), _check("cash_drift")]
+            )
+        }
     )
+    subject = _subject(END, accounts, [_proposal()])
 
     assert subject.endswith("1 data check failed")
 
 
 def test_several_failed_checks_are_pluralised_in_the_subject():
-    subject = _subject(
-        END,
-        _metrics(
-            integrity=[
-                _check("missing_valuations", ok=False),
-                _check("missing_runs", ok=False),
-            ]
-        ),
-        [_proposal()],
+    accounts = _subject_accounts(
+        **{
+            "static-100": _metrics(integrity=[_check("missing_valuations", ok=False)]),
+            "dynamic-500": _metrics(integrity=[_check("missing_runs", ok=False)]),
+        }
     )
+    subject = _subject(END, accounts, [_proposal()])
 
     assert subject.endswith("2 data checks failed")
 
 
 def test_a_clean_week_says_nothing_in_the_subject():
-    subject = _subject(END, _metrics(integrity=[_check("cash_drift")]), [_proposal()])
+    accounts = _subject_accounts(
+        **{n: _metrics(integrity=[_check("cash_drift")]) for n in weekly.ACCOUNTS}
+    )
+    subject = _subject(END, accounts, [_proposal()])
 
     assert "data check" not in subject
 
 
 def test_the_integrity_section_is_absent_when_the_checks_did_not_run():
     """Rather than rendering an empty table that reads as 'nothing to report'."""
-    table = _facts_table(START, END, _metrics(), D(500), INCEPTION, _limits())
+    table = _table()
 
-    assert "## Data integrity" not in table
+    assert "### Data integrity" not in table

@@ -15,7 +15,7 @@ export const CONFIG = { apiOrigin: "", apiToken: "" };
 const HOLDING_TICKERS = ["AAPL", "AMD", "AVGO", "GOOGL", "META", "NVDA"] as const;
 
 export const OVERVIEW = {
-  portfolio: { name: "default", initial_cash_usd: 100000 },
+  portfolio: { name: "static-100", initial_cash_usd: 100000 },
   cash_usd: 97350,
   positions_value_usd: 5130,
   total_value_usd: 102480,
@@ -208,6 +208,24 @@ export const REVIEW = {
   sent_at: "2026-09-19T22:00:00Z",
 };
 
+// Deliberately not the same series as PERFORMANCE.portfolio: the point of
+// this fixture is two accounts that diverge, so the Compare view's "which is
+// ahead" line has something real to say.
+export const COMPARISON = {
+  "static-100": series(90, 100000, 27.5).map((p) => ({
+    as_of: p.as_of,
+    total_value_usd: p.value,
+    pnl_usd: p.value - 100000,
+    pnl_pct: ((p.value - 100000) / 100000) * 100,
+  })),
+  "dynamic-500": series(90, 100000, 19).map((p) => ({
+    as_of: p.as_of,
+    total_value_usd: p.value,
+    pnl_usd: p.value - 100000,
+    pnl_pct: ((p.value - 100000) / 100000) * 100,
+  })),
+};
+
 export const ROUTES: Record<string, unknown> = {
   "/config.json": CONFIG,
   "/api/overview": OVERVIEW,
@@ -218,4 +236,5 @@ export const ROUTES: Record<string, unknown> = {
   "/api/trades": TRADES,
   "/api/runs": RUNS,
   "/api/reviews/latest": REVIEW,
+  "/api/comparison": COMPARISON,
 };

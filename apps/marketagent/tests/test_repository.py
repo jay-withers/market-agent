@@ -41,6 +41,12 @@ D = Decimal
 TICKER = "AAPL"
 OTHER = "MSFT"
 
+# The account most tests exercise: 010-seed-sp100-static.sql seeds it with 101
+# real tickers (including TICKER/OTHER above), unlike dynamic-500, which
+# starts with an empty portfolio_watchlist until the rebalance job populates
+# it.
+PORTFOLIO = "static-100"
+
 
 def _bar(ticker: str = TICKER, day: date = date(2026, 9, 14), close: str = "100.0000") -> Bar:
     return Bar(
@@ -93,10 +99,11 @@ def _fill(conn, pid, side: str, qty: str, notional: str, price: str, cost_usd: s
     repo.apply_fill(conn, pid, TICKER, side, D(qty), D(notional), D(price))
 
 
-def _decision(conn, run_id: int, **kwargs) -> int:
+def _decision(conn, pid: int, run_id: int, **kwargs) -> int:
     return repo.save_decision(
         conn,
-        run_id=run_id,
+        pid,
+        run_id,
         rec=kwargs.pop("rec", _recommendation()),
         verdict=kwargs.pop("verdict", _verdict()),
         state=kwargs.pop("state", PortfolioState(cash_usd=D("500.0000"))),
@@ -118,9 +125,11 @@ def test_the_watchlist_excludes_the_benchmark_companies(conn):
     """SPY, VT and EWU sit in `companies` only so `prices.ticker` can reference
     them. Analysing one as though it were a stock pick wastes a model call at
     best and places a trade at worst."""
-    tickers = repo.active_tickers(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
 
-    assert tickers, "004-benchmark-companies.sql seeds benchmarks; 003 seeds the watchlist"
+    tickers = repo.active_tickers(conn, pid)
+
+    assert tickers, "010-seed-sp100-static.sql seeds static-100's watchlist"
     assert "SPY" not in tickers
     assert TICKER in tickers
     assert tickers == sorted(tickers)
@@ -128,12 +137,12 @@ def test_the_watchlist_excludes_the_benchmark_companies(conn):
 
 def test_an_unknown_portfolio_names_the_migration_that_creates_one(conn):
     """The failure a fresh database produces, so it has to point somewhere."""
-    with pytest.raises(LookupError, match=r"003-seed-watchlist\.sql"):
+    with pytest.raises(LookupError, match=r"009-two-accounts\.sql"):
         repo.portfolio_id(conn, "no-such-portfolio")
 
 
 def test_the_seeded_portfolio_starts_at_the_paper_account_default(conn):
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
 
     assert repo.load_cash(conn, pid) == D("100000.0000")
     assert repo.initial_cash(conn, pid) == D("100000.0000")
@@ -147,7 +156,7 @@ def test_the_seeded_portfolio_starts_at_the_paper_account_default(conn):
 def test_storing_the_same_bar_twice_updates_rather_than_duplicates(conn):
     """The agent can be re-run on a day, and a second row for one ticker-day
     would double-count the close every query after it."""
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     assert repo.save_prices(conn, [_bar()]) == 1
     repo.save_prices(conn, [_bar(close="123.4500")])
 
@@ -206,7 +215,7 @@ def test_the_first_close_at_or_after_a_date_is_what_indexes_a_benchmark(conn):
 def test_a_holding_with_no_price_is_reported_rather_than_valued_at_zero(conn):
     """Valuing it at zero understates exposure, which would let the engine
     approve a buy it should refuse — so the caller is told instead."""
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     _fill(conn, pid, "BUY", "2.000000", "50.0000", "100.0000", "25.0000")
 
     state, unpriced = repo.build_state(
@@ -220,7 +229,7 @@ def test_a_holding_with_no_price_is_reported_rather_than_valued_at_zero(conn):
 
 
 def test_a_priced_holding_is_valued_in_usd(conn):
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     _fill(conn, pid, "BUY", "2.000000", "50.0000", "100.0000", "25.0000")
 
     state, unpriced = repo.build_state(
@@ -242,7 +251,7 @@ def test_a_priced_holding_is_valued_in_usd(conn):
 def test_a_buy_takes_cash_and_creates_the_position(conn):
     """Our tables are the ledger — Alpaca's balance describes a different
     portfolio, one with $100,000 in it."""
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
 
     _fill(conn, pid, "BUY", "2.000000", "50.0000", "100.0000", "25.0000")
 
@@ -251,7 +260,7 @@ def test_a_buy_takes_cash_and_creates_the_position(conn):
 
 
 def test_a_sell_returns_cash_and_reduces_the_position(conn):
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     _fill(conn, pid, "BUY", "2.000000", "50.0000", "100.0000", "25.0000")
 
     _fill(conn, pid, "SELL", "1.000000", "30.0000", "120.0000", "30.0000")
@@ -263,7 +272,7 @@ def test_a_sell_returns_cash_and_reduces_the_position(conn):
 def test_a_fully_sold_position_stops_being_a_holding(conn):
     """`load_positions` filters on quantity > 0, so a closed position must not
     keep appearing in the state the model is shown."""
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     _fill(conn, pid, "BUY", "2.000000", "50.0000", "100.0000", "25.0000")
 
     _fill(conn, pid, "SELL", "2.000000", "60.0000", "120.0000", "30.0000")
@@ -278,7 +287,8 @@ def test_a_fully_sold_position_stops_being_a_holding(conn):
 
 def test_a_run_is_opened_before_any_work_and_closed_with_its_counts(conn):
     """The row exists first so a crash leaves evidence."""
-    run_id = repo.open_run(conn, "schedule", dry_run=False, image_tag="8d2788f")
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    run_id = repo.open_run(conn, pid, "schedule", dry_run=False, image_tag="8d2788f")
 
     repo.close_run(
         conn,
@@ -301,7 +311,8 @@ def test_a_run_is_opened_before_any_work_and_closed_with_its_counts(conn):
 def test_a_failed_run_records_its_error(conn):
     """BudgetExceeded closes the row through this path, so the failure reads
     like any other."""
-    run_id = repo.open_run(conn, "manual", dry_run=True, image_tag=None)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    run_id = repo.open_run(conn, pid, "manual", dry_run=True, image_tag=None)
 
     repo.close_run(conn, run_id, "failed", {}, 0, 0, D("0.0000"), error="BudgetExceeded: $1.00")
 
@@ -313,9 +324,10 @@ def test_a_failed_run_records_its_error(conn):
 def test_a_decision_stores_the_state_and_the_verdict_it_was_made_under(conn):
     """An `ai_decisions` row claims to be a complete record of what was asked,
     which is what makes it replayable months later."""
-    run_id = repo.open_run(conn, "manual", dry_run=True, image_tag=None)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    run_id = repo.open_run(conn, pid, "manual", dry_run=True, image_tag=None)
 
-    did = _decision(conn, run_id, prompt_context={"recent_decisions": [{"action": "BUY"}]})
+    did = _decision(conn, pid, run_id, prompt_context={"recent_decisions": [{"action": "BUY"}]})
 
     row = conn.execute(
         "SELECT ticker, action, recommended_amount_usd, approved_amount_usd,"
@@ -335,10 +347,12 @@ def test_a_decision_stores_the_state_and_the_verdict_it_was_made_under(conn):
 def test_a_hold_stores_no_recommended_amount(conn):
     """`suggested_amount_usd` is None on a HOLD, and 0 would read as a real
     figure the model proposed."""
-    run_id = repo.open_run(conn, "manual", dry_run=True, image_tag=None)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    run_id = repo.open_run(conn, pid, "manual", dry_run=True, image_tag=None)
 
     did = _decision(
         conn,
+        pid,
         run_id,
         rec=_recommendation(action="HOLD", amount=None),
         verdict=_verdict(approved=False, amount=None, constraint="action_is_hold"),
@@ -372,9 +386,9 @@ def test_a_submitted_order_records_no_quantity(conn):
     """The agent runs at 06:00 and the market opens at 14:30, so a notional
     order rests for hours and Alpaca has not yet derived a quantity. That is
     why `trades.quantity` had to become nullable."""
-    pid = repo.portfolio_id(conn)
-    run_id = repo.open_run(conn, "schedule", dry_run=False, image_tag=None)
-    did = _decision(conn, run_id)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    run_id = repo.open_run(conn, pid, "schedule", dry_run=False, image_tag=None)
+    did = _decision(conn, pid, run_id)
 
     tid = _trade(conn, pid, did)
 
@@ -387,9 +401,9 @@ def test_resubmitting_one_decision_updates_its_trade_rather_than_adding_another(
     retry is idempotent — an order POST is never retried automatically, because
     a 503 that executed before failing to answer is indistinguishable from one
     that did not."""
-    pid = repo.portfolio_id(conn)
-    run_id = repo.open_run(conn, "schedule", dry_run=False, image_tag=None)
-    did = _decision(conn, run_id)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    run_id = repo.open_run(conn, pid, "schedule", dry_run=False, image_tag=None)
+    did = _decision(conn, pid, run_id)
 
     first = _trade(conn, pid, did)
     second = _trade(
@@ -406,12 +420,12 @@ def test_resubmitting_one_decision_updates_its_trade_rather_than_adding_another(
 def test_todays_trades_are_counted_for_the_daily_limit_but_rejections_are_not(conn):
     """The engine cannot count the table itself — `trades_today` is passed in,
     which is what keeps risk.py pure and an `ai_decisions` row replayable."""
-    pid = repo.portfolio_id(conn)
-    run_id = repo.open_run(conn, "schedule", dry_run=False, image_tag=None)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    run_id = repo.open_run(conn, pid, "schedule", dry_run=False, image_tag=None)
     before = repo.trades_today(conn, pid)
 
-    _trade(conn, pid, _decision(conn, run_id), client_order_id="a")
-    _trade(conn, pid, _decision(conn, run_id), client_order_id="b", status="rejected")
+    _trade(conn, pid, _decision(conn, pid, run_id), client_order_id="a")
+    _trade(conn, pid, _decision(conn, pid, run_id), client_order_id="b", status="rejected")
 
     assert repo.trades_today(conn, pid) == before + 1
 
@@ -419,21 +433,21 @@ def test_todays_trades_are_counted_for_the_daily_limit_but_rejections_are_not(co
 def test_a_simulated_trade_still_counts_against_the_daily_limit(conn):
     """A dry run that ignored the limit would not be exercising the same code
     path as a real one."""
-    pid = repo.portfolio_id(conn)
-    run_id = repo.open_run(conn, "manual", dry_run=True, image_tag=None)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    run_id = repo.open_run(conn, pid, "manual", dry_run=True, image_tag=None)
     before = repo.trades_today(conn, pid)
 
-    _trade(conn, pid, _decision(conn, run_id), status="simulated", dry_run=True)
+    _trade(conn, pid, _decision(conn, pid, run_id), status="simulated", dry_run=True)
 
     assert repo.trades_today(conn, pid) == before + 1
 
 
 def test_an_unreconciled_trade_is_one_the_broker_has_not_answered_for(conn):
     """What the summary job picks up at 21:00 to turn a submission into a fill."""
-    pid = repo.portfolio_id(conn)
-    run_id = repo.open_run(conn, "schedule", dry_run=False, image_tag=None)
-    _trade(conn, pid, _decision(conn, run_id), client_order_id="a", broker_order_id="ord-a")
-    _trade(conn, pid, _decision(conn, run_id), client_order_id="b", status="filled")
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    run_id = repo.open_run(conn, pid, "schedule", dry_run=False, image_tag=None)
+    _trade(conn, pid, _decision(conn, pid, run_id), client_order_id="a", broker_order_id="ord-a")
+    _trade(conn, pid, _decision(conn, pid, run_id), client_order_id="b", status="filled")
 
     pending = repo.unreconciled_trades(conn, pid)
 
@@ -448,16 +462,16 @@ def test_an_unreconciled_trade_is_one_the_broker_has_not_answered_for(conn):
 def test_recent_decisions_are_newest_first_and_carry_the_orders_status(conn):
     """Without this the model re-argues the same thesis every morning, with
     nothing telling it the engine clamped every one to the same cap."""
-    pid = repo.portfolio_id(conn)
-    run_id = repo.open_run(conn, "schedule", dry_run=False, image_tag=None)
-    older = _decision(conn, run_id)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    run_id = repo.open_run(conn, pid, "schedule", dry_run=False, image_tag=None)
+    older = _decision(conn, pid, run_id)
     conn.execute(
         "UPDATE ai_decisions SET decided_at = now() - interval '2 days' WHERE id = %s", (older,)
     )
-    newer = _decision(conn, run_id)
+    newer = _decision(conn, pid, run_id)
     _trade(conn, pid, newer, status="filled")
 
-    rows = repo.recent_decisions(conn, TICKER, limit=5)
+    rows = repo.recent_decisions(conn, pid, TICKER, limit=5)
 
     assert [r["trade_status"] for r in rows] == ["filled", None]
     assert rows[0]["binding_constraint"] == "max_trade_usd"
@@ -467,31 +481,45 @@ def test_recent_decisions_are_newest_first_and_carry_the_orders_status(conn):
 def test_a_decision_with_two_trades_still_appears_once(conn):
     """The lateral single-row join is there so a decision that somehow gained a
     second trade cannot silently double an entry in the prompt."""
-    pid = repo.portfolio_id(conn)
-    run_id = repo.open_run(conn, "schedule", dry_run=False, image_tag=None)
-    did = _decision(conn, run_id)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    run_id = repo.open_run(conn, pid, "schedule", dry_run=False, image_tag=None)
+    did = _decision(conn, pid, run_id)
     _trade(conn, pid, did, client_order_id="a")
     _trade(conn, pid, did, client_order_id="b", status="filled")
 
-    rows = repo.recent_decisions(conn, TICKER, limit=5)
+    rows = repo.recent_decisions(conn, pid, TICKER, limit=5)
 
     assert len(rows) == 1
 
 
 def test_the_history_is_limited_to_what_was_asked_for(conn):
     """Five in the prompt, not every decision ever made on the ticker."""
-    run_id = repo.open_run(conn, "schedule", dry_run=False, image_tag=None)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    run_id = repo.open_run(conn, pid, "schedule", dry_run=False, image_tag=None)
     for _ in range(4):
-        _decision(conn, run_id)
+        _decision(conn, pid, run_id)
 
-    assert len(repo.recent_decisions(conn, TICKER, limit=2)) == 2
+    assert len(repo.recent_decisions(conn, pid, TICKER, limit=2)) == 2
 
 
 def test_the_history_is_per_ticker(conn):
-    run_id = repo.open_run(conn, "schedule", dry_run=False, image_tag=None)
-    _decision(conn, run_id)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    run_id = repo.open_run(conn, pid, "schedule", dry_run=False, image_tag=None)
+    _decision(conn, pid, run_id)
 
-    assert repo.recent_decisions(conn, OTHER, limit=5) == []
+    assert repo.recent_decisions(conn, pid, OTHER, limit=5) == []
+
+
+def test_recent_decisions_do_not_leak_across_accounts(conn):
+    """`recent_decisions` used to ignore which account a decision belonged to,
+    so two heavily-overlapping watchlists would leak one account's history
+    into the other's prompt. Filtered by `portfolio_id` as well as ticker now."""
+    static_pid = repo.portfolio_id(conn, "static-100")
+    dynamic_pid = repo.portfolio_id(conn, "dynamic-500")
+    run_id = repo.open_run(conn, static_pid, "schedule", dry_run=False, image_tag=None)
+    _decision(conn, static_pid, run_id)
+
+    assert repo.recent_decisions(conn, dynamic_pid, TICKER, limit=5) == []
 
 
 # ---------------------------------------------------------------------------
@@ -503,7 +531,8 @@ def test_spend_sums_every_job_that_calls_the_model(conn):
     """007-job-costs.sql exists because the summary and weekly jobs never
     recorded their own call, so a total from `agent_runs` alone was low by a
     call a day and a call a week — and the gap only grows."""
-    run_id = repo.open_run(conn, "schedule", dry_run=False, image_tag=None)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    run_id = repo.open_run(conn, pid, "schedule", dry_run=False, image_tag=None)
     repo.close_run(conn, run_id, "succeeded", {}, 100, 20, D("0.1900"))
     today = date.today()
     conn.execute(
@@ -524,6 +553,29 @@ def test_spend_sums_every_job_that_calls_the_model(conn):
     assert result["today_usd"] == D("0.2600")
 
 
+def test_spend_can_be_scoped_to_one_accounts_agent_runs(conn):
+    """`pid` excludes the summary/weekly cost, which is never split per
+    account — those two jobs cover both portfolios in one call, so their spend
+    is not attributable to either one alone."""
+    static_pid = repo.portfolio_id(conn, "static-100")
+    dynamic_pid = repo.portfolio_id(conn, "dynamic-500")
+    today = date.today()
+    for pid, cost in ((static_pid, D("0.1000")), (dynamic_pid, D("0.2000"))):
+        run_id = repo.open_run(conn, pid, "schedule", dry_run=False, image_tag=None)
+        repo.close_run(conn, run_id, "succeeded", {}, 100, 20, cost)
+    conn.execute(
+        "INSERT INTO daily_summaries (as_of, subject, body_markdown, body_html,"
+        "  email_status, cost_usd) VALUES (%s, 'A subject', 'x', '<p>x</p>', 'sent', %s)",
+        (today, D("0.0500")),
+    )
+
+    scoped = repo.spend(conn, today, pid=static_pid)
+    unscoped = repo.spend(conn, today)
+
+    assert scoped["today_usd"] == D("0.1000")
+    assert unscoped["today_usd"] == D("0.3500")
+
+
 def test_spend_is_zero_rather_than_null_on_a_day_nothing_ran(conn):
     """A None here would render as "None" in the email the summary job sends."""
     result = repo.spend(conn, date(2020, 1, 1))
@@ -539,9 +591,9 @@ def test_spend_is_zero_rather_than_null_on_a_day_nothing_ran(conn):
 def test_a_fill_reported_late_updates_the_trade_in_place(conn):
     """The agent submits at 06:00 and the market opens at 14:30, so the fill
     becomes known to the summary job eight hours later."""
-    pid = repo.portfolio_id(conn)
-    run_id = repo.open_run(conn, "schedule", dry_run=False, image_tag=None)
-    tid = _trade(conn, pid, _decision(conn, run_id))
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    run_id = repo.open_run(conn, pid, "schedule", dry_run=False, image_tag=None)
+    tid = _trade(conn, pid, _decision(conn, pid, run_id))
 
     repo.update_trade_outcome(
         conn,
@@ -561,7 +613,7 @@ def test_a_fill_reported_late_updates_the_trade_in_place(conn):
 
 def test_re_running_a_day_overwrites_its_performance_row(conn):
     """A retry after a mail outage must not fail on the day's own row."""
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     args = (pid, date(2026, 9, 14))
     repo.save_daily_performance(
         conn,
@@ -590,37 +642,63 @@ def test_re_running_a_day_overwrites_its_performance_row(conn):
 
 
 def test_a_benchmark_arm_is_overwritten_rather_than_duplicated_per_day(conn):
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     point = BenchmarkPoint(
         symbol="SPY",
         as_of=date(2026, 9, 14),
         value_usd=D("505.0000"),
         close_usd=D("560.0000"),
     )
-    assert repo.save_benchmarks(conn, [point]) == 1
-    repo.save_benchmarks(conn, [replace(point, value_usd=D("511.0000"))])
+    assert repo.save_benchmarks(conn, pid, [point]) == 1
+    repo.save_benchmarks(conn, pid, [replace(point, value_usd=D("511.0000"))])
 
     rows = conn.execute(
-        "SELECT value_usd FROM benchmarks WHERE symbol = 'SPY' AND as_of = %s",
-        (date(2026, 9, 14),),
+        "SELECT value_usd FROM benchmarks"
+        " WHERE portfolio_id = %s AND symbol = 'SPY' AND as_of = %s",
+        (pid, date(2026, 9, 14)),
     ).fetchall()
     assert rows == [(D("511.0000"),)]
-    assert pid
+
+
+def test_benchmark_value_does_not_collide_across_two_accounts(conn):
+    """The old `(symbol, as_of)` key let two accounts silently overwrite each
+    other's `value_usd` for the same benchmark and day — `close_usd` (the raw
+    market price) is harmlessly shared, but `value_usd` is notional-dependent
+    per account, which is exactly what the new `(portfolio_id, symbol, as_of)`
+    key fixes."""
+    static_pid = repo.portfolio_id(conn, "static-100")
+    dynamic_pid = repo.portfolio_id(conn, "dynamic-500")
+    point = BenchmarkPoint(
+        symbol="SPY", as_of=date(2026, 9, 14), value_usd=D("505.0000"), close_usd=D("560.0000")
+    )
+
+    repo.save_benchmarks(conn, static_pid, [point])
+    repo.save_benchmarks(conn, dynamic_pid, [replace(point, value_usd=D("999.0000"))])
+
+    rows = dict(
+        conn.execute(
+            "SELECT portfolio_id, value_usd FROM benchmarks WHERE symbol = 'SPY' AND as_of = %s",
+            (date(2026, 9, 14),),
+        ).fetchall()
+    )
+    assert rows[static_pid] == D("505.0000")
+    assert rows[dynamic_pid] == D("999.0000")
 
 
 def test_saving_no_benchmark_points_is_not_an_error(conn):
     """A day where every arm was missing a price. They are omitted rather than
     drawn flat at the notional, which would read as "the index did nothing"."""
-    assert repo.save_benchmarks(conn, []) == 0
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    assert repo.save_benchmarks(conn, pid, []) == 0
 
 
 def test_the_days_activity_states_the_trades_and_not_just_the_decisions(conn):
     """The first version of the email listed a reconciliation count and no
     trades — and that count is zero on a dry run, so the model reported cash
     unchanged on a day three trades had executed."""
-    pid = repo.portfolio_id(conn)
-    run_id = repo.open_run(conn, "manual", dry_run=True, image_tag=None)
-    did = _decision(conn, run_id)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    run_id = repo.open_run(conn, pid, "manual", dry_run=True, image_tag=None)
+    did = _decision(conn, pid, run_id)
     _trade(conn, pid, did, status="simulated", dry_run=True)
 
     activity = repo.day_activity(conn, pid, date.today())
@@ -628,6 +706,21 @@ def test_the_days_activity_states_the_trades_and_not_just_the_decisions(conn):
     assert len(activity["decisions"]) == 1
     assert len(activity["trades"]) == 1
     assert activity["trades"][0][2] == "simulated"
+
+
+def test_the_days_activity_does_not_leak_another_accounts_decisions(conn):
+    """`runs` and `decisions` used to ignore `pid` entirely — only `trades`/
+    `holdings` were filtered — so a decision made for the other account showed
+    up in this account's daily summary. Both are portfolio-scoped now."""
+    static_pid = repo.portfolio_id(conn, "static-100")
+    dynamic_pid = repo.portfolio_id(conn, "dynamic-500")
+    run_id = repo.open_run(conn, dynamic_pid, "schedule", dry_run=False, image_tag=None)
+    _decision(conn, dynamic_pid, run_id)
+
+    activity = repo.day_activity(conn, static_pid, date.today())
+
+    assert activity["runs"] == []
+    assert activity["decisions"] == []
 
 
 def test_a_summary_records_when_it_was_sent_only_if_it_was(conn):
@@ -713,15 +806,16 @@ def test_the_binding_constraint_histogram_splits_approvals_from_refusals(conn):
     """The point of the whole weekly job. A cap binding an approval and a gate
     refusing one are opposite facts, and one table would read as a single
     ranking of "constraints that fired"."""
-    run_id = repo.open_run(conn, "schedule", dry_run=False, image_tag=None)
-    _decision(conn, run_id, verdict=_verdict(approved=True, constraint="max_trade_usd"))
-    _decision(conn, run_id, verdict=_verdict(approved=True, constraint="max_trade_usd"))
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    run_id = repo.open_run(conn, pid, "schedule", dry_run=False, image_tag=None)
+    _decision(conn, pid, run_id, verdict=_verdict(approved=True, constraint="max_trade_usd"))
+    _decision(conn, pid, run_id, verdict=_verdict(approved=True, constraint="max_trade_usd"))
     _decision(
         conn,
+        pid,
         run_id,
         verdict=_verdict(approved=False, amount=None, constraint="daily_trade_limit"),
     )
-    pid = repo.portfolio_id(conn)
     today = date.today()
 
     metrics = repo.week_metrics(conn, pid, today - timedelta(days=6), today)
@@ -734,7 +828,7 @@ def test_the_binding_constraint_histogram_splits_approvals_from_refusals(conn):
 def test_a_week_with_no_runs_reports_zero_rather_than_null(conn):
     """`run()` returns None on an empty week, but the figures still have to be
     readable — a None would render as "None" in the email."""
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
 
     metrics = repo.week_metrics(conn, pid, date(2020, 1, 1), date(2020, 1, 7))
 
@@ -744,10 +838,10 @@ def test_a_week_with_no_runs_reports_zero_rather_than_null(conn):
 
 
 def test_the_weeks_runs_are_counted_by_outcome(conn):
-    pid = repo.portfolio_id(conn)
-    ok = repo.open_run(conn, "schedule", dry_run=False, image_tag=None)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    ok = repo.open_run(conn, pid, "schedule", dry_run=False, image_tag=None)
     repo.close_run(conn, ok, "succeeded", {"news_fetched": 84}, 100, 20, D("0.1900"))
-    bad = repo.open_run(conn, "schedule", dry_run=False, image_tag=None)
+    bad = repo.open_run(conn, pid, "schedule", dry_run=False, image_tag=None)
     repo.close_run(conn, bad, "failed", {}, 0, 0, D("0.0000"), error="boom")
     today = date.today()
 
@@ -756,6 +850,23 @@ def test_the_weeks_runs_are_counted_by_outcome(conn):
     assert metrics["runs"]["succeeded"] == 1
     assert metrics["runs"]["failed"] == 1
     assert metrics["runs"]["news_fetched"] == 84
+
+
+def test_week_metrics_do_not_leak_another_accounts_runs_or_decisions(conn):
+    """`runs`, `decisions` and `constraints` used to ignore `pid`, so one
+    account's week could silently include the other's activity."""
+    static_pid = repo.portfolio_id(conn, "static-100")
+    dynamic_pid = repo.portfolio_id(conn, "dynamic-500")
+    run_id = repo.open_run(conn, dynamic_pid, "schedule", dry_run=False, image_tag=None)
+    repo.close_run(conn, run_id, "succeeded", {"news_fetched": 84}, 100, 20, D("0.1900"))
+    _decision(conn, dynamic_pid, run_id)
+    today = date.today()
+
+    metrics = repo.week_metrics(conn, static_pid, today - timedelta(days=6), today)
+
+    assert metrics["runs"]["runs"] == 0
+    assert metrics["decisions"] == []
+    assert metrics["constraints"] == []
 
 
 def test_a_review_stores_its_proposals_where_they_can_be_queried(conn):
@@ -931,14 +1042,15 @@ def _clean_week(conn, pid: int, start: date, end: date) -> None:
     while day <= end:
         _valuation(conn, pid, day)
         conn.execute(
-            "INSERT INTO agent_runs (started_at, finished_at, status) VALUES (%s, %s, 'succeeded')",
-            (datetime.combine(day, datetime.min.time(), UTC), datetime.now(UTC)),
+            "INSERT INTO agent_runs (portfolio_id, started_at, finished_at, status)"
+            " VALUES (%s, %s, %s, 'succeeded')",
+            (pid, datetime.combine(day, datetime.min.time(), UTC), datetime.now(UTC)),
         )
         day += timedelta(days=1)
 
 
 def test_an_intact_week_passes_every_check(conn):
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     end = date.today()
     start = end - timedelta(days=6)
     _clean_week(conn, pid, start, end)
@@ -952,7 +1064,7 @@ def test_an_intact_week_passes_every_check(conn):
 
 
 def test_a_missing_valuation_is_caught_and_named(conn):
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     end = date.today()
     start = end - timedelta(days=6)
     _clean_week(conn, pid, start, end)
@@ -968,7 +1080,7 @@ def test_a_missing_valuation_is_caught_and_named(conn):
 
 
 def test_a_day_with_no_agent_run_is_caught(conn):
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     end = date.today()
     start = end - timedelta(days=6)
     _clean_week(conn, pid, start, end)
@@ -982,7 +1094,7 @@ def test_a_day_with_no_agent_run_is_caught(conn):
 
 
 def test_a_failed_run_is_caught(conn):
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     end = date.today()
     start = end - timedelta(days=6)
     _clean_week(conn, pid, start, end)
@@ -999,7 +1111,7 @@ def test_a_failed_run_is_caught(conn):
 
 def test_a_run_abandoned_past_the_timeout_is_caught_as_well_as_a_failure(conn):
     """SIGKILL cannot be caught, so the row stays 'running' for ever."""
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     end = date.today()
     start = end - timedelta(days=6)
     _clean_week(conn, pid, start, end)
@@ -1016,7 +1128,7 @@ def test_a_run_abandoned_past_the_timeout_is_caught_as_well_as_a_failure(conn):
 
 def test_a_holding_that_has_stopped_being_priced_is_caught(conn):
     """The silent one: build_state drops an unpriced holding from the total."""
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     end = date.today()
     start = end - timedelta(days=6)
     _clean_week(conn, pid, start, end)
@@ -1038,7 +1150,7 @@ def test_a_holding_that_has_stopped_being_priced_is_caught(conn):
 
 
 def test_a_holding_priced_today_is_not_reported_stale(conn):
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     end = date.today()
     start = end - timedelta(days=6)
     _clean_week(conn, pid, start, end)
@@ -1058,7 +1170,7 @@ def test_a_holding_priced_today_is_not_reported_stale(conn):
 
 def test_a_split_sized_price_move_is_caught(conn):
     """adjustment=all restates closes across a split; our quantity does not."""
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     end = date.today()
     start = end - timedelta(days=6)
     _clean_week(conn, pid, start, end)
@@ -1087,7 +1199,7 @@ def test_a_split_sized_price_move_is_caught(conn):
 
 def test_an_ordinary_large_move_does_not_fire_the_split_check(conn):
     """AMD moved 9% in a day this month. A check that cries wolf is ignored."""
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     end = date.today()
     start = end - timedelta(days=6)
     _clean_week(conn, pid, start, end)
@@ -1112,7 +1224,7 @@ def test_an_ordinary_large_move_does_not_fire_the_split_check(conn):
 
 
 def test_an_old_broker_snapshot_is_reported(conn):
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     end = date.today()
     start = end - timedelta(days=6)
     _clean_week(conn, pid, start, end)

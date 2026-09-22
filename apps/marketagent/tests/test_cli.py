@@ -38,8 +38,9 @@ def test_the_agent_command_runs_the_job(monkeypatch):
     monkeypatch.setattr(cli, "_configure_logging", lambda: None)
     _stub_job(monkeypatch, "agent", _FakeJob(called))
 
-    assert cli.main(["agent", "--trigger", "manual"]) == 0
+    assert cli.main(["agent", "--trigger", "manual", "--portfolio", "static-100"]) == 0
     assert called["trigger"] == "manual"
+    assert called["portfolio"] == "static-100"
 
 
 def test_a_failed_agent_run_exits_non_zero_without_re_raising(monkeypatch, caplog):
@@ -52,7 +53,7 @@ def test_a_failed_agent_run_exits_non_zero_without_re_raising(monkeypatch, caplo
     monkeypatch.setattr(cli, "_configure_logging", lambda: None)
     _stub_job(monkeypatch, "agent", _FakeJob({}, error=RuntimeError("credit balance is too low")))
 
-    assert cli.main(["agent"]) == 1
+    assert cli.main(["agent", "--portfolio", "static-100"]) == 1
     assert "agent run failed: credit balance is too low" in caplog.text
     # One report, not a re-raised traceback on top of the job's own.
     assert caplog.text.count("credit balance is too low") == 1
@@ -82,8 +83,15 @@ class _FakeJob:
         self._called = called
         self._error = error
 
-    def run(self, trigger: str = "schedule", image_tag: str | None = None, **_kwargs):
+    def run(
+        self,
+        portfolio: str | None = None,
+        trigger: str = "schedule",
+        image_tag: str | None = None,
+        **_kwargs,
+    ):
         self._called["trigger"] = trigger
+        self._called["portfolio"] = portfolio
         if self._error:
             raise self._error
         return 1
@@ -104,7 +112,7 @@ def test_a_terminated_agent_run_still_exits_non_zero(monkeypatch, caplog):
     monkeypatch.setattr(cli, "_configure_logging", lambda: None)
     _stub_job(monkeypatch, "agent", _FakeJob({}, error=SystemExit("terminated by signal 15")))
 
-    assert cli.main(["agent"]) == 1
+    assert cli.main(["agent", "--portfolio", "static-100"]) == 1
     assert "terminated by signal 15" in caplog.text
 
 
@@ -141,6 +149,48 @@ def test_a_failed_weekly_review_exits_non_zero(monkeypatch, caplog):
 
     assert cli.main(["weekly"]) == 1
     assert "weekly review failed: no portfolio" in caplog.text
+
+
+def _stub_sync(monkeypatch, fake) -> None:
+    """Same reasoning as `_stub_job`, but `sync.py` lives at the package root,
+    not under `.jobs` — `cli.py` does `from . import sync as sync_job`."""
+    monkeypatch.setattr(marketagent, "sync", fake, raising=False)
+    monkeypatch.setitem(__import__("sys").modules, "marketagent.sync", fake)
+
+
+def test_the_sync_command_requires_a_portfolio(monkeypatch):
+    monkeypatch.setattr(cli, "_configure_logging", lambda: None)
+    _stub_sync(monkeypatch, _FakeSummary({}))
+
+    with pytest.raises(SystemExit):
+        cli.main(["sync"])
+
+
+def test_the_sync_command_runs_for_the_named_account(monkeypatch):
+    called = {}
+    monkeypatch.setattr(cli, "_configure_logging", lambda: None)
+    _stub_sync(monkeypatch, _FakeSummary(called))
+
+    assert cli.main(["sync", "--portfolio", "dynamic-500"]) == 0
+    assert called["ran"] is True
+    assert called["portfolio"] == "dynamic-500"
+
+
+def test_the_rebalance_command_runs_the_rebalance_job(monkeypatch):
+    called = {}
+    monkeypatch.setattr(cli, "_configure_logging", lambda: None)
+    _stub_job(monkeypatch, "rebalance", _FakeSummary(called))
+
+    assert cli.main(["rebalance"]) == 0
+    assert called["ran"] is True
+
+
+def test_a_failed_rebalance_exits_non_zero(monkeypatch, caplog):
+    monkeypatch.setattr(cli, "_configure_logging", lambda: None)
+    _stub_job(monkeypatch, "rebalance", _FakeSummary({}, error=RuntimeError("wikipedia is down")))
+
+    assert cli.main(["rebalance"]) == 1
+    assert "rebalance failed: wikipedia is down" in caplog.text
 
 
 class _FakeSummary:

@@ -22,8 +22,8 @@ import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 
+from .. import alpaca_api, risklimits
 from .. import repository as repo
-from .. import risklimits
 from ..broker.alpaca import AlpacaBroker
 from ..broker.base import Broker
 from ..broker.dryrun import DryRunBroker
@@ -69,12 +69,18 @@ def _check_budget(spent: Decimal, ceiling: Decimal) -> None:
 
 
 def run(
+    portfolio: str,
     trigger: str = "schedule",
     image_tag: str | None = None,
     llm: Llm | None = None,
     broker: Broker | None = None,
 ) -> int:
-    """Execute one agent run. Returns the `agent_runs` id.
+    """Execute one agent run for one account. Returns the `agent_runs` id.
+
+    `portfolio` is `'static-100'` or `'dynamic-500'` — required, no default,
+    since each account runs as a separate scheduled job (`--portfolio` on the
+    CLI) and a forgotten argument must fail loudly rather than silently trade
+    the wrong account.
 
     `llm` and `broker` are injectable so the whole loop can be exercised
     against a test double — the alternative is a job that can only ever be
@@ -82,6 +88,7 @@ def run(
     """
     cfg = settings()
     llm = llm or AnthropicLlm()
+    alpaca_api.use_account(portfolio)
     if broker is None:
         broker = DryRunBroker() if cfg.dry_run else AlpacaBroker()
 
@@ -103,17 +110,23 @@ def run(
     cost_usd = Decimal(0)
 
     with pool().connection() as conn:
-        run_id = repo.open_run(conn, trigger, cfg.dry_run, image_tag)
+        pid = repo.portfolio_id(conn, name=portfolio)
+        run_id = repo.open_run(conn, pid, trigger, cfg.dry_run, image_tag)
         conn.commit()
-        logger.info("run %d started (dry_run=%s, trigger=%s)", run_id, cfg.dry_run, trigger)
+        logger.info(
+            "run %d started (portfolio=%s, dry_run=%s, trigger=%s)",
+            run_id,
+            portfolio,
+            cfg.dry_run,
+            trigger,
+        )
 
     try:
         with pool().connection() as conn:
-            tickers = repo.active_tickers(conn)
-            pid = repo.portfolio_id(conn)
+            tickers = repo.active_tickers(conn, pid)
         counts["tickers_considered"] = len(tickers)
         if not tickers:
-            raise RuntimeError("no active tickers — run sql/003-seed-watchlist.sql")
+            raise RuntimeError(f"no active tickers for {portfolio!r} — run its watchlist seed")
 
         paper = not isinstance(broker, DryRunBroker)
         if paper:
@@ -190,7 +203,7 @@ def run(
                 state = risk_state(state, snapshot)
             with pool().connection() as conn:
                 already = repo.trades_today(conn, pid)
-                history = repo.recent_decisions(conn, ticker, DECISION_HISTORY)
+                history = repo.recent_decisions(conn, pid, ticker, DECISION_HISTORY)
             if unpriced:
                 # Refuse rather than proceed: an unvalued holding understates
                 # exposure, which would let the engine approve a buy it should
@@ -220,6 +233,7 @@ def run(
             with pool().connection() as conn:
                 decision_id = repo.save_decision(
                     conn,
+                    pid,
                     run_id,
                     rec,
                     verdict,

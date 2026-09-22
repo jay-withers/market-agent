@@ -7,18 +7,19 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from ... import queries
-from ..deps import connection
+from ..deps import Account, connection
 
 router = APIRouter(prefix="/api", tags=["decisions"])
 
 
 @router.get("/decisions")
 def list_decisions(
+    account: Account,
     limit: int = Query(default=50, ge=1, le=500),
     ticker: str | None = Query(default=None, max_length=10),
     conn: Any = Depends(connection),
 ) -> list[dict[str, Any]]:
-    return queries.decisions(conn, limit=limit, ticker=ticker)
+    return queries.decisions(conn, account, limit=limit, ticker=ticker)
 
 
 @router.get("/decisions/{decision_id}")

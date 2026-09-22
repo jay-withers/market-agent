@@ -111,12 +111,14 @@ header.masthead {
   gap: 6px;
 }
 
-.currency-toggle {
+.currency-toggle,
+.account-toggle {
   display: flex;
   gap: 4px;
 }
 
-.currency-toggle .current {
+.currency-toggle .current,
+.account-toggle .current {
   border-color: var(--series-1);
   color: var(--series-1);
 }

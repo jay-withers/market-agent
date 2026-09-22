@@ -1,4 +1,4 @@
--- Seeds the watchlist and the single portfolio row.
+-- Seeds ten reference tickers into companies.
 --
 -- Data rather than schema, but it lives here for the same reason the grants do:
 -- it has to exist before the agent can run, and ai_decisions.ticker has a
@@ -12,6 +12,12 @@
 -- The ten names are large, liquid, heavily covered US listings — chosen so the
 -- news feed actually has something to say about them most days, which is what
 -- the experiment needs to test. Not a considered portfolio, and cheap to change.
+--
+-- No longer seeds a portfolio row: 009-two-accounts.sql replaced the single
+-- 'default' portfolio with 'static-100'/'dynamic-500', and neither trades
+-- these ten names (see 010-seed-sp100-static.sql for static-100's actual
+-- watchlist). These rows exist purely as harmless companies reference data
+-- now — nothing marks them active on either account's watchlist.
 
 INSERT INTO companies (ticker, name, exchange, sector) VALUES
   ('NVDA',  'NVIDIA Corporation',          'NASDAQ', 'Technology'),
@@ -29,18 +35,9 @@ ON CONFLICT (ticker) DO UPDATE
       exchange = EXCLUDED.exchange,
       sector = EXCLUDED.sector;
 
--- The notional GBP 500 the whole experiment is about. initial_cash_gbp is never
--- updated, so total return stays computable after any number of trades; only
--- cash_gbp moves. DO NOTHING rather than DO UPDATE: re-running this file must
--- not reset a portfolio that has been trading.
-INSERT INTO portfolio (name, base_currency, initial_cash_gbp, cash_gbp)
-VALUES ('default', 'GBP', 500.0000, 500.0000)
-ON CONFLICT (name) DO NOTHING;
-
 INSERT INTO schema_migrations (filename) VALUES ('003-seed-watchlist.sql')
 ON CONFLICT (filename) DO NOTHING;
 
-\echo '==> watchlist and portfolio:'
-SELECT (SELECT count(*) FROM companies WHERE is_active) AS active_tickers,
-       (SELECT count(*) FROM portfolio) AS portfolios,
-       (SELECT cash_gbp FROM portfolio WHERE name = 'default') AS cash_gbp;
+\echo '==> reference tickers seeded:'
+SELECT count(*) AS companies FROM companies
+WHERE ticker IN ('NVDA','AAPL','MSFT','GOOGL','AMZN','META','TSLA','AMD','AVGO','JPM');

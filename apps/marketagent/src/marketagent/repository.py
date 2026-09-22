@@ -23,32 +23,101 @@ from .marketdata import Bar
 from .models import PortfolioState, Position, Recommendation, RiskVerdict, money
 from .news import Article
 
-DEFAULT_PORTFOLIO = "default"
-
-
 # ---------------------------------------------------------------------------
 # Reads
 # ---------------------------------------------------------------------------
 
 
-def active_tickers(conn: Any) -> list[str]:
-    """The watchlist the agent analyses and may trade.
+def active_tickers(conn: Any, pid: int) -> list[str]:
+    """The watchlist this account analyses and may trade.
 
-    Benchmarks are excluded explicitly as well as by `is_active`. They exist in
+    Scoped by `portfolio_watchlist` rather than `companies.is_active`: two
+    accounts trade different, only partially overlapping universes, so which
+    tickers are tradeable is a per-portfolio fact, not a global one. Benchmarks
+    are excluded via `companies.is_benchmark` regardless — they exist in
     `companies` only so `prices.ticker` has something to reference, and
     analysing SPY as though it were a stock pick would waste a model call at
     best and place a trade at worst.
     """
     rows = conn.execute(
-        "SELECT ticker FROM companies WHERE is_active AND NOT is_benchmark ORDER BY ticker"
+        "SELECT w.ticker FROM portfolio_watchlist w JOIN companies c ON c.ticker = w.ticker"
+        " WHERE w.portfolio_id = %s AND w.is_active AND NOT c.is_benchmark ORDER BY w.ticker",
+        (pid,),
     ).fetchall()
     return [r[0] for r in rows]
 
 
-def portfolio_id(conn: Any, name: str = DEFAULT_PORTFOLIO) -> int:
+def watchlist_tickers(conn: Any, pid: int) -> set[str]:
+    """Every ticker currently active on this account's watchlist.
+
+    Used by the rebalance job to diff against a freshly fetched index list —
+    `active_tickers` also excludes benchmarks, which is irrelevant here since
+    a benchmark is never inserted into `portfolio_watchlist` in the first
+    place, but this stays separate so a caller does not have to reason about
+    that to trust the result.
+    """
+    rows = conn.execute(
+        "SELECT ticker FROM portfolio_watchlist WHERE portfolio_id = %s AND is_active",
+        (pid,),
+    ).fetchall()
+    return {r[0] for r in rows}
+
+
+def add_to_watchlist(conn: Any, pid: int, tickers: list[tuple[str, str, str | None]]) -> None:
+    """Add or re-activate tickers on an account's watchlist.
+
+    `tickers` is `(ticker, name, sector)`. `companies` is upserted first since
+    `portfolio_watchlist.ticker` references it — a name the rebalance job has
+    never seen before must exist as reference data before it can be added to
+    anyone's watchlist. Re-activating a previously dropped ticker (one back in
+    the index after falling out) clears `removed_at` rather than leaving a
+    stale value, since it is active again.
+    """
+    if not tickers:
+        return
+    with conn.cursor() as cur:
+        cur.executemany(
+            "INSERT INTO companies (ticker, name, sector) VALUES (%s, %s, %s)"
+            " ON CONFLICT (ticker) DO UPDATE SET name = EXCLUDED.name, sector = EXCLUDED.sector",
+            tickers,
+        )
+        cur.executemany(
+            "INSERT INTO portfolio_watchlist (portfolio_id, ticker, is_active, source)"
+            " VALUES (%s, %s, true, 'sp500_index')"
+            " ON CONFLICT (portfolio_id, ticker) DO UPDATE SET"
+            "   is_active = true, source = 'sp500_index', removed_at = NULL",
+            [(pid, t[0]) for t in tickers],
+        )
+
+
+def remove_from_watchlist(conn: Any, pid: int, tickers: list[str]) -> None:
+    """Drop tickers from an account's watchlist without touching any position.
+
+    `is_active = false` only — never a row delete and never a change to
+    `positions`/`trades`/`ai_decisions`. A ticker that falls out of the index
+    simply stops being analysed and traded from its next run onward; any
+    existing holding stays tracked and valued exactly as a manually-held
+    ticker already is, sellable only by a human going directly through
+    Alpaca. The rebalance job never auto-sells.
+    """
+    if not tickers:
+        return
+    conn.execute(
+        "UPDATE portfolio_watchlist SET is_active = false, removed_at = now()"
+        " WHERE portfolio_id = %s AND ticker = ANY(%s)",
+        (pid, tickers),
+    )
+
+
+def portfolio_id(conn: Any, name: str) -> int:
+    """Look up the id of one of the two accounts ('static-100'/'dynamic-500').
+
+    No default: every caller must say which account it means, so a forgotten
+    argument fails loudly instead of silently picking one.
+    """
     row = conn.execute("SELECT id FROM portfolio WHERE name = %s", (name,)).fetchone()
     if row is None:
-        raise LookupError(f"portfolio '{name}' does not exist — run sql/003-seed-watchlist.sql")
+        raise LookupError(f"portfolio '{name}' does not exist — run sql/009-two-accounts.sql")
     return int(row[0])
 
 
@@ -91,18 +160,23 @@ def trades_today(conn: Any, pid: int) -> int:
     return int(row[0])
 
 
-def recent_decisions(conn: Any, ticker: str, limit: int) -> list[dict[str, Any]]:
+def recent_decisions(conn: Any, pid: int, ticker: str, limit: int) -> list[dict[str, Any]]:
     """The agent's own recent decisions on one ticker, for the analysis prompt.
 
     Without this the model re-argues the same thesis every morning: nothing in
     the prompt otherwise tells it that it recommended the same BUY four days
     running, or that the engine clamped every one of them to the same cap.
 
+    Filtered by `pid`: with two accounts able to hold decisions on the same
+    ticker (the two watchlists overlap heavily), an unfiltered query would leak
+    one account's decision history into the other's prompt.
+
     The verdict and the resulting trade's status both come along, because
     "approved" and "filled" are different facts — a scheduled run submits
     before the market opens, so its orders rest for hours.
 
-    `ai_decisions_ticker_idx` on (ticker, decided_at DESC) covers the ordering.
+    `ai_decisions_portfolio_ticker_idx` on (portfolio_id, ticker, decided_at
+    DESC) covers the ordering.
     """
     with conn.cursor(row_factory=dict_row) as cur:
         return cur.execute(
@@ -119,33 +193,48 @@ def recent_decisions(conn: Any, ticker: str, limit: int) -> list[dict[str, Any]]
             "   SELECT status FROM trades WHERE decision_id = d.id"
             "   ORDER BY created_at DESC LIMIT 1"
             " ) t ON true"
-            " WHERE d.ticker = %s ORDER BY d.decided_at DESC LIMIT %s",
-            (ticker, limit),
+            " WHERE d.portfolio_id = %s AND d.ticker = %s"
+            " ORDER BY d.decided_at DESC LIMIT %s",
+            (pid, ticker, limit),
         ).fetchall()
 
 
-def spend(conn: Any, as_of: date) -> dict[str, Any]:
-    """What the experiment has spent with the model, from every job that spends.
+def spend(conn: Any, as_of: date, pid: int | None = None) -> dict[str, Any]:
+    """What has been spent with the model, from every job that spends.
 
     Three tables because three jobs call the API — the agent per run, the
     summary and the weekly review once each. Summing only `agent_runs` would
     read low by a call a day and a call a week, and the gap grows for as long
     as the experiment runs.
 
+    `pid` scopes the total to one account's `agent_runs` spend only. With
+    `pid=None`, the total additionally folds in `daily_summaries`/
+    `weekly_reviews` cost, which is never split by account — those two jobs
+    are combined across both portfolios (see jobs/summary.py, jobs/weekly.py),
+    so their spend isn't attributable to one account. The two accounts share
+    one Anthropic API key and one credit balance, so the runway figure the
+    summary email shows is computed once from the `pid=None` total, not twice.
+
     A row with a NULL cost is one written before the column existed, or a run
     that failed before its first call. Excluded rather than counted as zero:
     the totals are what is *known* to have been spent, and `known_from` says
     since when, so an incomplete history reads as incomplete.
     """
+    agent_filter = "AND portfolio_id = %(pid)s" if pid is not None else ""
+    job_totals = (
+        "   UNION ALL"
+        "   SELECT as_of, cost_usd FROM daily_summaries WHERE cost_usd IS NOT NULL"
+        "   UNION ALL"
+        "   SELECT period_end, cost_usd FROM weekly_reviews WHERE cost_usd IS NOT NULL"
+        if pid is None
+        else ""
+    )
     with conn.cursor(row_factory=dict_row) as cur:
         return cur.execute(
             "WITH all_spend AS ("
             "   SELECT started_at::date AS on_date, cost_usd FROM agent_runs"
-            "     WHERE cost_usd IS NOT NULL"
-            "   UNION ALL"
-            "   SELECT as_of, cost_usd FROM daily_summaries WHERE cost_usd IS NOT NULL"
-            "   UNION ALL"
-            "   SELECT period_end, cost_usd FROM weekly_reviews WHERE cost_usd IS NOT NULL"
+            f"     WHERE cost_usd IS NOT NULL {agent_filter}"
+            f"   {job_totals}"
             " )"
             " SELECT"
             "   coalesce(sum(cost_usd) FILTER (WHERE on_date = %(as_of)s), 0) AS today_usd,"
@@ -154,7 +243,7 @@ def spend(conn: Any, as_of: date) -> dict[str, Any]:
             "   coalesce(sum(cost_usd), 0) AS to_date_usd,"
             "   min(on_date) AS known_from"
             " FROM all_spend",
-            {"as_of": as_of},
+            {"as_of": as_of, "pid": pid},
         ).fetchone()
 
 
@@ -276,11 +365,12 @@ def save_news_analysis(conn: Any, rows: list[dict[str, Any]]) -> int:
 JOB_TIMEOUT_SECONDS = 1800
 
 
-def open_run(conn: Any, trigger: str, dry_run: bool, image_tag: str | None) -> int:
+def open_run(conn: Any, pid: int, trigger: str, dry_run: bool, image_tag: str | None) -> int:
     """Open an `agent_runs` row before any work, so a crash leaves evidence."""
     row = conn.execute(
-        "INSERT INTO agent_runs (trigger, dry_run, image_tag) VALUES (%s, %s, %s) RETURNING id",
-        (trigger, dry_run, image_tag),
+        "INSERT INTO agent_runs (portfolio_id, trigger, dry_run, image_tag)"
+        " VALUES (%s, %s, %s, %s) RETURNING id",
+        (pid, trigger, dry_run, image_tag),
     ).fetchone()
     return int(row[0])
 
@@ -319,6 +409,7 @@ def close_run(
 
 def save_decision(
     conn: Any,
+    pid: int,
     run_id: int,
     rec: Recommendation,
     verdict: RiskVerdict,
@@ -338,12 +429,14 @@ def save_decision(
     prompt would contain an input no stored column records.
     """
     row = conn.execute(
-        "INSERT INTO ai_decisions (run_id, ticker, action, confidence, reasoning, risks,"
-        "   model, prompt_version, news_ids, recommended_amount_usd, approved_amount_usd,"
-        "   portfolio_state, risk_verdict, prompt_context, input_tokens, output_tokens)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+        "INSERT INTO ai_decisions (portfolio_id, run_id, ticker, action, confidence, reasoning,"
+        "   risks, model, prompt_version, news_ids, recommended_amount_usd,"
+        "   approved_amount_usd, portfolio_state, risk_verdict, prompt_context,"
+        "   input_tokens, output_tokens)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
         " RETURNING id",
         (
+            pid,
             run_id,
             rec.ticker,
             rec.action,
@@ -511,16 +604,24 @@ def save_daily_performance(
     )
 
 
-def save_benchmarks(conn: Any, points: list[Any]) -> int:
+def save_benchmarks(conn: Any, pid: int, points: list[Any]) -> int:
+    """Upsert benchmark points for one account.
+
+    Keyed `(portfolio_id, symbol, as_of)`: `close_usd` (the raw market price)
+    ends up harmlessly duplicated across both accounts' rows for the same
+    symbol/day, but `value_usd` ("what this account's notional would be worth")
+    is portfolio-dependent and would otherwise collide between the two
+    accounts under the old `(symbol, as_of)` key.
+    """
     if not points:
         return 0
     with conn.cursor() as cur:
         cur.executemany(
-            "INSERT INTO benchmarks (symbol,as_of,close_usd,value_usd,source) "
-            "VALUES (%s,%s,%s,%s,%s)"
-            " ON CONFLICT (symbol,as_of) DO UPDATE SET close_usd=EXCLUDED.close_usd,"
-            "value_usd=EXCLUDED.value_usd,fetched_at=now()",
-            [(p.symbol, p.as_of, p.close_usd, p.value_usd, p.source) for p in points],
+            "INSERT INTO benchmarks (portfolio_id,symbol,as_of,close_usd,value_usd,source) "
+            "VALUES (%s,%s,%s,%s,%s,%s)"
+            " ON CONFLICT (portfolio_id,symbol,as_of) DO UPDATE SET"
+            " close_usd=EXCLUDED.close_usd,value_usd=EXCLUDED.value_usd,fetched_at=now()",
+            [(pid, p.symbol, p.as_of, p.close_usd, p.value_usd, p.source) for p in points],
         )
     return len(points)
 
@@ -537,15 +638,15 @@ def day_activity(conn: Any, pid: int, as_of: date) -> dict[str, Any]:
         "SELECT started_at, finished_at, status, trigger, dry_run, error,"
         "       (status = 'running'"
         "        AND started_at < now() - make_interval(secs => %s)) AS stale"
-        " FROM agent_runs WHERE started_at::date = %s ORDER BY started_at",
-        (JOB_TIMEOUT_SECONDS, as_of),
+        " FROM agent_runs WHERE portfolio_id = %s AND started_at::date = %s ORDER BY started_at",
+        (JOB_TIMEOUT_SECONDS, pid, as_of),
     ).fetchall()
 
     decisions = conn.execute(
         "SELECT ticker, action, confidence, approved_amount_usd, reasoning,"
         "       risk_verdict->>'binding_constraint'"
-        " FROM ai_decisions WHERE decided_at::date = %s ORDER BY ticker",
-        (as_of,),
+        " FROM ai_decisions WHERE portfolio_id = %s AND decided_at::date = %s ORDER BY ticker",
+        (pid, as_of),
     ).fetchall()
 
     trades = conn.execute(
@@ -670,14 +771,16 @@ def week_metrics(conn: Any, pid: int, start: date, end: date) -> dict[str, Any]:
         # mixed token total at either rate is simply wrong.
         "       coalesce(sum(cost_usd), 0) AS cost_usd,"
         "       avg(extract(epoch FROM finished_at - started_at)) AS avg_seconds"
-        " FROM agent_runs WHERE started_at::date BETWEEN %(start)s AND %(end)s"
+        " FROM agent_runs WHERE portfolio_id = %(pid)s"
+        "   AND started_at::date BETWEEN %(start)s AND %(end)s"
     )
 
     decisions = rows(
         "SELECT action, count(*) AS decisions,"
         "       avg(confidence) AS avg_confidence,"
         "       count(*) FILTER (WHERE (risk_verdict->>'approved')::boolean) AS approved"
-        " FROM ai_decisions WHERE decided_at::date BETWEEN %(start)s AND %(end)s"
+        " FROM ai_decisions WHERE portfolio_id = %(pid)s"
+        "   AND decided_at::date BETWEEN %(start)s AND %(end)s"
         " GROUP BY action ORDER BY action"
     )
 
@@ -690,7 +793,8 @@ def week_metrics(conn: Any, pid: int, start: date, end: date) -> dict[str, Any]:
         "SELECT risk_verdict->>'binding_constraint' AS binding,"
         "       (risk_verdict->>'approved')::boolean AS approved,"
         "       count(*) AS decisions"
-        " FROM ai_decisions WHERE decided_at::date BETWEEN %(start)s AND %(end)s"
+        " FROM ai_decisions WHERE portfolio_id = %(pid)s"
+        "   AND decided_at::date BETWEEN %(start)s AND %(end)s"
         " GROUP BY binding, approved ORDER BY decisions DESC, binding"
     )
 
@@ -703,23 +807,28 @@ def week_metrics(conn: Any, pid: int, start: date, end: date) -> dict[str, Any]:
         " GROUP BY status ORDER BY status"
     )
 
-    # Per watchlist name, from `companies` rather than from the decisions: a
-    # ticker the agent never reached is exactly the row worth seeing, and a join
-    # driven by `ai_decisions` would omit it. Scalar subqueries because the
-    # counts come from three different tables and the watchlist is ten rows.
+    # Per watchlist name, from `portfolio_watchlist` rather than from the
+    # decisions: a ticker the agent never reached is exactly the row worth
+    # seeing, and a join driven by `ai_decisions` would omit it. Scoped to this
+    # account's watchlist, not the global `companies` table, for the same
+    # reason `active_tickers` is: two accounts trade different universes.
+    # Scalar subqueries because the counts come from three different tables.
     tickers = rows(
-        "SELECT c.ticker,"
-        "       (SELECT count(*) FROM ai_decisions d WHERE d.ticker = c.ticker"
+        "SELECT w.ticker,"
+        "       (SELECT count(*) FROM ai_decisions d WHERE d.ticker = w.ticker"
+        "          AND d.portfolio_id = %(pid)s"
         "          AND d.decided_at::date BETWEEN %(start)s AND %(end)s) AS decisions,"
-        "       (SELECT count(*) FROM ai_decisions d WHERE d.ticker = c.ticker"
-        "          AND d.action <> 'HOLD'"
+        "       (SELECT count(*) FROM ai_decisions d WHERE d.ticker = w.ticker"
+        "          AND d.portfolio_id = %(pid)s AND d.action <> 'HOLD'"
         "          AND d.decided_at::date BETWEEN %(start)s AND %(end)s) AS convictions,"
-        "       (SELECT count(*) FROM news_analysis a WHERE a.ticker = c.ticker AND a.relevant"
+        "       (SELECT count(*) FROM news_analysis a WHERE a.ticker = w.ticker AND a.relevant"
         "          AND a.analysed_at::date BETWEEN %(start)s AND %(end)s) AS relevant_news,"
-        "       (SELECT count(*) FROM trades t WHERE t.ticker = c.ticker"
+        "       (SELECT count(*) FROM trades t WHERE t.ticker = w.ticker"
         "          AND t.portfolio_id = %(pid)s"
         "          AND t.created_at::date BETWEEN %(start)s AND %(end)s) AS trades"
-        " FROM companies c WHERE c.is_active AND NOT c.is_benchmark ORDER BY c.ticker"
+        " FROM portfolio_watchlist w JOIN companies c ON c.ticker = w.ticker"
+        " WHERE w.portfolio_id = %(pid)s AND w.is_active AND NOT c.is_benchmark"
+        " ORDER BY w.ticker"
     )
 
     valuation = one(
@@ -742,11 +851,14 @@ def week_metrics(conn: Any, pid: int, start: date, end: date) -> dict[str, Any]:
     # different and wrong claim from "we have no data".
     benchmarks = rows(
         "SELECT b.symbol,"
-        "       (SELECT value_usd FROM benchmarks n WHERE n.symbol = b.symbol"
+        "       (SELECT value_usd FROM benchmarks n WHERE n.portfolio_id = %(pid)s"
+        "          AND n.symbol = b.symbol"
         "          AND n.as_of <= %(end)s ORDER BY n.as_of DESC LIMIT 1) AS value_usd,"
-        "       (SELECT value_usd FROM benchmarks o WHERE o.symbol = b.symbol"
+        "       (SELECT value_usd FROM benchmarks o WHERE o.portfolio_id = %(pid)s"
+        "          AND o.symbol = b.symbol"
         "          AND o.as_of < %(start)s ORDER BY o.as_of DESC LIMIT 1) AS opening_usd"
-        " FROM benchmarks b WHERE b.as_of BETWEEN %(start)s AND %(end)s"
+        " FROM benchmarks b WHERE b.portfolio_id = %(pid)s"
+        "   AND b.as_of BETWEEN %(start)s AND %(end)s"
         " GROUP BY b.symbol ORDER BY b.symbol"
     )
 

@@ -42,8 +42,10 @@ from marketagent.news import Article
 
 D = Decimal
 
-# Seeded by sql/003-seed-watchlist.sql, same tickers test_repository.py uses.
+# One of the S&P 100 names sql/010-seed-sp100-static.sql puts on static-100's
+# watchlist — this file exercises the loop against that account throughout.
 TICKER = "NVDA"
+PORTFOLIO = "static-100"
 RATE = FxRate(gbp_usd=D("1.3400"), as_of=date(2026, 9, 14))
 BAR_DATE = date(2026, 9, 14)
 
@@ -171,7 +173,7 @@ def _patch_market_data(monkeypatch, agent_dsn):
 
 def _portfolio_cash(dsn: str) -> Decimal:
     with psycopg.connect(dsn) as conn:
-        return repo.load_cash(conn, repo.portfolio_id(conn))
+        return repo.load_cash(conn, repo.portfolio_id(conn, PORTFOLIO))
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +185,7 @@ def test_a_buy_is_analysed_approved_and_filled(agent_dsn, monkeypatch):
     monkeypatch.setenv("DRY_RUN", "true")
     llm = _FakeLlm(TICKER, action="BUY", amount_usd=40.0)
 
-    run_id = agent.run(trigger="manual", llm=llm, broker=DryRunBroker())
+    run_id = agent.run(portfolio=PORTFOLIO, trigger="manual", llm=llm, broker=DryRunBroker())
 
     # Only the ticker with relevant news was ever sent to the expensive model —
     # the other nine seeded tickers must never reach it.
@@ -223,10 +225,11 @@ def test_a_buy_is_analysed_approved_and_filled(agent_dsn, monkeypatch):
 def test_a_decision_is_persisted_with_the_history_it_was_shown(agent_dsn):
     """The point of `prompt_context`: a decision has to carry what the model
     was shown, not just what it answered."""
-    agent.run(llm=_FakeLlm(TICKER), broker=DryRunBroker())
+    agent.run(portfolio=PORTFOLIO, llm=_FakeLlm(TICKER), broker=DryRunBroker())
 
     with psycopg.connect(agent_dsn) as conn:
-        history = repo.recent_decisions(conn, TICKER, limit=5)
+        pid = repo.portfolio_id(conn, PORTFOLIO)
+        history = repo.recent_decisions(conn, pid, TICKER, limit=5)
 
     assert history[0]["action"] == "BUY"
     assert history[0]["binding_constraint"] == "recommended_amount"
@@ -238,7 +241,9 @@ def test_a_decision_is_persisted_with_the_history_it_was_shown(agent_dsn):
 
 
 def test_a_hold_is_persisted_with_no_trade_and_cash_untouched(agent_dsn):
-    run_id = agent.run(llm=_FakeLlm(TICKER, action="HOLD"), broker=DryRunBroker())
+    run_id = agent.run(
+        portfolio=PORTFOLIO, llm=_FakeLlm(TICKER, action="HOLD"), broker=DryRunBroker()
+    )
 
     with psycopg.connect(agent_dsn) as conn:
         decision = conn.execute(
@@ -269,7 +274,7 @@ def test_crossing_the_budget_ceiling_fails_the_run_with_evidence(agent_dsn, monk
     monkeypatch.setenv("MAX_RUN_COST_USD", "0.0000001")
 
     with pytest.raises(BudgetExceeded):
-        agent.run(llm=_FakeLlm(TICKER), broker=DryRunBroker())
+        agent.run(portfolio=PORTFOLIO, llm=_FakeLlm(TICKER), broker=DryRunBroker())
 
     with psycopg.connect(agent_dsn) as conn:
         run_row = conn.execute(
@@ -310,8 +315,8 @@ def test_paper_fills_are_mirrored_without_applying_cash_twice(agent_dsn):
                 filled_avg_price_usd=D(100),
             )
 
-    agent.run(llm=_FakeLlm(TICKER, amount_usd=40), broker=PaperBroker())
+    agent.run(portfolio=PORTFOLIO, llm=_FakeLlm(TICKER, amount_usd=40), broker=PaperBroker())
     with psycopg.connect(agent_dsn) as conn:
-        assert repo.load_cash(conn, repo.portfolio_id(conn)) == D(99960)
+        assert repo.load_cash(conn, repo.portfolio_id(conn, PORTFOLIO)) == D(99960)
         assert conn.execute("SELECT count(*) FROM positions").fetchone()[0] == 1
         assert conn.execute("SELECT notional_usd FROM trades").fetchone()[0] == D(40)
