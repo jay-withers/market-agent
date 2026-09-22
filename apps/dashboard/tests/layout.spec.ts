@@ -16,7 +16,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { ROUTES } from "./fixtures";
 
-const TABS = ["/", "/holdings", "/activity", "/review", "/compare"] as const;
+const TABS = ["/", "/holdings", "/watchlist", "/activity", "/review", "/compare"] as const;
 
 // 360 is the narrowest mainstream Android; 390 an iPhone; 768 a tablet, where
 // a two-column grid first appears and is the likeliest place for a row to
@@ -175,12 +175,28 @@ test.describe("the holdings panels", () => {
   });
 });
 
+test.describe("the watchlist table", () => {
+  test.use({ viewport: { width: 1280, height: 900 } });
+
+  test("lists every watchlist name, with a dash for a missing sector", async ({ page }) => {
+    await stubApi(page);
+    await page.goto("/watchlist");
+
+    await expect(page.locator("table tbody tr")).toHaveCount(4);
+    // SMCI's fixture sector is null — an empty cell would be indistinguishable
+    // from a loading state, so it must render the dash explicitly.
+    const smciRow = page.locator("table tbody tr", { hasText: "SMCI" });
+    await expect(smciRow).toContainText("—");
+  });
+});
+
 test.describe("navigation", () => {
   test("each tab is reachable by URL and marks itself current", async ({ page }) => {
     await stubApi(page);
     for (const [path, label] of [
       ["/", "Overview"],
       ["/holdings", "Holdings"],
+      ["/watchlist", "Watchlist"],
       ["/activity", "Activity"],
       ["/review", "Review"],
       ["/compare", "Compare"],

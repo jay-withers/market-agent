@@ -114,7 +114,7 @@ resource "azurerm_container_app_job" "agent100" {
 
 # Same as agent100, but for dynamic-500 — the S&P 500 watchlist the rebalance
 # job keeps in sync. Staggered ten minutes after agent100's schedule, not
-# simultaneous, so the two do not both hit the Anthropic API at the same
+# simultaneous, so the two do not both hit the DeepSeek API at the same
 # instant. 3 hours is the roughest estimate in this file: a purely sequential
 # loop (see MarketAgent's own docs on why concurrency is explicitly out of
 # scope) over up to 500 tickers is the part of this deployment most likely to
@@ -417,7 +417,7 @@ module "naming_rebalance" {
 # Keeps dynamic-500's watchlist in sync with real S&P 500 membership. Monthly,
 # not daily — see jobs/rebalance.py — and scheduled well before agent500's
 # daily run so a membership change lands before that day's analysis, not after
-# it. Calls no Alpaca or Anthropic API, only Wikipedia, so the timeout is short
+# it. Calls no Alpaca or DeepSeek API, only Wikipedia, so the timeout is short
 # and DRY_RUN/ALPACA_TRADING_BASE_URL are irrelevant here.
 resource "azurerm_container_app_job" "rebalance" {
   name                         = module.naming_rebalance.container_app_job.name

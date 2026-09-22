@@ -11,15 +11,16 @@
     Secrets are read from a masked prompt, held only as a SecureString until the
     moment they are passed to `az`, and never written to disk, logged, echoed,
     or placed in shell history. Press Enter at a prompt to skip one — they are
-    needed at different points (Anthropic and the four Alpaca keys — one
+    needed at different points (DeepSeek and the four Alpaca keys — one
     credential pair per paper account, static-100 and dynamic-500 — for the
     agent, Resend only for the daily summary), so there is no need to have them
     all to hand.
 
-    Not everything here is a secret. ANTHROPIC-CREDIT-USD is the API credit the
-    experiment started with, in dollars — Anthropic publishes no balance
-    endpoint, so the daily summary's runway figure can only be that number minus
-    the spend the database recorded. SUMMARY-EMAIL-TO is the daily summary's
+    Not everything here is a secret. There is no equivalent of a starting-credit
+    figure to type in: unlike Anthropic, DeepSeek reports the account's balance
+    directly (`GET /user/balance`), so the daily summary's runway is read live
+    from the account rather than kept as a number here that could drift out of
+    date. SUMMARY-EMAIL-TO is the daily summary's
     recipient, and it lives in Key Vault for a different reason: this repository
     is public and so are terraform/environments/*.tfvars, so an address in
     either would be committed permanently. Reading it at runtime also means
@@ -66,7 +67,7 @@
     Officer` on the vault — which whoever ran `terraform apply` already has.
 
 .PARAMETER Name
-    Which values to prompt for. Defaults to all ten the application uses.
+    Which values to prompt for. Defaults to all nine the application uses.
 
 .PARAMETER Force
     Overwrite an existing secret without asking.
@@ -74,10 +75,10 @@
 .EXAMPLE
     ./scripts/Set-KeyVaultSecrets.ps1
 
-    Prompts for each of the ten, skipping any that already exist.
+    Prompts for each of the nine, skipping any that already exist.
 
 .EXAMPLE
-    ./scripts/Set-KeyVaultSecrets.ps1 -Name ANTHROPIC-API-KEY -Force
+    ./scripts/Set-KeyVaultSecrets.ps1 -Name DEEPSEEK-API-KEY -Force
 
     Rotates one secret.
 
@@ -115,14 +116,13 @@ param(
     # settings.secret() asks for; it maps each to the underscored, uppercased
     # environment variable it prefers over the vault.
     [string[]]$Name = @(
-        'ANTHROPIC-API-KEY'
+        'DEEPSEEK-API-KEY'
         'ALPACA-API-KEY-STATIC100'
         'ALPACA-SECRET-KEY-STATIC100'
         'ALPACA-API-KEY-DYNAMIC500'
         'ALPACA-SECRET-KEY-DYNAMIC500'
         'RESEND-API-KEY'
         'SUMMARY-EMAIL-TO'
-        'ANTHROPIC-CREDIT-USD'
         'DASHBOARD-PASSCODE'
         'API-BEARER-TOKEN'
     ),
@@ -182,19 +182,18 @@ Write-Host "==> $VaultName holds $($present.Count) secret(s)"
 
 # Advisory only. A mistyped or half-pasted key is a class of error that
 # otherwise surfaces as a 401 inside a container at 06:00 UTC, and a warning
-# costs nothing. Deliberately not a rejection: these prefixes are Anthropic's
+# costs nothing. Deliberately not a rejection: these prefixes are DeepSeek's
 # and Alpaca's to change, not ours to enforce.
 $expectedPrefixes = @{
-    'ANTHROPIC-API-KEY'         = 'sk-ant-'
+    'DEEPSEEK-API-KEY'          = 'sk-'
     'ALPACA-API-KEY-STATIC100'  = 'PK'
     'ALPACA-API-KEY-DYNAMIC500' = 'PK'
 }
 
-# Prompted in the clear, and echoed back on success. These are configuration
-# that happens to live in Key Vault rather than credentials, and hiding them
-# only hides mistakes: a mistyped API key fails loudly on first use, whereas a
-# mistyped email address silently delivers nowhere.
-$plainText = @('SUMMARY-EMAIL-TO', 'ANTHROPIC-CREDIT-USD')
+# Prompted in the clear, and echoed back on success. This is configuration
+# that happens to live in Key Vault rather than a credential, and hiding it
+# only hides mistakes: a mistyped email address silently delivers nowhere.
+$plainText = @('SUMMARY-EMAIL-TO')
 
 # Offered as a generated value rather than prompted for blind. A passcode
 # nobody chose is a passcode nobody reuses from somewhere else, and there is
@@ -309,18 +308,6 @@ foreach ($secretName in $Name) {
             Write-Warning "$secretName does not look like an email address: $($bad -join ', ')"
         }
         Write-Host "    note: Resend's shared sender only delivers to the address that owns the Resend account, until a domain is verified."
-    }
-
-    # Advisory too. The summary parses this with Decimal() and ignores a value
-    # it cannot read, so a typo costs the runway line rather than the email —
-    # but it does so silently a day later, which is worth a warning now. A bare
-    # number: a currency symbol or thousands separator is what a paste from a
-    # billing page carries.
-    if ($secretName -eq 'ANTHROPIC-CREDIT-USD') {
-        if ($value -notmatch '^[0-9]+(\.[0-9]+)?$') {
-            Write-Warning "$secretName should be a plain number of US dollars, e.g. 25 or 25.00 — '$value' will be ignored by the summary if it cannot be parsed."
-        }
-        Write-Host "    note: this is the credit you started with, not a live balance — Anthropic publishes no balance endpoint, so the summary subtracts its own recorded spend from it."
     }
 
     # Advisory. This value lands inside a JSON string literal in the

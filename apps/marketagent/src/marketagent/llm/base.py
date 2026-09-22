@@ -21,25 +21,33 @@ from ..models import DailyNarrative, NewsRelevance, Recommendation, WeeklyReview
 # instead of destroying the record of what the old prompt concluded.
 PROMPT_VERSION = "v4"
 
-# US dollars per million tokens, as published 2026-06-24. A snapshot, not a
-# live lookup: it only feeds the cost figure recorded on each `agent_runs` row,
-# so being a few percent stale is harmless, whereas a network call on the hot
-# path is not. Re-check at anthropic.com/pricing.
-PRICES_USD_PER_MTOK: dict[str, tuple[Decimal, Decimal]] = {
-    # model: (input, output)
-    "claude-sonnet-5": (Decimal("2.00"), Decimal("10.00")),
-    "claude-haiku-4-5": (Decimal("1.00"), Decimal("5.00")),
-    "claude-opus-5": (Decimal("5.00"), Decimal("25.00")),
+# US dollars per million tokens, as published on DeepSeek's pricing page.
+# A snapshot, not a live lookup — it only feeds the cost figure recorded on
+# each `agent_runs` row, so being a few percent stale is harmless, whereas a
+# network call on the hot path is not. Re-check at api-docs.deepseek.com.
+#
+# Three rates, not two: DeepSeek prices cache-hit and cache-miss input
+# tokens separately (not one input rate plus a multiplier, which is how
+# Anthropic's pricing worked and how this table used to be shaped), and it
+# has no separate charge for *writing* to the cache at all — caching is
+# automatic and only ever shows up as a cheaper rate on a later hit.
+#
+# DeepSeek also prices by time of day — off-peak (00:30-08:30 UTC) runs at
+# roughly half these rates. The figures here are the *peak* rate, used
+# unconditionally rather than modelling the peak/off-peak schedule (which
+# also carves out Chinese public holidays, not worth tracking for a cost
+# estimate). That makes this a deliberate upper bound, not a precise one —
+# consistent with MAX_RUN_COST_USD existing to catch a runaway, not to
+# meter ordinary spending to the cent — and it happens to be exactly right
+# for the two scheduled agent runs, which both land at 06:00-06:10 UTC,
+# inside the peak window.
+PRICES_USD_PER_MTOK: dict[str, tuple[Decimal, Decimal, Decimal]] = {
+    # model: (input_cache_miss, input_cache_hit, output)
+    "deepseek-flash": (Decimal("0.30"), Decimal("0.006"), Decimal("1.20")),
+    "deepseek-v4-pro": (Decimal("1.32"), Decimal("0.044"), Decimal("3.96")),
 }
 
 MILLION = Decimal(1_000_000)
-
-# Multipliers on the input rate. Nothing here enables caching yet — one run a
-# day shares no prefix with the previous one — but `usage` reports the fields
-# regardless, and a cost that silently ignored them would be wrong the moment
-# caching is switched on.
-CACHE_WRITE_MULTIPLIER = Decimal("1.25")
-CACHE_READ_MULTIPLIER = Decimal("0.10")
 
 # Cost is recorded in a NUMERIC(18,6) column. Six places matter: a single
 # filter call costs a fraction of a cent, and the point of tracking it is to
@@ -49,7 +57,16 @@ COST = Decimal("0.000001")
 
 @dataclass(frozen=True)
 class Usage:
-    """Token counts for one API call, as reported by the response."""
+    """Token counts for one API call, as reported by the response.
+
+    `input_tokens` is the *total* prompt token count, matching the
+    `agent_runs`/`ai_decisions` columns it feeds (they record counts, not a
+    cache breakdown) — `cache_read_tokens` is the subset of it DeepSeek
+    served from cache at the cheaper hit rate, not an addition on top of it.
+    `cache_write_tokens` has no DeepSeek equivalent and is always zero; it
+    stays on the dataclass so `__add__` has one shape to accumulate rather
+    than two.
+    """
 
     input_tokens: int
     output_tokens: int
@@ -67,12 +84,13 @@ class Usage:
         if prices is None:
             return Decimal(0)
 
-        rate_in, rate_out = prices
+        rate_miss, rate_hit, rate_out = prices
+        # cache_read_tokens is a subset of input_tokens, not additional to it.
+        miss_tokens = max(self.input_tokens - self.cache_read_tokens, 0)
         total = (
-            Decimal(self.input_tokens) * rate_in
+            Decimal(miss_tokens) * rate_miss
+            + Decimal(self.cache_read_tokens) * rate_hit
             + Decimal(self.output_tokens) * rate_out
-            + Decimal(self.cache_write_tokens) * rate_in * CACHE_WRITE_MULTIPLIER
-            + Decimal(self.cache_read_tokens) * rate_in * CACHE_READ_MULTIPLIER
         ) / MILLION
         return total.quantize(COST)
 

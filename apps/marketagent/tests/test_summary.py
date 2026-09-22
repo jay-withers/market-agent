@@ -251,11 +251,11 @@ def test_the_daily_rate_is_the_last_seven_days_not_all_time():
     assert "$0.20/day" in _spend_text()
 
 
-def test_no_credit_configured_reports_spend_and_no_runway():
+def test_an_unreadable_balance_reports_spend_and_no_runway():
     text = _spend_text()
     assert "Runway" not in text
     assert "Credit remaining" not in text
-    assert "No starting credit is configured" in text
+    assert "could not be read this time" in text
 
 
 def test_a_configured_credit_gives_what_is_left_and_a_runway():
@@ -286,14 +286,13 @@ def test_a_week_with_no_spend_reports_no_runway_rather_than_dividing_by_zero():
 
 def test_the_scope_of_the_figures_is_stated_not_left_to_be_inferred():
     # These figures cannot include the call that writes the email, and the
-    # credit is a number a human typed rather than anything checked against the
-    # account. Both have to be on the page, or the model may describe the
-    # figure as complete.
+    # balance is DeepSeek's own live figure, not anything a human typed. Both
+    # have to be on the page, or the model may describe the figure as complete.
     text = _spend_text(credit=D("25.00"))
     assert "excludes the call that writes this email" in text
-    assert "no balance endpoint" in text
+    assert "read live and checked against the account" in text
     assert "from 2026-08-20 onwards" in text
-    assert "share one Anthropic API key and one credit balance" in text
+    assert "share one DeepSeek API key and one account balance" in text
 
 
 def test_a_database_with_no_recorded_spend_says_so():

@@ -37,8 +37,8 @@ import markdown as markdown_lib
 from .. import repository as repo
 from ..benchmarks import CASH_SYMBOL
 from ..db import pool
-from ..llm.anthropic_provider import AnthropicLlm
 from ..llm.base import PROMPT_VERSION, Llm
+from ..llm.deepseek_provider import DeepseekLlm
 from ..mailer import MailResult, send
 from ..models import ProposedChange, RiskLimits, money
 from ..risklimits import limits as risk_limits
@@ -64,7 +64,7 @@ def run(
     """
     as_of = as_of or datetime.now(UTC).date()
     start = as_of - timedelta(days=REVIEW_DAYS - 1)
-    llm = llm or AnthropicLlm()
+    llm = llm or DeepseekLlm()
 
     accounts: dict[str, dict] = {}
     with pool().connection() as conn:

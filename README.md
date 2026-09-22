@@ -572,7 +572,7 @@ apps/
       telemetry.py              # App Insights; off without a connection string
       queries.py                # the API's reads
       cli.py                    # marketagent api|agent|sync|summary|weekly
-      llm/base.py  llm/anthropic_provider.py
+      llm/base.py  llm/deepseek_provider.py
       broker/base.py  broker/alpaca.py  broker/dryrun.py
       jobs/agent.py  jobs/summary.py
       api/main.py  api/deps.py  api/routers/

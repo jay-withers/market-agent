@@ -28,8 +28,8 @@ from ..broker.alpaca import AlpacaBroker
 from ..broker.base import Broker
 from ..broker.dryrun import DryRunBroker
 from ..db import pool
-from ..llm.anthropic_provider import AnthropicLlm
 from ..llm.base import PROMPT_VERSION, Llm, Usage
+from ..llm.deepseek_provider import DeepseekLlm
 from ..marketdata import Bar, fetch_daily_bars, latest_close
 from ..models import Recommendation
 from ..news import Article, fetch_news
@@ -87,7 +87,7 @@ def run(
     tested by spending money and placing orders.
     """
     cfg = settings()
-    llm = llm or AnthropicLlm()
+    llm = llm or DeepseekLlm()
     alpaca_api.use_account(portfolio)
     if broker is None:
         broker = DryRunBroker() if cfg.dry_run else AlpacaBroker()

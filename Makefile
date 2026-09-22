@@ -66,7 +66,7 @@ logs: ## Follow the local stack's logs
 	docker compose logs -f
 
 # Fake data, so the dashboard can be looked at without deploying anything and
-# without an Anthropic or Alpaca key — the API only reads Postgres, so a seeded
+# without a DeepSeek or Alpaca key — the API only reads Postgres, so a seeded
 # database is a complete local stack.
 #
 # Piped on stdin rather than mounted: compose here has no bind mounts, because
@@ -91,7 +91,7 @@ demo: ## Start the local stack and load fake data for a dashboard preview
 # `run --rm`, not a long-running service: the agent is a scheduled job, and a
 # container that restarted would trade again each time.
 #
-# Local database, but *real* calls to Alpaca, Frankfurter and Anthropic — the
+# Local database, but *real* calls to Alpaca, Frankfurter and DeepSeek — the
 # last of which is billed. Submits Alpaca paper orders by default; use
 # `DRY_RUN=true make run-agent` to simulate fills without submitting orders.
 #

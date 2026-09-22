@@ -9,9 +9,9 @@ name: ci-python
 # run `make test` before pushing.
 #
 # That gap matters most for the changes nobody reads: renovate.json sets
-# autoApprove, so a dependency bump reaches main without a human. A psycopg,
-# pydantic or anthropic release that broke the engine or the request shapes
-# would have merged green.
+# autoApprove, so a dependency bump reaches main without a human. A psycopg or
+# pydantic release that broke the engine or the request shapes would have
+# merged green.
 #
 # The mechanics live in jay-withers/workflows, so every repo of ours gets the
 # same job and a fix lands once. Only what is specific to this repo is here.

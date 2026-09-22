@@ -21,10 +21,10 @@ def _reset() -> None:
 
 def test_a_secret_comes_from_the_environment_first(monkeypatch):
     """Env-first is what makes the local loop work with no Azure at all."""
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "from-env")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "from-env")
     _reset()
 
-    assert secret("ANTHROPIC-API-KEY") == "from-env"
+    assert secret("DEEPSEEK-API-KEY") == "from-env"
 
 
 def test_the_hyphenated_name_maps_to_an_underscored_uppercase_variable(monkeypatch):
@@ -35,16 +35,16 @@ def test_the_hyphenated_name_maps_to_an_underscored_uppercase_variable(monkeypat
 
 
 def test_a_missing_secret_with_no_vault_names_both_ways_to_fix_it(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("KEY_VAULT_URI", raising=False)
     _reset()
 
     with pytest.raises(RuntimeError) as caught:
-        secret("ANTHROPIC-API-KEY")
+        secret("DEEPSEEK-API-KEY")
 
     # Both routes named, because the error is the only place a reader finds out
     # there are two.
-    assert "$ANTHROPIC_API_KEY" in str(caught.value)
+    assert "$DEEPSEEK_API_KEY" in str(caught.value)
     assert "az keyvault secret set" in str(caught.value)
 
 

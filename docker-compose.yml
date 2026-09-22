@@ -4,7 +4,7 @@
 # "Local" is not "offline", and the distinction matters for the agent service.
 # The API only reads Postgres, so it genuinely runs in isolation. The agent
 # still calls Alpaca for prices and news, Frankfurter for the rate, and
-# Anthropic for both model stages — real requests, and the Anthropic ones are
+# DeepSeek for both model stages — real requests, and the DeepSeek ones are
 # billed. The agent submits Alpaca paper orders by default; set DRY_RUN=true
 # to record simulated fills without submitting orders.
 #
@@ -181,7 +181,7 @@ services:
         condition: service_healthy
 
   # `docker compose run --rm rebalance`. Touches dynamic-500 only — see
-  # jobs/rebalance.py — and calls no Alpaca/Anthropic API, only Wikipedia.
+  # jobs/rebalance.py — and calls no Alpaca/DeepSeek API, only Wikipedia.
   rebalance:
     build:
       context: ./apps/marketagent

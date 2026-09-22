@@ -30,12 +30,13 @@ from ..benchmarks import build as build_benchmarks
 from ..broker.alpaca import AlpacaBroker
 from ..broker.base import Broker
 from ..db import pool
-from ..llm.anthropic_provider import AnthropicLlm
+from ..fetch import FetchError
 from ..llm.base import PROMPT_VERSION, Llm
+from ..llm.deepseek_provider import DeepseekLlm, balance_usd
 from ..mailer import MailResult, send
 from ..marketdata import fetch_daily_bars, latest_close
 from ..models import money
-from ..settings import optional_secret, settings
+from ..settings import settings
 from ..sync import synchronize
 
 logger = logging.getLogger(__name__)
@@ -58,7 +59,7 @@ def run(
     """Produce and send one day's combined summary. Returns the `daily_summaries` id."""
     cfg = settings()
     as_of = as_of or datetime.now(UTC).date()
-    llm = llm or AnthropicLlm()
+    llm = llm or DeepseekLlm()
     # The real broker even in a dry run: reconciliation only ever *reads*
     # orders, and a dry run has no submitted trades to reconcile anyway. One
     # instance serves both accounts — it is stateless with respect to which
@@ -150,7 +151,7 @@ def run(
         }
 
     # The combined total, not either account's own: the two accounts share one
-    # Anthropic API key and one credit balance, so runway is computed once.
+    # DeepSeek API key and one account balance, so runway is computed once.
     with pool().connection() as conn:
         total_spend = repo.spend(conn, as_of, pid=None)
 
@@ -238,29 +239,28 @@ def _reconcile(pid: int, broker: Broker) -> int:
 
 
 def _credit_usd() -> Decimal | None:
-    """The API credit the experiment started with, if anyone has said.
+    """The account's current DeepSeek balance, in USD — or None if it could not be read.
 
-    There is **no Anthropic endpoint that reports a remaining balance** — the
-    Usage and Cost Admin API reports spend, needs an Admin API key, and is not
-    available to individual accounts at all. So a runway figure can only come
-    from a starting number a human supplies plus the spend this database has
-    recorded itself.
+    Unlike the Anthropic credit figure this replaces — a number typed by hand
+    into `ANTHROPIC-CREDIT-USD` and checked against nothing, because Anthropic
+    publishes no balance endpoint at all — DeepSeek reports this directly (see
+    `llm.deepseek_provider.balance_usd`), so the runway figure below is now a
+    verified number rather than a guess.
 
-    In Key Vault rather than `common_env`, for the reason the email recipient
-    is: this repository and `terraform/environments/*.tfvars` are public, and
-    what someone has put on their account is theirs. Absent means report the
-    spend and no runway — opt-in, like the email.
-
-    A value that is not a number is ignored rather than fatal: a mistyped
-    credit figure must not cost the day its summary.
+    Never allowed to cost the day its summary, the same discipline
+    `mailer.send` applies to email delivery: a failure here — network,
+    an unexpected response shape, no USD balance on the account — is caught
+    and logged rather than raised, so a balance-API hiccup degrades to "no
+    runway reported" instead of losing the whole run. A broken
+    `DEEPSEEK-API-KEY` is not caught here, deliberately: it would fail
+    `llm.narrate()` moments later anyway, and letting it propagate from the
+    first DeepSeek call in the run reports the real cause immediately rather
+    than after wasted work.
     """
-    raw = optional_secret("ANTHROPIC-CREDIT-USD")
-    if not raw:
-        return None
     try:
-        return Decimal(raw.strip().lstrip("$"))
-    except (ArithmeticError, ValueError):
-        logger.warning("ANTHROPIC-CREDIT-USD is not a number, ignoring it")
+        return balance_usd()
+    except (FetchError, ValueError) as exc:
+        logger.warning("could not read the DeepSeek account balance: %s", exc)
         return None
 
 
@@ -282,7 +282,7 @@ def _spend_section(
     includes the summary and weekly review calls, which are single calls that
     serve both accounts at once and so are not attributable to one of them.
     The combined figure is what the runway is computed from, since both
-    accounts spend against the same Anthropic API key and credit balance.
+    accounts spend against the same DeepSeek API key and account balance.
 
     The scope is stated in the table rather than left to be inferred: these
     figures cannot include the call that writes this email, because that call
@@ -336,14 +336,14 @@ def _spend_section(
         "",
         f"{scope}. It excludes the call that writes this email, which has not been "
         "made when these figures are read, and anything else on the same API key. "
-        "Both accounts share one Anthropic API key and one credit balance, so the "
+        "Both accounts share one DeepSeek API key and one account balance, so the "
         "combined column, not either account's own, is what the runway is computed "
         "from. "
         + (
-            "The credit figure is a number configured by hand: Anthropic publishes no "
-            "balance endpoint, so nothing here has checked it against the account."
+            "The credit figure is DeepSeek's own reported account balance, read live "
+            "and checked against the account rather than typed by hand."
             if credit is not None
-            else "No starting credit is configured, so there is no runway to report."
+            else "The account balance could not be read this time, so there is no runway to report."
         ),
         "",
     ]

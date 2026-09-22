@@ -32,7 +32,7 @@ def fake_secrets(monkeypatch):
     Both caches have to be cleared around the test: `settings()` and `secret()`
     memoise, so a value read before these were set would otherwise persist.
     """
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-deepseek-key")
     # Both accounts' credential pairs, matching alpaca_api.ACCOUNT_SECRET_SUFFIX
     # — a test exercising either account (or both) needs neither Azure nor a
     # real key.
