@@ -1,14 +1,20 @@
-"""Shared dependencies: a connection per request, and the optional bearer gate."""
+"""Shared dependencies: a connection per request, the account selector, and
+the optional bearer gate."""
 
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any
+from typing import Annotated, Any, Literal
 
-from fastapi import Header, HTTPException, status
+from fastapi import Header, HTTPException, Query, status
 
 from ..db import pool
 from ..settings import secret, settings
+
+# Every per-account route requires this explicitly, with no default that would
+# silently pick one account over the other — `Literal` also gives FastAPI free
+# validation (an unknown value 422s) and an enum in the OpenAPI docs.
+Account = Annotated[Literal["static-100", "dynamic-500"], Query()]
 
 
 def connection() -> Iterator[Any]:

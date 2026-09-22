@@ -38,8 +38,43 @@ locals {
     IMAGE_TAG = var.marketagent_image_tag
   }
 
-  agent_env = merge(local.common_env, {
+  agent_base_env = merge(local.common_env, {
     DRY_RUN                 = tostring(var.agent_dry_run)
     ALPACA_TRADING_BASE_URL = "https://paper-api.alpaca.markets"
+  })
+
+  # Per-account cost ceiling and (for dynamic-500 only) a daily-trade bump.
+  # Not exposed as Terraform variables — RISK_* and MAX_RUN_COST_USD were
+  # never wired through Terraform even for the single-account job (see the
+  # application's own docs: the cost ceiling's default "applies to the
+  # deployed job and an override is an env var on the container"); these
+  # locals are that same style of override.
+  #
+  # MAX_RUN_COST_USD is an informed estimate against the measured 10-ticker
+  # baseline (~$0.18/run in ~4 minutes), extrapolated by relative watchlist
+  # size — not a firm prediction, and worth revisiting after each account's
+  # first real week of runs. This one genuinely does scale with watchlist
+  # size: it bounds LLM spend, which scales with articles and tickers
+  # analysed regardless of account size.
+  #
+  # RISK_MAX_DAILY_TRADES does NOT scale with watchlist size the same way,
+  # and static-100 gets no override at all — both new Alpaca accounts hold
+  # $500 real cash, not the $100,000 risklimits.py's own defaults are sized
+  # for (see its docstring), so `max_concentration_pct`/`max_total_exposure_pct`
+  # (percentage caps, which scale automatically) cap the account at roughly 3-4
+  # open positions regardless of watchlist size — a 500-ticker watchlist means
+  # more candidates to filter, not more room to trade. dynamic-500 gets a
+  # modest bump to 15 (the single-account default, already raised 3 -> 6 -> 10
+  # through real iteration, is 10) purely because five hundred tickers gives a
+  # somewhat higher chance of several independent names clearing analysis on
+  # the same newsy day — not because the account can afford more total
+  # exposure, which it can't.
+  agent100_env = merge(local.agent_base_env, {
+    MAX_RUN_COST_USD = "5.00"
+  })
+
+  agent500_env = merge(local.agent_base_env, {
+    RISK_MAX_DAILY_TRADES = "15"
+    MAX_RUN_COST_USD      = "25.00"
   })
 }

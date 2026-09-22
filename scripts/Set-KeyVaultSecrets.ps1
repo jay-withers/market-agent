@@ -11,7 +11,8 @@
     Secrets are read from a masked prompt, held only as a SecureString until the
     moment they are passed to `az`, and never written to disk, logged, echoed,
     or placed in shell history. Press Enter at a prompt to skip one — they are
-    needed at different points (Anthropic and the two Alpaca keys for the
+    needed at different points (Anthropic and the four Alpaca keys — one
+    credential pair per paper account, static-100 and dynamic-500 — for the
     agent, Resend only for the daily summary), so there is no need to have them
     all to hand.
 
@@ -65,7 +66,7 @@
     Officer` on the vault — which whoever ran `terraform apply` already has.
 
 .PARAMETER Name
-    Which values to prompt for. Defaults to all eight the application uses.
+    Which values to prompt for. Defaults to all ten the application uses.
 
 .PARAMETER Force
     Overwrite an existing secret without asking.
@@ -73,7 +74,7 @@
 .EXAMPLE
     ./scripts/Set-KeyVaultSecrets.ps1
 
-    Prompts for each of the eight, skipping any that already exist.
+    Prompts for each of the ten, skipping any that already exist.
 
 .EXAMPLE
     ./scripts/Set-KeyVaultSecrets.ps1 -Name ANTHROPIC-API-KEY -Force
@@ -115,8 +116,10 @@ param(
     # environment variable it prefers over the vault.
     [string[]]$Name = @(
         'ANTHROPIC-API-KEY'
-        'ALPACA-API-KEY'
-        'ALPACA-SECRET-KEY'
+        'ALPACA-API-KEY-STATIC100'
+        'ALPACA-SECRET-KEY-STATIC100'
+        'ALPACA-API-KEY-DYNAMIC500'
+        'ALPACA-SECRET-KEY-DYNAMIC500'
         'RESEND-API-KEY'
         'SUMMARY-EMAIL-TO'
         'ANTHROPIC-CREDIT-USD'
@@ -182,8 +185,9 @@ Write-Host "==> $VaultName holds $($present.Count) secret(s)"
 # costs nothing. Deliberately not a rejection: these prefixes are Anthropic's
 # and Alpaca's to change, not ours to enforce.
 $expectedPrefixes = @{
-    'ANTHROPIC-API-KEY' = 'sk-ant-'
-    'ALPACA-API-KEY'    = 'PK'
+    'ANTHROPIC-API-KEY'         = 'sk-ant-'
+    'ALPACA-API-KEY-STATIC100'  = 'PK'
+    'ALPACA-API-KEY-DYNAMIC500' = 'PK'
 }
 
 # Prompted in the clear, and echoed back on success. These are configuration

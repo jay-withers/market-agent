@@ -1,8 +1,11 @@
 # Terraform owns the vault and access to it, deliberately not the secret values:
 # nothing here creates an azurerm_key_vault_secret. Application secrets
-# (OPENAI_API_KEY, ALPACA_API_KEY, ALPACA_SECRET_KEY, NEWS_API_KEY,
-# EMAIL_CREDENTIAL) are set with `az keyvault secret set`, so they never reach
-# Terraform source or state.
+# (ANTHROPIC-API-KEY, ALPACA-API-KEY-STATIC100, ALPACA-SECRET-KEY-STATIC100,
+# ALPACA-API-KEY-DYNAMIC500, ALPACA-SECRET-KEY-DYNAMIC500, RESEND-API-KEY, ...
+# — see Set-KeyVaultSecrets.ps1 for the full list) are set with
+# `az keyvault secret set`, so they never reach Terraform source or state.
+# Two Alpaca credential pairs, not one: static-100 and dynamic-500 are separate
+# paper accounts and need separate keys — see alpaca_api.py's use_account().
 resource "azurerm_key_vault" "this" {
   # checkov:skip=CKV_AZURE_42: purge protection deliberately off — see below.
   # checkov:skip=CKV_AZURE_110: same.

@@ -129,9 +129,15 @@ variable "agent_dry_run" {
 }
 
 variable "agent_cron_expression" {
-  description = "Schedule for the AI trading agent job, as a 5-field cron expression evaluated in UTC."
+  description = "Schedule for the static-100 account's agent job, as a 5-field cron expression evaluated in UTC."
   type        = string
   default     = "0 6 * * *"
+}
+
+variable "agent500_cron_expression" {
+  description = "Schedule for the dynamic-500 account's agent job, as a 5-field cron expression evaluated in UTC. Staggered ten minutes after agent_cron_expression by default so the two accounts do not both call the Anthropic API at the same instant."
+  type        = string
+  default     = "10 6 * * *"
 }
 
 variable "daily_summary_cron_expression" {
@@ -184,7 +190,13 @@ variable "budget_start_date" {
 }
 
 variable "broker_sync_cron_expression" {
-  description = "Refresh the Alpaca account mirror and order status without placing orders or calling the model."
+  description = "Refresh the Alpaca account mirror and order status without placing orders or calling the model. Shared by both accounts' sync jobs (sync100, sync500)."
   type        = string
   default     = "*/5 * * * *"
+}
+
+variable "rebalance_cron_expression" {
+  description = "Refresh dynamic-500's watchlist against current S&P 500 membership, as a 5-field cron expression evaluated in UTC. Scheduled well before that day's agent500 run so a membership change lands before that day's analysis, not after it."
+  type        = string
+  default     = "0 5 1 * *"
 }

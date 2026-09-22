@@ -28,11 +28,20 @@ TICKER = "AAPL"
 OTHER = "MSFT"
 TODAY = date.today()
 
+# `queries.py` takes an account *name*, not a pid, and resolves the pid itself.
+# static-100 is seeded with real watchlist data by 010-seed-sp100-static.sql;
+# nothing here depends on which of the two accounts is used, so one constant
+# keeps every call site consistent.
+PORTFOLIO = "static-100"
 
-def _decision(conn, ticker: str = TICKER, action: str = "BUY", approved: bool = True) -> int:
-    run_id = repo.open_run(conn, "schedule", dry_run=False, image_tag=None)
+
+def _decision(
+    conn, pid: int, ticker: str = TICKER, action: str = "BUY", approved: bool = True
+) -> int:
+    run_id = repo.open_run(conn, pid, "schedule", dry_run=False, image_tag=None)
     return repo.save_decision(
         conn,
+        pid,
         run_id=run_id,
         rec=Recommendation(
             ticker=ticker,
@@ -99,7 +108,7 @@ def _price(conn, ticker: str = TICKER, close: str = "100.0000", day: date = TODA
 
 
 def test_the_overview_of_an_untouched_portfolio_is_the_notional_and_no_pnl(conn):
-    result = queries.overview(conn)
+    result = queries.overview(conn, PORTFOLIO)
 
     assert result["cash_usd"] == 100000.0
     assert result["position_count"] == 0
@@ -108,7 +117,7 @@ def test_the_overview_of_an_untouched_portfolio_is_the_notional_and_no_pnl(conn)
 
 
 def test_the_overview_values_positions_at_the_latest_close(conn):
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     repo.apply_fill(
         conn,
         pid,
@@ -119,9 +128,9 @@ def test_the_overview_values_positions_at_the_latest_close(conn):
         D("100.0000"),
     )
     _price(conn, close="100.0000")
-    _trade(conn, pid, _decision(conn), fx="1.250000")
+    _trade(conn, pid, _decision(conn, pid), fx="1.250000")
 
-    result = queries.overview(conn)
+    result = queries.overview(conn, PORTFOLIO)
 
     # 2 shares x $100; no FX conversion
     assert result["positions_value_usd"] == 200.0
@@ -130,12 +139,12 @@ def test_the_overview_values_positions_at_the_latest_close(conn):
 
 
 def test_broker_valuation_takes_precedence_over_local_prices(conn):
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     repo.apply_fill(conn, pid, TICKER, "BUY", D("2"), D("200"), D("100"))
     _price(conn, close="90")
     conn.execute("UPDATE positions SET market_value_usd=220 WHERE portfolio_id=%s", (pid,))
     conn.execute("UPDATE portfolio SET equity_usd=100020 WHERE id=%s", (pid,))
-    result = queries.overview(conn)
+    result = queries.overview(conn, PORTFOLIO)
     assert result["positions_value_usd"] == 220
     assert result["total_value_usd"] == 100020
 
@@ -143,7 +152,7 @@ def test_broker_valuation_takes_precedence_over_local_prices(conn):
 def test_a_position_with_no_price_contributes_nothing_but_still_counts(conn):
     """The lateral join is a LEFT one so an unpriced ticker does not drop the
     row entirely."""
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     repo.apply_fill(
         conn,
         pid,
@@ -154,17 +163,18 @@ def test_a_position_with_no_price_contributes_nothing_but_still_counts(conn):
         D("100.0000"),
     )
 
-    result = queries.overview(conn)
+    result = queries.overview(conn, PORTFOLIO)
 
     assert result["position_count"] == 1
     assert result["positions_value_usd"] == 0.0
 
 
 def test_the_overview_carries_the_most_recent_run(conn):
-    run_id = repo.open_run(conn, "schedule", dry_run=False, image_tag="8d2788f")
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    run_id = repo.open_run(conn, pid, "schedule", dry_run=False, image_tag="8d2788f")
     repo.close_run(conn, run_id, "succeeded", {"trades_executed": 3}, 100, 20, D("0.1900"))
 
-    result = queries.overview(conn)
+    result = queries.overview(conn, PORTFOLIO)
 
     assert result["last_run"]["status"] == "succeeded"
     assert result["last_run"]["trades_executed"] == 3
@@ -173,10 +183,16 @@ def test_the_overview_carries_the_most_recent_run(conn):
 def test_money_crosses_the_display_boundary_as_float_not_decimal(conn):
     """The one place the Decimal rule is relaxed: a browser charts these and
     throws them away, and a Decimal would serialise as a JSON string."""
-    result = queries.overview(conn)
+    result = queries.overview(conn, PORTFOLIO)
 
     assert isinstance(result["cash_usd"], float)
     assert not isinstance(result["cash_usd"], Decimal)
+
+
+def test_overview_of_an_unknown_portfolio_is_none(conn):
+    result = queries.overview(conn, "no-such-portfolio")
+
+    assert result == {"portfolio": None}
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +203,7 @@ def test_money_crosses_the_display_boundary_as_float_not_decimal(conn):
 def test_the_performance_series_carries_the_portfolio_and_the_benchmarks(conn):
     from marketagent.benchmarks import BenchmarkPoint
 
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     repo.save_daily_performance(
         conn,
         pid,
@@ -198,16 +214,18 @@ def test_the_performance_series_carries_the_portfolio_and_the_benchmarks(conn):
         D("10.0000"),
         D("2.0000"),
     )
-    repo.save_benchmarks(conn, [BenchmarkPoint(symbol="SPY", as_of=TODAY, value_usd=D("505.0000"))])
+    repo.save_benchmarks(
+        conn, pid, [BenchmarkPoint(symbol="SPY", as_of=TODAY, value_usd=D("505.0000"))]
+    )
 
-    result = queries.performance(conn, days=30)
+    result = queries.performance(conn, PORTFOLIO, days=30)
 
     assert [r["total_value_usd"] for r in result["portfolio"]] == [510.0]
     assert [r["symbol"] for r in result["benchmarks"]] == ["SPY"]
 
 
 def test_the_performance_window_excludes_anything_older(conn):
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     repo.save_daily_performance(
         conn,
         pid,
@@ -219,11 +237,11 @@ def test_the_performance_window_excludes_anything_older(conn):
         D("0.0000"),
     )
 
-    assert queries.performance(conn, days=7)["portfolio"] == []
+    assert queries.performance(conn, PORTFOLIO, days=7)["portfolio"] == []
 
 
 def test_holdings_carry_the_company_name_and_the_last_close(conn):
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     repo.apply_fill(
         conn,
         pid,
@@ -235,7 +253,7 @@ def test_holdings_carry_the_company_name_and_the_last_close(conn):
     )
     _price(conn, close="100.0000")
 
-    rows = queries.holdings(conn)
+    rows = queries.holdings(conn, PORTFOLIO)
 
     assert rows[0]["ticker"] == TICKER
     assert rows[0]["name"]
@@ -249,7 +267,7 @@ def test_the_price_history_covers_held_tickers_only(conn):
     ticker; a price for something unheld is weight on every response for a
     panel that is never rendered.
     """
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     repo.apply_fill(
         conn,
         pid,
@@ -263,7 +281,7 @@ def test_the_price_history_covers_held_tickers_only(conn):
     _price(conn, ticker=TICKER, close="104.0000", day=TODAY)
     _price(conn, ticker=OTHER, close="400.0000", day=TODAY)
 
-    rows = queries.price_history(conn, days=30)
+    rows = queries.price_history(conn, PORTFOLIO, days=30)
 
     assert [r["ticker"] for r in rows] == [TICKER, TICKER]
     # Ascending by date, because the client plots them in the order given.
@@ -271,7 +289,7 @@ def test_the_price_history_covers_held_tickers_only(conn):
 
 
 def test_the_price_history_window_excludes_older_bars(conn):
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     repo.apply_fill(
         conn,
         pid,
@@ -284,9 +302,47 @@ def test_the_price_history_window_excludes_older_bars(conn):
     _price(conn, ticker=TICKER, close="90.0000", day=TODAY - timedelta(days=40))
     _price(conn, ticker=TICKER, close="110.0000", day=TODAY)
 
-    rows = queries.price_history(conn, days=7)
+    rows = queries.price_history(conn, PORTFOLIO, days=7)
 
     assert [r["close_usd"] for r in rows] == [110.0]
+
+
+# ---------------------------------------------------------------------------
+# Comparison
+# ---------------------------------------------------------------------------
+
+
+def test_comparison_returns_both_accounts_keyed_by_name(conn):
+    """Genuinely new shape: both accounts' series in one payload, keyed by
+    account name, rather than two documents the dashboard has to merge itself."""
+    static_pid = repo.portfolio_id(conn, "static-100")
+    dynamic_pid = repo.portfolio_id(conn, "dynamic-500")
+    repo.save_daily_performance(
+        conn,
+        static_pid,
+        TODAY,
+        D("450.0000"),
+        D("60.0000"),
+        D("510.0000"),
+        D("10.0000"),
+        D("2.0000"),
+    )
+    repo.save_daily_performance(
+        conn,
+        dynamic_pid,
+        TODAY,
+        D("400.0000"),
+        D("120.0000"),
+        D("520.0000"),
+        D("20.0000"),
+        D("4.0000"),
+    )
+
+    result = queries.comparison(conn, days=30)
+
+    assert set(result) == {"static-100", "dynamic-500"}
+    assert [r["total_value_usd"] for r in result["static-100"]] == [510.0]
+    assert [r["total_value_usd"] for r in result["dynamic-500"]] == [520.0]
 
 
 # ---------------------------------------------------------------------------
@@ -295,9 +351,10 @@ def test_the_price_history_window_excludes_older_bars(conn):
 
 
 def test_decisions_are_newest_first_and_report_the_engines_verdict(conn):
-    _decision(conn, approved=False)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    _decision(conn, pid, approved=False)
 
-    rows = queries.decisions(conn, limit=10)
+    rows = queries.decisions(conn, PORTFOLIO, limit=10)
 
     assert rows[0]["approved"] is False
     assert rows[0]["binding_constraint"] == "max_trade_usd"
@@ -305,10 +362,11 @@ def test_decisions_are_newest_first_and_report_the_engines_verdict(conn):
 
 
 def test_decisions_can_be_filtered_to_one_ticker(conn):
-    _decision(conn, ticker=TICKER)
-    _decision(conn, ticker=OTHER)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    _decision(conn, pid, ticker=TICKER)
+    _decision(conn, pid, ticker=OTHER)
 
-    rows = queries.decisions(conn, limit=10, ticker=OTHER)
+    rows = queries.decisions(conn, PORTFOLIO, limit=10, ticker=OTHER)
 
     assert [r["ticker"] for r in rows] == [OTHER]
 
@@ -316,17 +374,18 @@ def test_decisions_can_be_filtered_to_one_ticker(conn):
 def test_the_decision_limit_is_honoured(conn):
     """Every limit is bounded — an unbounded one is how a read-only API becomes
     a denial of service."""
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     for _ in range(3):
-        _decision(conn)
+        _decision(conn, pid)
 
-    assert len(queries.decisions(conn, limit=2)) == 2
+    assert len(queries.decisions(conn, PORTFOLIO, limit=2)) == 2
 
 
 def test_one_decision_comes_back_with_the_articles_and_trades_behind_it(conn):
     """The endpoint the audit trail exists for."""
     from marketagent.news import Article
 
-    pid = repo.portfolio_id(conn)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
     news_id = repo.save_news(
         conn,
         [
@@ -338,9 +397,10 @@ def test_one_decision_comes_back_with_the_articles_and_trades_behind_it(conn):
             )
         ],
     )["art-1"]
-    run_id = repo.open_run(conn, "schedule", dry_run=False, image_tag=None)
+    run_id = repo.open_run(conn, pid, "schedule", dry_run=False, image_tag=None)
     did = repo.save_decision(
         conn,
+        pid,
         run_id=run_id,
         rec=Recommendation(
             ticker=TICKER,
@@ -456,10 +516,10 @@ def test_only_relevant_articles_are_returned_when_asked(conn):
 
 
 def test_trades_are_listed_newest_first(conn):
-    pid = repo.portfolio_id(conn)
-    _trade(conn, pid, _decision(conn))
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    _trade(conn, pid, _decision(conn, pid))
 
-    rows = queries.trades(conn, limit=10)
+    rows = queries.trades(conn, PORTFOLIO, limit=10)
 
     assert rows[0]["ticker"] == TICKER
     assert rows[0]["status"] == "submitted"
@@ -468,20 +528,22 @@ def test_trades_are_listed_newest_first(conn):
 def test_a_run_still_open_past_the_job_timeout_is_reported_stale(conn):
     """A SIGKILL cannot be caught, so a hard kill leaves `running` behind for
     ever; the dashboard must not show a run in progress indefinitely."""
-    run_id = repo.open_run(conn, "schedule", dry_run=False, image_tag=None)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    run_id = repo.open_run(conn, pid, "schedule", dry_run=False, image_tag=None)
     conn.execute(
         "UPDATE agent_runs SET started_at = now() - interval '2 hours' WHERE id = %s", (run_id,)
     )
 
-    row = next(r for r in queries.runs(conn, limit=10) if r["id"] == run_id)
+    row = next(r for r in queries.runs(conn, PORTFOLIO, limit=10) if r["id"] == run_id)
 
     assert row["stale"] is True
 
 
 def test_a_run_that_has_just_started_is_not_stale(conn):
-    run_id = repo.open_run(conn, "schedule", dry_run=False, image_tag=None)
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    run_id = repo.open_run(conn, pid, "schedule", dry_run=False, image_tag=None)
 
-    row = next(r for r in queries.runs(conn, limit=10) if r["id"] == run_id)
+    row = next(r for r in queries.runs(conn, PORTFOLIO, limit=10) if r["id"] == run_id)
 
     assert row["stale"] is False
 

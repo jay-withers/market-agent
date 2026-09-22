@@ -5,8 +5,10 @@ because it reads that summary's valuation as the week's closing figure.
 
 It answers a question a single day cannot. The daily email says what happened;
 this says whether the *machinery* is working — which risk limit is actually
-shaping the experiment, which watchlist names never produce anything, whether
-the jobs ran and the emails sent — and proposes changes.
+shaping each account, which watchlist names never produce anything, whether
+the jobs ran and the emails sent — and proposes changes. Covers both accounts
+in one review, with a comparison between them, for the same reason the daily
+summary does: the point of running them side by side is to compare them.
 
 Three rules shape it:
 
@@ -15,7 +17,7 @@ Three rules shape it:
   report figures the stored series disagrees with.
 * **Every figure comes from the database.** The model is shown the numbers as
   tables it is told not to restate, exactly as in the daily summary, and the
-  subject line is built from the stored total. Nothing it writes can become a
+  subject line is built from the stored totals. Nothing it writes can become a
   reported balance.
 * **Its proposals are advisory.** They are stored and emailed for a human to
   act on; nothing reads them back and applies them. A risk limit changes when
@@ -46,31 +48,42 @@ logger = logging.getLogger(__name__)
 # Seven days, inclusive of both ends, so a Sunday run covers the Monday before.
 REVIEW_DAYS = 7
 
+ACCOUNTS = ("static-100", "dynamic-500")
+
 
 def run(
     as_of: date | None = None,
     llm: Llm | None = None,
 ) -> int | None:
-    """Produce and send one week's review.
+    """Produce and send one week's combined review.
 
     Returns the `weekly_reviews` id, or None on a week with no agent runs at
-    all — there is nothing to review, and an LLM call to say so is worth
-    neither the money nor the credibility of a row that reviews nothing.
+    all, for either account — there is nothing to review, and an LLM call to
+    say so is worth neither the money nor the credibility of a row that
+    reviews nothing.
     """
     as_of = as_of or datetime.now(UTC).date()
     start = as_of - timedelta(days=REVIEW_DAYS - 1)
     llm = llm or AnthropicLlm()
 
+    accounts: dict[str, dict] = {}
     with pool().connection() as conn:
-        pid = repo.portfolio_id(conn)
-        initial = repo.initial_cash(conn, pid)
-        inception = repo.portfolio_inception(conn, pid)
-        tickers = repo.active_tickers(conn)
-        metrics = repo.week_metrics(conn, pid, start, as_of)
         previous = repo.last_recommendations(conn, before=start)
+        for name in ACCOUNTS:
+            pid = repo.portfolio_id(conn, name=name)
+            accounts[name] = {
+                "pid": pid,
+                "initial": repo.initial_cash(conn, pid),
+                "inception": repo.portfolio_inception(conn, pid),
+                "tickers": repo.active_tickers(conn, pid),
+                "metrics": repo.week_metrics(conn, pid, start, as_of),
+            }
 
-    if not metrics["runs"].get("runs"):
-        logger.info("no agent runs between %s and %s, nothing to review", start, as_of)
+    total_runs = sum(accounts[n]["metrics"]["runs"].get("runs") or 0 for n in ACCOUNTS)
+    if not total_runs:
+        logger.info(
+            "no agent runs for either account between %s and %s, nothing to review", start, as_of
+        )
         return None
 
     # After the short-circuit, not before: a week with no runs at all is not
@@ -82,20 +95,24 @@ def run(
     # Stored alongside the rest, so "has this fired three weeks running" is a
     # query against weekly_reviews.metrics rather than a re-read of the prose.
     with pool().connection() as conn:
-        metrics["integrity"] = repo.week_integrity(conn, pid, start, as_of)
+        for name in ACCOUNTS:
+            data = accounts[name]
+            data["metrics"]["integrity"] = repo.week_integrity(conn, data["pid"], start, as_of)
 
-    # The limits the engine itself would build, not a second read of the same
-    # environment variables: the table has to show what actually bounded the
-    # week's decisions, and two readers of one config can drift.
-    lim = risk_limits(frozenset(tickers))
+    # The limits each account's engine would actually build, not a second read
+    # of the same environment variables: the table has to show what actually
+    # bounded the week's decisions, and two readers of one config can drift.
+    for name in ACCOUNTS:
+        data = accounts[name]
+        data["lim"] = risk_limits(frozenset(data["tickers"]))
 
-    facts = _facts_table(start, as_of, metrics, initial, inception, lim)
+    facts = _facts_table(start, as_of, accounts)
     review = llm.review(_prompt(facts, previous))
 
     proposals = list(review.value.proposals)
     body_markdown = f"{facts}\n\n{review.value.assessment}\n\n{_proposals_table(proposals)}"
     body_html = markdown_lib.markdown(body_markdown, extensions=["tables"])
-    subject = _subject(as_of, metrics, proposals)
+    subject = _subject(as_of, accounts, proposals)
 
     result: MailResult = send(subject, body_html, body_markdown)
     logger.info("weekly review email %s", result.status)
@@ -109,7 +126,7 @@ def run(
             assessment=review.value.assessment,
             body_markdown=body_markdown,
             body_html=body_html,
-            metrics=metrics,
+            metrics={name: accounts[name]["metrics"] for name in ACCOUNTS},
             recommendations=[p.model_dump() for p in proposals],
             model=review.model,
             prompt_version=PROMPT_VERSION,
@@ -132,32 +149,40 @@ def run(
     return review_id
 
 
-def _subject(as_of: date, metrics: dict[str, Any], proposals: list[ProposedChange]) -> str:
-    """The subject line, from the stored total and the count of proposals.
+def _subject(as_of: date, accounts: dict[str, dict], proposals: list[ProposedChange]) -> str:
+    """The subject line, from each account's stored total and the proposal count.
 
-    The model writes neither. A week with no valuation says so rather than
-    carrying a figure invented to fill the slot.
+    The model writes none of it. An account with no valuation says so rather
+    than carrying a figure invented to fill the slot.
     """
-    valuation = metrics["valuation"]
     count = f"{len(proposals)} proposal{'' if len(proposals) == 1 else 's'}"
-    if valuation is None:
-        subject = f"MarketAgent week to {as_of}: no valuation recorded, {count}"
-    else:
+    parts = []
+    for name in ACCOUNTS:
+        metrics = accounts[name]["metrics"]
+        valuation = metrics["valuation"]
+        if valuation is None:
+            parts.append(f"{name} no valuation")
+            continue
         change, change_pct = _week_change(metrics)
         if change is None:
-            subject = f"MarketAgent week to {as_of}: ${valuation['total_value_usd']}, {count}"
+            parts.append(f"{name} ${valuation['total_value_usd']}")
         else:
-            subject = (
-                f"MarketAgent week to {as_of}: ${valuation['total_value_usd']} "
-                f"({'+' if change >= 0 else ''}{change_pct}% this week), {count}"
+            parts.append(
+                f"{name} ${valuation['total_value_usd']} "
+                f"({'+' if change >= 0 else ''}{change_pct}%)"
             )
+    subject = f"MarketAgent week to {as_of}: " + ", ".join(parts) + f", {count}"
 
     # Appended last so it survives every branch above. A week that lost a day's
     # valuation still produces a perfectly ordinary-looking subject otherwise,
     # which is the one case where ordinary-looking is wrong — the same reason
     # the daily email carries `no agent run`.
-    if failed := [c for c in metrics.get("integrity") or [] if not c["ok"]]:
-        subject += f" — {len(failed)} data check{'' if len(failed) == 1 else 's'} failed"
+    failed = sum(
+        len([c for c in (accounts[n]["metrics"].get("integrity") or []) if not c["ok"]])
+        for n in ACCOUNTS
+    )
+    if failed:
+        subject += f" — {failed} data check{'' if failed == 1 else 's'} failed"
     return subject
 
 
@@ -182,25 +207,75 @@ def _signed(value: Decimal) -> str:
     return f"{'+' if value >= 0 else ''}{value}"
 
 
-def _facts_table(
-    start: date,
-    end: date,
-    metrics: dict[str, Any],
-    initial: Decimal,
-    inception: date,
-    lim: RiskLimits,
-) -> str:
-    """The week, rendered deterministically. The model never touches these."""
-    runs = metrics["runs"]
+def _comparison_section(accounts: dict[str, dict]) -> list[str]:
+    """Which account is ahead this week, and which limit is shaping each one."""
+    totals = {
+        n: (accounts[n]["metrics"]["valuation"] or {}).get("total_value_usd") for n in ACCOUNTS
+    }
+    changes = {n: _week_change(accounts[n]["metrics"])[1] for n in ACCOUNTS}
+
+    def top_constraint(name: str) -> str:
+        rows = accounts[name]["metrics"]["constraints"]
+        if not rows:
+            return "no decisions"
+        top = max(rows, key=lambda r: r["decisions"])
+        return f"{top['binding'] or '—'} ({top['decisions']})"
+
+    def idle_names(name: str) -> str:
+        rows = accounts[name]["metrics"]["tickers"]
+        if not rows:
+            return "n/a"
+        idle = sum(1 for r in rows if r["decisions"] == 0)
+        return f"{idle} of {len(rows)}"
+
+    lines = [
+        "## static-100 vs dynamic-500",
+        "",
+        "| | " + " | ".join(ACCOUNTS) + " |",
+        "| --- | " + " | ".join(["---"] * len(ACCOUNTS)) + " |",
+        "| Total value | "
+        + " | ".join(f"${totals[n]}" if totals[n] is not None else "not recorded" for n in ACCOUNTS)
+        + " |",
+        "| Change this week | "
+        + " | ".join(
+            f"{_signed(changes[n])}%" if changes[n] is not None else "not computable"
+            for n in ACCOUNTS
+        )
+        + " |",
+        "| Most frequent binding constraint | "
+        + " | ".join(top_constraint(n) for n in ACCOUNTS)
+        + " |",
+        "| Watchlist names with no decisions | "
+        + " | ".join(idle_names(n) for n in ACCOUNTS)
+        + " |",
+        "",
+    ]
+    if all(t is not None for t in totals.values()):
+        leader = max(ACCOUNTS, key=lambda n: totals[n])
+        trailer = next(n for n in ACCOUNTS if n != leader)
+        gap = totals[leader] - totals[trailer]
+        lines.append(
+            f"**{leader}** is ahead of **{trailer}** by ${gap} this week."
+            if gap
+            else "The two accounts are exactly level this week."
+        )
+        lines.append("")
+    return lines
+
+
+def _account_section(name: str, data: dict) -> list[str]:
+    """One account's week, as a labelled subsection under its own heading."""
+    metrics = data["metrics"]
+    initial, inception, lim = data["initial"], data["inception"], data["lim"]
     valuation = metrics["valuation"]
     change, change_pct = _week_change(metrics)
 
     lines = [
-        f"# MarketAgent — week to {end}",
+        f"## {name}",
         "",
-        f"Covering {start} to {end} inclusive. The experiment began {inception} with ${initial}.",
+        f"Began {inception} with ${initial}.",
         "",
-        "## Where the money is",
+        "### Where the money is",
         "",
         "| | |",
         "| --- | --- |",
@@ -223,7 +298,7 @@ def _facts_table(
         lines.append(f"| Change this week | ${_signed(change)} ({_signed(change_pct)}%) |")
 
     lines += _benchmark_section(metrics, change_pct)
-    lines += _activity_section(runs, metrics)
+    lines += _activity_section(metrics["runs"], metrics)
     lines += _risk_section(metrics, lim)
     lines += _trades_section(metrics)
     lines += _watchlist_section(metrics)
@@ -232,7 +307,20 @@ def _facts_table(
     # figures above can be believed, which only means something once they have
     # been stated.
     lines += _integrity_section(metrics)
+    return lines
 
+
+def _facts_table(start: date, end: date, accounts: dict[str, dict]) -> str:
+    """The week, rendered deterministically. The model never touches these."""
+    lines = [
+        f"# MarketAgent — week to {end}",
+        "",
+        f"Covering {start} to {end} inclusive.",
+        "",
+    ]
+    lines += _comparison_section(accounts)
+    for name in ACCOUNTS:
+        lines += _account_section(name, accounts[name])
     return "\n".join(lines)
 
 
@@ -250,7 +338,7 @@ def _integrity_section(metrics: dict[str, Any]) -> list[str]:
     failed = [c for c in checks if not c["ok"]]
     lines = [
         "",
-        "## Data integrity",
+        "### Data integrity",
         "",
     ]
     if failed:
@@ -274,18 +362,18 @@ def _integrity_section(metrics: dict[str, Any]) -> list[str]:
 
 
 def _benchmark_section(metrics: dict[str, Any], change_pct: Decimal | None) -> list[str]:
-    """The alternatives, and the portfolio's own week beside them.
+    """The alternatives, and the account's own week beside them.
 
     A benchmark absent from `metrics` had no point in the window and is simply
     not listed. One with no earlier point shows no weekly change rather than a
     change from nothing.
     """
     if not metrics["benchmarks"]:
-        return ["", "## Against the alternatives", "", "No benchmark data for this week.", ""]
+        return ["", "### Against the alternatives", "", "No benchmark data for this week.", ""]
 
     lines = [
         "",
-        "## Against the alternatives",
+        "### Against the alternatives",
         "",
         "| Benchmark | Value now | Change this week |",
         "| --- | --- | --- |",
@@ -302,7 +390,7 @@ def _benchmark_section(metrics: dict[str, Any], change_pct: Decimal | None) -> l
         lines.append(f"| {label} | {value} | {movement} |")
 
     ours = f"{_signed(change_pct)}%" if change_pct is not None else "not computable"
-    lines += ["", f"The portfolio's own change over the same week was {ours}.", ""]
+    lines += ["", f"This account's own change over the same week was {ours}.", ""]
     return lines
 
 
@@ -315,7 +403,7 @@ def _activity_section(runs: dict[str, Any], metrics: dict[str, Any]) -> list[str
     duration = runs.get("avg_seconds")
     lines = [
         "",
-        "## What the agent did",
+        "### What the agent did",
         "",
         "| | |",
         "| --- | --- |",
@@ -330,8 +418,8 @@ def _activity_section(runs: dict[str, Any], metrics: dict[str, Any]) -> list[str
         f"| Trades | {runs.get('trades_executed', 0)} |",
         f"| LLM cost | ${runs.get('cost_usd', 0)} "
         f"({runs.get('input_tokens', 0)} input, {runs.get('output_tokens', 0)} output tokens) |",
-        f"| Average run | {'—' if duration is None else f'{duration:.0f}s'} against a "
-        f"1800s timeout |",
+        f"| Average run | {'—' if duration is None else f'{duration:.0f}s'} against its "
+        f"job timeout |",
     ]
 
     if metrics["decisions"]:
@@ -359,10 +447,10 @@ def _risk_section(metrics: dict[str, Any], lim: RiskLimits) -> list[str]:
     """
     lines = [
         "",
-        "## The risk engine",
+        "### The risk engine",
         "",
-        "These are the limits in force this week. They are configuration, not "
-        "something the model can change.",
+        "These are the limits in force this week for this account. They are "
+        "configuration, not something the model can change.",
         "",
         # The setting name is in the table because a proposal has to name the
         # knob to be actionable, and the model has no other way to learn what
@@ -378,7 +466,7 @@ def _risk_section(metrics: dict[str, Any], lim: RiskLimits) -> list[str]:
         f"| `RISK_MAX_TOTAL_EXPOSURE_PCT` |",
         f"| Trades per day | {lim.max_daily_trades} | `RISK_MAX_DAILY_TRADES` |",
         f"| Confidence floor | {lim.min_confidence} | `RISK_MIN_CONFIDENCE` |",
-        f"| Tradeable names | {len(lim.allowed_tickers)} | the `companies` watchlist |",
+        f"| Tradeable names | {len(lim.allowed_tickers)} | this account's watchlist |",
         "",
     ]
 
@@ -418,11 +506,11 @@ def _risk_section(metrics: dict[str, Any], lim: RiskLimits) -> list[str]:
 
 def _trades_section(metrics: dict[str, Any]) -> list[str]:
     if not metrics["trades"]:
-        return ["", "## Trades", "", "No trades were made this week.", ""]
+        return ["", "### Trades", "", "No trades were made this week.", ""]
 
     lines = [
         "",
-        "## Trades",
+        "### Trades",
         "",
         "| Status | Trades | Of which simulated | Total notional |",
         "| --- | --- | --- | --- |",
@@ -452,7 +540,7 @@ def _watchlist_section(metrics: dict[str, Any]) -> list[str]:
 
     lines = [
         "",
-        "## By watchlist name",
+        "### By watchlist name",
         "",
         "| Ticker | Relevant articles | Decisions | BUY or SELL | Trades |",
         "| --- | --- | --- | --- | --- |",
@@ -471,7 +559,7 @@ def _reporting_section(metrics: dict[str, Any]) -> list[str]:
     summaries = metrics["summaries"]
     return [
         "",
-        "## Daily reporting",
+        "### Daily reporting",
         "",
         f"{summaries.get('days', 0)} of {REVIEW_DAYS} days have a stored summary: "
         f"{summaries.get('sent', 0)} emailed, {summaries.get('failed', 0)} failed to send, "
@@ -538,5 +626,8 @@ def _prompt(facts: str, previous: list[dict[str, Any]]) -> str:
         f"{facts}\n\n"
         f"{context}"
         "Write the assessment that goes under the tables above, and propose the changes "
-        "the week's evidence supports."
+        "the week's evidence supports. Address both accounts explicitly — which is ahead "
+        "this week, and whether the evidence points to the universe (static-100 vs "
+        "dynamic-500) or to the risk limits as the more likely explanation — rather than "
+        "assessing them as one merged experiment."
     )

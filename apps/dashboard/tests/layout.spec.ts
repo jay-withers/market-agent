@@ -16,7 +16,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { ROUTES } from "./fixtures";
 
-const TABS = ["/", "/holdings", "/activity", "/review"] as const;
+const TABS = ["/", "/holdings", "/activity", "/review", "/compare"] as const;
 
 // 360 is the narrowest mainstream Android; 390 an iPhone; 768 a tablet, where
 // a two-column grid first appears and is the likeliest place for a row to
@@ -50,17 +50,24 @@ const pageOverflow = (page: Page) =>
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
   );
 
-/** Elements sticking out past the viewport, ignoring scroll containers.
+/** Elements sticking out past the viewport, ignoring self-scrolling containers.
  *
- * A wide table inside `.scroll` is allowed to exceed the viewport — that
- * wrapper exists precisely so it scrolls itself instead of the page. Anything
- * else doing it is a bug.
+ * A wide table inside `.scroll`, or an overflowing tab inside `.tabs`, is
+ * allowed to exceed the viewport — both carry `overflow-x: auto` precisely so
+ * *they* scroll instead of the page, which is what `pageOverflow` above
+ * checks separately. `.tabs` growing a fifth entry (Compare) is what first
+ * exercised this at 360-390px; it was already designed to cope, the check
+ * just had not been asked to look past `.scroll` yet. Anything else clipping
+ * is still a bug.
  */
 const clippedOutside = (page: Page) =>
   page.evaluate(() => {
     const limit = document.documentElement.clientWidth + 1;
     return [...document.querySelectorAll<HTMLElement>("body *")]
-      .filter((el) => !el.closest(".scroll") && el.getBoundingClientRect().right > limit)
+      .filter(
+        (el) =>
+          !el.closest(".scroll") && !el.closest(".tabs") && el.getBoundingClientRect().right > limit,
+      )
       .map((el) => `${el.tagName.toLowerCase()}.${el.className}`)
       .slice(0, 5);
   });
@@ -176,10 +183,35 @@ test.describe("navigation", () => {
       ["/holdings", "Holdings"],
       ["/activity", "Activity"],
       ["/review", "Review"],
+      ["/compare", "Compare"],
     ] as const) {
       await page.goto(path);
       await expect(page.locator(".tab.current")).toHaveText(label);
     }
+  });
+});
+
+test.describe("account toggle", () => {
+  test("switches the selected account and remembers the choice", async ({ page }) => {
+    await stubApi(page);
+    await page.goto("/");
+
+    await expect(page.getByRole("button", { name: "static-100" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await page.getByRole("button", { name: "dynamic-500" }).click();
+    await expect(page.getByRole("button", { name: "dynamic-500" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(await pageOverflow(page)).toBe(0);
+
+    await page.reload();
+    await expect(page.getByRole("button", { name: "dynamic-500" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 });
 

@@ -53,20 +53,25 @@ output "dashboard_app_name" {
   value       = azurerm_container_app.dashboard.name
 }
 
-# The three job names are the deploy targets: a scheduled job has to be started
-# by hand to test it, with `az containerapp job start --name <this>`.
-output "agent_job_name" {
-  description = "Name of the agent container app job, for `az containerapp job start`."
-  value       = azurerm_container_app_job.agent.name
+# The job names are the deploy targets: a scheduled job has to be started by
+# hand to test it, with `az containerapp job start --name <this>`.
+output "agent100_job_name" {
+  description = "Name of the static-100 account's agent container app job, for `az containerapp job start`."
+  value       = azurerm_container_app_job.agent100.name
+}
+
+output "agent500_job_name" {
+  description = "Name of the dynamic-500 account's agent container app job, for `az containerapp job start`."
+  value       = azurerm_container_app_job.agent500.name
 }
 
 output "summary_job_name" {
-  description = "Name of the daily summary container app job, for `az containerapp job start`."
+  description = "Name of the daily summary container app job (covers both accounts), for `az containerapp job start`."
   value       = azurerm_container_app_job.daily_summary.name
 }
 
 output "weekly_review_job_name" {
-  description = "Name of the weekly review container app job, for `az containerapp job start`."
+  description = "Name of the weekly review container app job (covers both accounts), for `az containerapp job start`."
   value       = azurerm_container_app_job.weekly_review.name
 }
 
@@ -75,7 +80,17 @@ output "identity_client_id" {
   value       = azurerm_user_assigned_identity.this.client_id
 }
 
-output "broker_sync_job_name" {
-  description = "Name of the account synchronization job, used by make deploy."
-  value       = azurerm_container_app_job.broker_sync.name
+output "sync100_job_name" {
+  description = "Name of the static-100 account synchronization job, used by make deploy."
+  value       = azurerm_container_app_job.sync100.name
+}
+
+output "sync500_job_name" {
+  description = "Name of the dynamic-500 account synchronization job, used by make deploy."
+  value       = azurerm_container_app_job.sync500.name
+}
+
+output "rebalance_job_name" {
+  description = "Name of the dynamic-500 watchlist rebalance job, used by make deploy."
+  value       = azurerm_container_app_job.rebalance.name
 }

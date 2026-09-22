@@ -8,6 +8,11 @@ known, cash and positions move, and the day gets a valuation.
 One rule shapes the rest: **every figure in the email comes from the database.**
 The model writes the commentary and is shown the numbers as a table it is told
 not to restate. Nothing it writes can become a reported balance.
+
+Combined across both accounts rather than one email each: the whole point of
+running 'static-100' and 'dynamic-500' side by side is to compare them, and
+that comparison is easiest to make in one email that shows both, not two
+emails a reader has to hold in their head at once.
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ from decimal import Decimal
 
 import markdown as markdown_lib
 
+from .. import alpaca_api
 from .. import repository as repo
 from ..benchmarks import CASH_SYMBOL, fetch_benchmark_bars
 from ..benchmarks import build as build_benchmarks
@@ -36,6 +42,8 @@ logger = logging.getLogger(__name__)
 
 PRICE_HISTORY_DAYS = 7
 
+ACCOUNTS = ("static-100", "dynamic-500")
+
 # Cost columns are NUMERIC(18,6), because a single filter call costs a fraction
 # of a cent. That scale is right for the ledger and wrong for an email, where
 # "$0.190000" reads as a machine talking to itself.
@@ -47,91 +55,119 @@ def run(
     llm: Llm | None = None,
     broker: Broker | None = None,
 ) -> int:
-    """Produce and send one day's summary. Returns the `daily_summaries` id."""
+    """Produce and send one day's combined summary. Returns the `daily_summaries` id."""
     cfg = settings()
     as_of = as_of or datetime.now(UTC).date()
     llm = llm or AnthropicLlm()
     # The real broker even in a dry run: reconciliation only ever *reads*
-    # orders, and a dry run has no submitted trades to reconcile anyway.
+    # orders, and a dry run has no submitted trades to reconcile anyway. One
+    # instance serves both accounts — it is stateless with respect to which
+    # account it talks to, reading `alpaca_api.headers()` fresh on every call,
+    # so switching accounts is just calling `use_account` before each block.
     broker = broker or AlpacaBroker()
 
-    with pool().connection() as conn:
-        pid = repo.portfolio_id(conn)
-    synchronize(pid, broker, pool())
-    with pool().connection() as conn:
-        inception = repo.portfolio_inception(conn, pid)
-        initial = repo.initial_cash(conn, pid)
-
-    filled = _reconcile(pid, broker)
-    synchronize(pid, broker, pool())
-
     benchmark_symbols = [s.strip() for s in cfg.benchmark_symbols.split(",") if s.strip()]
+    accounts: dict[str, dict] = {}
 
-    with pool().connection() as conn:
-        holdings = [t for t, *_ in repo.load_positions(conn, pid)]
+    for name in ACCOUNTS:
+        alpaca_api.use_account(name)
+        with pool().connection() as conn:
+            pid = repo.portfolio_id(conn, name=name)
+        synchronize(pid, broker, pool())
+        with pool().connection() as conn:
+            inception = repo.portfolio_inception(conn, pid)
+            initial = repo.initial_cash(conn, pid)
 
-    bars = fetch_daily_bars(holdings, days=PRICE_HISTORY_DAYS) if holdings else []
-    benchmark_bars = fetch_benchmark_bars(benchmark_symbols, days=PRICE_HISTORY_DAYS)
+        filled = _reconcile(pid, broker)
+        synchronize(pid, broker, pool())
 
-    with pool().connection() as conn:
-        repo.save_prices(conn, bars + benchmark_bars)
-        conn.commit()
+        with pool().connection() as conn:
+            holdings = [t for t, *_ in repo.load_positions(conn, pid)]
 
-    with pool().connection() as conn:
-        state, unpriced = repo.build_state(conn, pid, latest_close(bars))
-        if unpriced:
-            logger.warning("valuing without a current price for: %s", ", ".join(unpriced))
+        bars = fetch_daily_bars(holdings, days=PRICE_HISTORY_DAYS) if holdings else []
+        benchmark_bars = fetch_benchmark_bars(benchmark_symbols, days=PRICE_HISTORY_DAYS)
 
-        total = state.total_value_usd
-        pnl = money(total - initial)
-        pnl_pct = money(pnl / initial * 100) if initial else Decimal(0)
+        with pool().connection() as conn:
+            repo.save_prices(conn, bars + benchmark_bars)
+            conn.commit()
 
-        repo.save_daily_performance(
-            conn,
-            pid,
-            as_of,
-            cash_usd=state.cash_usd,
-            positions_value_usd=state.invested_usd,
-            total_value_usd=total,
-            pnl_usd=pnl,
-            pnl_pct=pnl_pct,
-        )
+        with pool().connection() as conn:
+            state, unpriced = repo.build_state(conn, pid, latest_close(bars))
+            if unpriced:
+                logger.warning(
+                    "%s: valuing without a current price for: %s", name, ", ".join(unpriced)
+                )
 
-        # Benchmarks are indexed from the first close at or after inception, so
-        # the comparison starts from the same day and the same notional as the
-        # portfolio does.
-        inception_closes = {
-            symbol: close
-            for symbol in benchmark_symbols
-            if symbol != CASH_SYMBOL
-            and (close := repo.close_on(conn, symbol, inception)) is not None
+            total = state.total_value_usd
+            pnl = money(total - initial)
+            pnl_pct = money(pnl / initial * 100) if initial else Decimal(0)
+
+            repo.save_daily_performance(
+                conn,
+                pid,
+                as_of,
+                cash_usd=state.cash_usd,
+                positions_value_usd=state.invested_usd,
+                total_value_usd=total,
+                pnl_usd=pnl,
+                pnl_pct=pnl_pct,
+            )
+
+            # Benchmarks are indexed from the first close at or after this
+            # account's own inception, so the comparison starts from the same
+            # day and the same notional the account itself did.
+            inception_closes = {
+                symbol: close
+                for symbol in benchmark_symbols
+                if symbol != CASH_SYMBOL
+                and (close := repo.close_on(conn, symbol, inception)) is not None
+            }
+            points = build_benchmarks(
+                benchmark_symbols,
+                benchmark_bars,
+                inception_closes,
+                notional_usd=initial,
+                apr_pct=cfg.cash_benchmark_apr_pct,
+                days_held=(as_of - inception).days,
+                as_of=as_of,
+            )
+            repo.save_benchmarks(conn, pid, points)
+
+            activity = repo.day_activity(conn, pid, as_of)
+            account_spend = repo.spend(conn, as_of, pid)
+            conn.commit()
+
+        accounts[name] = {
+            "pid": pid,
+            "state": state,
+            "initial": initial,
+            "pnl": pnl,
+            "pnl_pct": pnl_pct,
+            "points": points,
+            "filled": filled,
+            "activity": activity,
+            "spend": account_spend,
         }
-        points = build_benchmarks(
-            benchmark_symbols,
-            benchmark_bars,
-            inception_closes,
-            notional_usd=initial,
-            apr_pct=cfg.cash_benchmark_apr_pct,
-            days_held=(as_of - inception).days,
-            as_of=as_of,
-        )
-        repo.save_benchmarks(conn, points)
 
-        activity = repo.day_activity(conn, pid, as_of)
-        spend = repo.spend(conn, as_of)
-        conn.commit()
+    # The combined total, not either account's own: the two accounts share one
+    # Anthropic API key and one credit balance, so runway is computed once.
+    with pool().connection() as conn:
+        total_spend = repo.spend(conn, as_of, pid=None)
 
-    facts = _facts_table(
-        as_of, state, initial, pnl, pnl_pct, points, filled, activity, spend, _credit_usd()
+    facts = _facts_table(as_of, accounts, total_spend, _credit_usd())
+    totals = {n: accounts[n]["state"].total_value_usd for n in ACCOUNTS}
+    subject = (
+        f"MarketAgent {as_of}: static-100 ${totals['static-100']} "
+        f"vs dynamic-500 ${totals['dynamic-500']}"
     )
-    subject = f"MarketAgent {as_of}: ${total} ({'+' if pnl >= 0 else ''}{pnl_pct}%)"
     # Built from stored figures, never by the model — and that is exactly why
-    # it has to carry this: a day the agent died still values the portfolio and
-    # would otherwise be indistinguishable in an inbox from a day it worked.
-    if alert := _run_alert(activity["runs"]):
+    # it has to carry this: a day an account's agent died still values that
+    # account and would otherwise be indistinguishable in an inbox from a day
+    # it worked.
+    if alert := _run_alert(accounts):
         subject += f" — {alert}"
 
-    narrative = llm.narrate(_prompt(facts, activity))
+    narrative = llm.narrate(_prompt(facts, accounts))
     body_markdown = f"{facts}\n\n{narrative.value.body_markdown}"
     body_html = markdown_lib.markdown(body_markdown, extensions=["tables"])
 
@@ -154,7 +190,14 @@ def run(
         )
         conn.commit()
 
-    logger.info("summary %d for %s: %s, %d fill(s) reconciled", summary_id, as_of, subject, filled)
+    total_filled = sum(accounts[n]["filled"] for n in ACCOUNTS)
+    logger.info(
+        "summary %d for %s: %s, %d fill(s) reconciled across both accounts",
+        summary_id,
+        as_of,
+        subject,
+        total_filled,
+    )
     return summary_id
 
 
@@ -230,47 +273,60 @@ def _usd(value: Decimal) -> str:
     return f"${value.quantize(CENTS)}"
 
 
-def _spend_section(spend: dict, credit: Decimal | None) -> list[str]:
-    """What the experiment has spent with the model, and what that leaves.
+def _spend_section(
+    spend_by_account: dict[str, dict], total_spend: dict, credit: Decimal | None
+) -> list[str]:
+    """What has been spent with the model, and what that leaves.
+
+    Per account (agent-run calls only) and combined — the combined column also
+    includes the summary and weekly review calls, which are single calls that
+    serve both accounts at once and so are not attributable to one of them.
+    The combined figure is what the runway is computed from, since both
+    accounts spend against the same Anthropic API key and credit balance.
 
     The scope is stated in the table rather than left to be inferred: these
     figures cannot include the call that writes this email, because that call
-    has not happened when the table is built. Understating today's spend by one
-    Sonnet call is fine; letting the model describe the figure as complete is
-    not.
+    has not happened when the table is built. Understating today's spend by
+    one Sonnet call is fine; letting the model describe the figure as
+    complete is not.
 
     A daily average over the last seven days rather than over all time, because
     the question behind it is "how long does this last at the rate it is going
     now" and an average that includes the first week of manual runs answers a
     different one.
     """
-    to_date = spend["to_date_usd"]
-    daily = money(spend["last_7_days_usd"] / 7)
+    daily = money(total_spend["last_7_days_usd"] / 7)
 
     lines = [
         "",
         "## Model spend",
         "",
-        "| | |",
-        "| --- | --- |",
-        f"| Spent today | {_usd(spend['today_usd'])} |",
-        f"| Last 7 days | {_usd(spend['last_7_days_usd'])} ({_usd(daily)}/day) |",
-        f"| Spent in total | {_usd(to_date)} |",
+        "| | " + " | ".join(ACCOUNTS) + " | Combined |",
+        "| --- | " + " | ".join(["---"] * len(ACCOUNTS)) + " | --- |",
+        "| Spent today | "
+        + " | ".join(_usd(spend_by_account[n]["today_usd"]) for n in ACCOUNTS)
+        + f" | {_usd(total_spend['today_usd'])} |",
+        "| Last 7 days | "
+        + " | ".join(_usd(spend_by_account[n]["last_7_days_usd"]) for n in ACCOUNTS)
+        + f" | {_usd(total_spend['last_7_days_usd'])} ({_usd(daily)}/day) |",
+        "| Spent in total | "
+        + " | ".join(_usd(spend_by_account[n]["to_date_usd"]) for n in ACCOUNTS)
+        + f" | {_usd(total_spend['to_date_usd'])} |",
     ]
 
     if credit is not None:
-        remaining = credit - to_date
-        lines.append(f"| Credit remaining | {_usd(remaining)} of {_usd(credit)} |")
+        remaining = credit - total_spend["to_date_usd"]
+        lines.append(f"| Credit remaining | | | {_usd(remaining)} of {_usd(credit)} |")
         if remaining <= 0:
-            lines.append("| Runway | none — the recorded spend has reached the credit |")
+            lines.append("| Runway | | | none — the recorded spend has reached the credit |")
         elif daily > 0:
             # Whole days, rounded towards zero by the int() — the same
             # direction money() rounds, and the safe one for a runway.
-            lines.append(f"| Runway | about {int(remaining / daily)} days at that rate |")
+            lines.append(f"| Runway | | | about {int(remaining / daily)} days at that rate |")
         else:
-            lines.append("| Runway | not estimable — nothing was spent in the last 7 days |")
+            lines.append("| Runway | | | not estimable — nothing was spent in the last 7 days |")
 
-    known_from = spend["known_from"]
+    known_from = total_spend["known_from"]
     scope = (
         f"Spend is what this database recorded, from {known_from} onwards"
         if known_from
@@ -280,6 +336,9 @@ def _spend_section(spend: dict, credit: Decimal | None) -> list[str]:
         "",
         f"{scope}. It excludes the call that writes this email, which has not been "
         "made when these figures are read, and anything else on the same API key. "
+        "Both accounts share one Anthropic API key and one credit balance, so the "
+        "combined column, not either account's own, is what the runway is computed "
+        "from. "
         + (
             "The credit figure is a number configured by hand: Anthropic publishes no "
             "balance endpoint, so nothing here has checked it against the account."
@@ -291,12 +350,40 @@ def _spend_section(spend: dict, credit: Decimal | None) -> list[str]:
     return lines
 
 
-def _facts_table(
-    as_of, state, initial, pnl, pnl_pct, points, filled, activity, spend=None, credit=None
-) -> str:
-    """The figures, rendered deterministically. The model never touches these."""
+def _comparison_section(accounts: dict[str, dict]) -> list[str]:
+    """Which account is ahead, by how much — the reason this report exists."""
+    totals = {n: accounts[n]["state"].total_value_usd for n in ACCOUNTS}
+    pnls = {n: accounts[n]["pnl_pct"] for n in ACCOUNTS}
+    leader = max(ACCOUNTS, key=lambda n: totals[n])
+    trailer = next(n for n in ACCOUNTS if n != leader)
+    gap = totals[leader] - totals[trailer]
+
     lines = [
-        f"# MarketAgent — {as_of}",
+        "## static-100 vs dynamic-500",
+        "",
+        "| | " + " | ".join(ACCOUNTS) + " |",
+        "| --- | " + " | ".join(["---"] * len(ACCOUNTS)) + " |",
+        "| Total value | " + " | ".join(f"${totals[n]}" for n in ACCOUNTS) + " |",
+        "| P&L since inception | "
+        + " | ".join(f"{'+' if pnls[n] >= 0 else ''}{pnls[n]}%" for n in ACCOUNTS)
+        + " |",
+        "",
+    ]
+    if gap == 0:
+        lines.append("The two accounts are exactly level today.")
+    else:
+        lines.append(f"**{leader}** is ahead of **{trailer}** by ${gap} today.")
+    lines.append("")
+    return lines
+
+
+def _account_section(name: str, data: dict) -> list[str]:
+    """One account's figures, as a labelled subsection under its own heading."""
+    state, initial, pnl, pnl_pct = data["state"], data["initial"], data["pnl"], data["pnl_pct"]
+    points, filled, activity = data["points"], data["filled"], data["activity"]
+
+    lines = [
+        f"## {name}",
         "",
         "| | |",
         "| --- | --- |",
@@ -306,7 +393,7 @@ def _facts_table(
         f"| P&L | ${pnl} ({'+' if pnl >= 0 else ''}{pnl_pct}%) |",
         f"| Started with | ${initial} |",
         "",
-        "## Against the alternatives",
+        "### Against the alternatives",
         "",
         "| Benchmark | Value of $" + str(initial) + " |",
         "| --- | --- |",
@@ -325,7 +412,7 @@ def _facts_table(
     trades = activity["trades"]
     if trades:
         lines += [
-            "## Trades today",
+            "### Trades today",
             "",
             "| Ticker | Side | Status | Amount | Quantity |",
             "| --- | --- | --- | --- | --- |",
@@ -341,17 +428,17 @@ def _facts_table(
             "",
         ]
     else:
-        lines += ["## Trades today", "", "No trades were made.", ""]
+        lines += ["### Trades today", "", "No trades were made.", ""]
 
     if activity["holdings"]:
-        lines += ["", "## Holdings", "", "| Ticker | Quantity | Avg cost |", "| --- | --- | --- |"]
+        lines += ["", "### Holdings", "", "| Ticker | Quantity | Avg cost |", "| --- | --- | --- |"]
         for ticker, quantity, avg_usd, _close in activity["holdings"]:
             lines.append(f"| {ticker} | {quantity} | ${avg_usd} |")
 
     if activity["decisions"]:
         lines += [
             "",
-            "## Decisions",
+            "### Decisions",
             "",
             "| Ticker | Action | Confidence | Approved | Bound by |",
             "| --- | --- | --- | --- | --- |",
@@ -360,21 +447,22 @@ def _facts_table(
             amount = f"${approved}" if approved is not None else "—"
             lines.append(f"| {ticker} | {action} | {confidence} | {amount} | {binding} |")
 
-    if spend is not None:
-        lines += _spend_section(spend, credit)
+    lines.append("")
+    return lines
 
+
+def _facts_table(as_of, accounts: dict[str, dict], total_spend, credit) -> str:
+    """The figures, rendered deterministically. The model never touches these."""
+    lines = [f"# MarketAgent — {as_of}", ""]
+    lines += _comparison_section(accounts)
+    for name in ACCOUNTS:
+        lines += _account_section(name, accounts[name])
+    lines += _spend_section({n: accounts[n]["spend"] for n in ACCOUNTS}, total_spend, credit)
     return "\n".join(lines)
 
 
-def _run_alert(runs) -> str | None:
-    """A few words for the subject line, or None when the day ran cleanly.
-
-    The subject is the only part of this email that survives being read on a
-    phone's lock screen, and it is built from stored figures precisely so the
-    model cannot influence it. A day the agent never ran still has a valuation
-    and still produces a perfectly ordinary-looking subject, which is the one
-    case where ordinary-looking is wrong.
-    """
+def _account_run_alert(runs) -> str | None:
+    """A few words for one account's contribution to the subject line."""
     if not runs:
         return "no agent run"
 
@@ -390,6 +478,22 @@ def _run_alert(runs) -> str | None:
     return None
 
 
+def _run_alert(accounts: dict[str, dict]) -> str | None:
+    """A few words for the subject line, or None when both accounts ran cleanly.
+
+    The subject is the only part of this email that survives being read on a
+    phone's lock screen, and it is built from stored figures precisely so the
+    model cannot influence it. A day an account never ran still has a
+    valuation and still produces a perfectly ordinary-looking subject, which
+    is the one case where ordinary-looking is wrong.
+    """
+    parts = []
+    for name in ACCOUNTS:
+        if alert := _account_run_alert(accounts[name]["activity"]["runs"]):
+            parts.append(f"{name}: {alert}")
+    return "; ".join(parts) if parts else None
+
+
 def _run_section(runs) -> list[str]:
     """Whether the agent ran, stated before anything it did or did not do.
 
@@ -401,7 +505,7 @@ def _run_section(runs) -> list[str]:
     """
     if not runs:
         return [
-            "## Agent run",
+            "### Agent run",
             "",
             "**No agent run is recorded for today.** The job either did not "
             "start or died before it could open a row. Nothing below describes "
@@ -411,7 +515,7 @@ def _run_section(runs) -> list[str]:
         ]
 
     lines = [
-        "## Agent run",
+        "### Agent run",
         "",
         "| Started (UTC) | Finished | Status | Trigger |",
         "| --- | --- | --- | --- |",
@@ -439,14 +543,22 @@ def _clock(value) -> str:
     return value.strftime("%H:%M") if value is not None else "—"
 
 
-def _prompt(facts: str, activity) -> str:
-    reasoning = "\n".join(
-        f"- {ticker} ({action}): {text}"
-        for ticker, action, _confidence, _approved, text, _binding in activity["decisions"]
-        if text
-    )
+def _prompt(facts: str, accounts: dict[str, dict]) -> str:
+    sections = []
+    for name in ACCOUNTS:
+        reasoning = "\n".join(
+            f"- {ticker} ({action}): {text}"
+            for ticker, action, _confidence, _approved, text, _binding in accounts[name][
+                "activity"
+            ]["decisions"]
+            if text
+        )
+        sections.append(f"### {name}\n{reasoning or 'No decisions were taken.'}")
     return (
         f"{facts}\n\n"
-        f"## The AI's own reasoning today\n\n{reasoning or 'No decisions were taken.'}\n\n"
-        "Write the commentary that goes under the tables above."
+        "## The AI's own reasoning today\n\n" + "\n\n".join(sections) + "\n\n"
+        "Write the commentary that goes under the tables above. Address both accounts "
+        "explicitly — say which is ahead today and whether that continues or reverses "
+        "a trend, using only the figures above — rather than writing about them as one "
+        "merged portfolio."
     )

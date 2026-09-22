@@ -1,7 +1,29 @@
 import { useEffect, useState } from "react";
 
-import type { Decision, DisplayCurrency, Holding, Overview, Performance, PricePoint, Review, Run, Trade } from "./api";
-import { configureDisplayCurrency, displayMoney, get, getOptional, pct, when } from "./api";
+import type {
+  Account,
+  Comparison,
+  Decision,
+  DisplayCurrency,
+  Holding,
+  Overview,
+  Performance,
+  PricePoint,
+  Review,
+  Run,
+  Trade,
+} from "./api";
+import {
+  ACCOUNTS,
+  configureDisplayCurrency,
+  displayMoney,
+  get,
+  getOptional,
+  pct,
+  when,
+  withAccount,
+} from "./api";
+import { Compare } from "./components/Compare";
 import { Nav, useRoute } from "./components/Nav";
 import { PerformanceChart } from "./components/PerformanceChart";
 import { PriceTrends } from "./components/PriceTrends";
@@ -14,7 +36,7 @@ import {
   TradesTable,
 } from "./components/Tables";
 
-type Data = {
+type AccountData = {
   overview: Overview;
   performance: Performance;
   holdings: Holding[];
@@ -22,12 +44,25 @@ type Data = {
   decisions: Decision[];
   trades: Trade[];
   runs: Run[];
+};
+
+// Neither account-scoped nor tab-scoped: the daily summary and weekly review
+// already cover both accounts in one combined report, and the comparison is
+// the whole reason the two exist side by side — none of this changes when
+// the account toggle moves.
+type SharedData = {
   // Null until the first Sunday run, which is a state and not a failure.
   review: Review | null;
+  comparison: Comparison;
 };
 
 export default function App() {
-  const [data, setData] = useState<Data | null>(null);
+  const [account, setAccount] = useState<Account>(() => {
+    const stored = localStorage.getItem("marketagent-account");
+    return (ACCOUNTS as readonly string[]).includes(stored ?? "") ? (stored as Account) : "static-100";
+  });
+  const [data, setData] = useState<AccountData | null>(null);
+  const [shared, setShared] = useState<SharedData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, navigate] = useRoute();
   const [currency, setCurrency] = useState<DisplayCurrency>(() =>
@@ -36,28 +71,47 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
+    setData(null);
 
-    // Still one round of requests on boot rather than one per tab: the whole
-    // dataset is small, it changes twice a day, and this app sits behind
-    // min_replicas = 0 — paying the cold start once beats paying a spinner on
-    // every tab switch.
+    // One round of requests per account switch rather than one per tab: the
+    // whole per-account dataset is small, it changes twice a day, and this
+    // app sits behind min_replicas = 0 — paying a cold start once beats
+    // paying a spinner on every tab switch.
     Promise.all([
-      get<Overview>("/api/overview"),
-      get<Performance>("/api/performance"),
-      get<Holding[]>("/api/holdings"),
+      get<Overview>(withAccount("/api/overview", account)),
+      get<Performance>(withAccount("/api/performance", account)),
+      get<Holding[]>(withAccount("/api/holdings", account)),
       // A year, filtered to the chosen window on the client: a few hundred rows
       // either way, and switching range then costs nothing.
-      get<PricePoint[]>("/api/prices?days=365"),
-      get<Decision[]>("/api/decisions?limit=50"),
-      get<Trade[]>("/api/trades?limit=50"),
-      get<Run[]>("/api/runs?limit=20"),
+      get<PricePoint[]>(withAccount("/api/prices?days=365", account)),
+      get<Decision[]>(withAccount("/api/decisions?limit=50", account)),
+      get<Trade[]>(withAccount("/api/trades?limit=50", account)),
+      get<Run[]>(withAccount("/api/runs?limit=20", account)),
+    ])
+      .then(([overview, performance, holdings, prices, decisions, trades, runs]) => {
+        if (!cancelled)
+          setData({ overview, performance, holdings, prices, decisions, trades, runs });
+      })
+      .catch((exc: Error) => {
+        if (!cancelled) setError(exc.message);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [account]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    Promise.all([
       // getOptional, because /api/reviews/latest is a 404 until the first
       // weekly run and one missing section must not blank the page.
       getOptional<Review>("/api/reviews/latest"),
+      get<Comparison>("/api/comparison"),
     ])
-      .then(([overview, performance, holdings, prices, decisions, trades, runs, review]) => {
-        if (!cancelled)
-          setData({ overview, performance, holdings, prices, decisions, trades, runs, review });
+      .then(([review, comparison]) => {
+        if (!cancelled) setShared({ review, comparison });
       })
       .catch((exc: Error) => {
         if (!cancelled) setError(exc.message);
@@ -68,6 +122,11 @@ export default function App() {
     };
   }, []);
 
+  function chooseAccount(next: Account) {
+    setAccount(next);
+    localStorage.setItem("marketagent-account", next);
+  }
+
   if (error) {
     return (
       <div className="app">
@@ -76,7 +135,7 @@ export default function App() {
     );
   }
 
-  if (!data) {
+  if (!data || !shared) {
     return (
       <div className="app">
         <div className="state">Loading…</div>
@@ -105,6 +164,15 @@ export default function App() {
           </div>
         </div>
         <div className="masthead-actions">
+          <div className="account-toggle" role="group" aria-label="Account">
+            {ACCOUNTS.map((name) => (
+              <button key={name} className={`toggle ${account === name ? "current" : ""}`}
+                aria-pressed={account === name}
+                onClick={() => chooseAccount(name)}>
+                {name}
+              </button>
+            ))}
+          </div>
           <div className="currency-toggle" role="group" aria-label="Display currency">
             {(["USD", "GBP"] as const).map((code) => (
               <button key={code} className={`toggle ${effectiveCurrency === code ? "current" : ""}`}
@@ -213,10 +281,16 @@ export default function App() {
         <section className="card">
           <h2>Weekly review</h2>
           <p className="hint">
-            Written on Sunday from the week&rsquo;s stored figures, with the changes it
-            proposes to the experiment.
+            Written on Sunday from the week&rsquo;s stored figures, covering both accounts, with
+            the changes it proposes to the experiment.
           </p>
-          <WeeklyReview review={data.review} />
+          <WeeklyReview review={shared.review} />
+        </section>
+      )}
+
+      {tab === "/compare" && (
+        <section className="card">
+          <Compare data={shared.comparison} />
         </section>
       )}
     </div>
