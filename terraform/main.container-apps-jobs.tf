@@ -56,7 +56,8 @@ module "naming_weekly_review" {
 # it into an exception so the failure is recorded.
 resource "azurerm_container_app_job" "agent100" {
   name                         = module.naming_agent100.container_app_job.name
-  container_app_environment_id = azurerm_container_app_environment.this.id
+  container_app_environment_id = local.container_app_environment_id
+  workload_profile_name        = local.container_app_workload_profile_name
   resource_group_name          = azurerm_resource_group.this.name
   location                     = azurerm_resource_group.this.location
 
@@ -121,7 +122,8 @@ resource "azurerm_container_app_job" "agent100" {
 # need its timeout revised upward from real runs.
 resource "azurerm_container_app_job" "agent500" {
   name                         = module.naming_agent500.container_app_job.name
-  container_app_environment_id = azurerm_container_app_environment.this.id
+  container_app_environment_id = local.container_app_environment_id
+  workload_profile_name        = local.container_app_workload_profile_name
   resource_group_name          = azurerm_resource_group.this.name
   location                     = azurerm_resource_group.this.location
 
@@ -174,7 +176,8 @@ resource "azurerm_container_app_job" "agent500" {
 # email covering both accounts, and their comparison, in one send.
 resource "azurerm_container_app_job" "daily_summary" {
   name                         = module.naming_daily_summary.container_app_job.name
-  container_app_environment_id = azurerm_container_app_environment.this.id
+  container_app_environment_id = local.container_app_environment_id
+  workload_profile_name        = local.container_app_workload_profile_name
   resource_group_name          = azurerm_resource_group.this.name
   location                     = azurerm_resource_group.this.location
 
@@ -235,7 +238,8 @@ resource "azurerm_container_app_job" "daily_summary" {
 # rather than considered.
 resource "azurerm_container_app_job" "weekly_review" {
   name                         = module.naming_weekly_review.container_app_job.name
-  container_app_environment_id = azurerm_container_app_environment.this.id
+  container_app_environment_id = local.container_app_environment_id
+  workload_profile_name        = local.container_app_workload_profile_name
   resource_group_name          = azurerm_resource_group.this.name
   location                     = azurerm_resource_group.this.location
 
@@ -303,7 +307,8 @@ module "naming_sync500" {
 # Read-only broker requests for static-100; no model calls, orders or email.
 resource "azurerm_container_app_job" "sync100" {
   name                         = module.naming_sync100.container_app_job.name
-  container_app_environment_id = azurerm_container_app_environment.this.id
+  container_app_environment_id = local.container_app_environment_id
+  workload_profile_name        = local.container_app_workload_profile_name
   resource_group_name          = azurerm_resource_group.this.name
   location                     = azurerm_resource_group.this.location
 
@@ -358,7 +363,8 @@ resource "azurerm_container_app_job" "sync100" {
 # bound the agent jobs carry.
 resource "azurerm_container_app_job" "sync500" {
   name                         = module.naming_sync500.container_app_job.name
-  container_app_environment_id = azurerm_container_app_environment.this.id
+  container_app_environment_id = local.container_app_environment_id
+  workload_profile_name        = local.container_app_workload_profile_name
   resource_group_name          = azurerm_resource_group.this.name
   location                     = azurerm_resource_group.this.location
 
@@ -421,7 +427,8 @@ module "naming_rebalance" {
 # and DRY_RUN/ALPACA_TRADING_BASE_URL are irrelevant here.
 resource "azurerm_container_app_job" "rebalance" {
   name                         = module.naming_rebalance.container_app_job.name
-  container_app_environment_id = azurerm_container_app_environment.this.id
+  container_app_environment_id = local.container_app_environment_id
+  workload_profile_name        = local.container_app_workload_profile_name
   resource_group_name          = azurerm_resource_group.this.name
   location                     = azurerm_resource_group.this.location
 

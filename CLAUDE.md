@@ -81,6 +81,12 @@ Two repo-specific conventions on top of that, both requested explicitly:
 
 ## What this configuration creates
 
+Dev uses the existing `log-platform-dev`, `appi-platform-dev` and
+`cae-platform-dev` in `rg-platform-dev`, selected by `shared_platform` in
+`terraform/environments/dev.tfvars`. These are data sources; workspace quotas
+and retention belong to the platform. Stg/prd still create dedicated resources.
+See `docs/shared-platform-migration.md` before applying to an existing dev stack.
+
 Resource group, user-assigned managed identity, Log Analytics workspace,
 Application Insights (workspace-based), Key Vault (RBAC), Container Apps
 environment (Consumption-only), two container apps (`api`, `dashboard`), three

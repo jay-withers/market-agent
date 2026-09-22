@@ -243,12 +243,10 @@ logs-azure: ## Tail an agent job's logs in Azure (only while a run is in flight)
 # after a scheduled run has finished. Ingestion lags by a few minutes, which is
 # why it complements the live tail rather than replacing it.
 logs-azure-history: ## An agent job's recent logs from Log Analytics (LINES=200). PORTFOLIO=static-100|dynamic-500
-	@if [ "$(PORTFOLIO)" = "dynamic-500" ]; then CONTAINER=agent500; else CONTAINER=agent100; fi; \
+	@if [ "$(PORTFOLIO)" = "dynamic-500" ]; then CONTAINER=agent500; JOB_OUTPUT=agent500_job_name; else CONTAINER=agent100; JOB_OUTPUT=agent100_job_name; fi; \
 	az monitor log-analytics query \
-	  --workspace $$(az monitor log-analytics workspace list \
-	    --resource-group $$(terraform -chdir=$(TF_DIR) output -raw resource_group_name) \
-	    --query "[0].customerId" -o tsv) \
-	  --analytics-query "ContainerAppConsoleLogs_CL | where ContainerName_s == '$$CONTAINER' | top $(LINES) by TimeGenerated desc | order by TimeGenerated asc | project TimeGenerated, Log_s" \
+	  --workspace $$(terraform -chdir=$(TF_DIR) output -raw log_analytics_workspace_customer_id) \
+	  --analytics-query "ContainerAppConsoleLogs_CL | where EnvironmentName_s == '$$(terraform -chdir=$(TF_DIR) output -raw container_app_log_environment_name)' | where JobName_s == '$$(terraform -chdir=$(TF_DIR) output -raw $$JOB_OUTPUT)' | where ContainerName_s == '$$CONTAINER' | top $(LINES) by TimeGenerated desc | order by TimeGenerated asc | project TimeGenerated, Log_s" \
 	  -o table
 
 # -backend=false: the azurerm backend is configured partially (see

@@ -10,17 +10,6 @@ locals {
   # rather than by three separate interpolations remembering to.
   alert_name_prefix = "${var.project_name}-${var.environment}"
 
-  # Job failures are alerted via a log query (`azurerm_monitor_scheduled_query_rules_alert_v2.job_failed`
-  # in main.alerts.tf) rather than this metric, after the metric alert was
-  # verified live on 2026-09-18 to never fire: a deliberately-triggered failed
-  # execution held `Executions{state=Failed}` at 1 for several minutes,
-  # comfortably inside a 15-minute window, and `Microsoft.AlertsManagement/alerts`
-  # still showed nothing days later. The rule was correct by every check
-  # Terraform can express — scope, dimension, threshold — so this reads as a
-  # platform-side gap in alerting on this metric/resource combination, not a
-  # config mistake. `ContainerAppSystemLogs_CL` ingests the same crash reliably
-  # and is what the investigation actually used to find the failure.
-
   database_alerts = {
     # The one resource here that is always on, and the only one that can fail in
     # a way no job's own error handling can report: a job that cannot reach the

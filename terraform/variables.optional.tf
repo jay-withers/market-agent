@@ -1,3 +1,16 @@
+variable "shared_platform" {
+  description = "Existing platform resources in the deployment subscription. Null creates dedicated resources. Platform retention, ingestion caps and workspace-wide alerts remain platform-owned."
+  type = object({
+    subscription_id                = string
+    resource_group_name            = string
+    log_analytics_workspace_name   = string
+    application_insights_name      = string
+    container_app_environment_name = string
+    workload_profile_name          = optional(string, "Consumption")
+  })
+  default = null
+}
+
 variable "project_name" {
   description = "Project name included in every resource name. Lowercase only (several resource types reject uppercase), and no longer than 15 characters: beyond that `ca-<project>-<env>-dashboard` exceeds the 32 characters container apps allow and gets silently truncated. Changing this is the way to resolve a clash on the globally unique Key Vault or PostgreSQL server names, including a name still held by a soft-deleted vault."
   type        = string

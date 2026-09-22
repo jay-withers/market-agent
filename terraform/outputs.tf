@@ -1,3 +1,18 @@
+output "log_analytics_workspace_customer_id" {
+  description = "Workspace customer ID consumed by make logs-azure-history."
+  value       = local.log_analytics_workspace_customer_id
+}
+
+output "container_app_environment_id" {
+  description = "Environment ARM ID used to bind the dashboard hostname across resource groups."
+  value       = local.container_app_environment_id
+}
+
+output "container_app_log_environment_name" {
+  description = "Generated environment identifier in EnvironmentName_s, used by make logs-azure-history."
+  value       = local.container_app_log_environment_name
+}
+
 output "resource_group_name" {
   description = "Name of the created resource group."
   value       = azurerm_resource_group.this.name

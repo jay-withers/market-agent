@@ -15,12 +15,12 @@ both deployed and running — see [The application](#the-application) and
 
 | Resource | Purpose |
 | --- | --- |
-| Resource group | Everything below lives here |
+| Resource group | Application resources; dev uses shared platform resources in `rg-platform-dev` |
 | User-assigned managed identity | Shared by all five workloads; reads Key Vault and authenticates to PostgreSQL |
-| Log Analytics workspace | Container and job logs, with a daily ingestion cap |
-| Application Insights | Workspace-based, with a daily data cap |
+| Log Analytics workspace | Dev uses existing `log-platform-dev` |
+| Application Insights | Dev uses existing `appi-platform-dev` |
 | Key Vault | RBAC-authorised. Terraform owns the vault, **not** the secret values |
-| Container Apps environment | Consumption-only, so idle costs nothing |
+| Container Apps environment | Dev uses existing `cae-platform-dev`, on its Consumption profile |
 | Container app `api` | Read-only FastAPI backend, scales to zero |
 | Container app `dashboard` | React dashboard on nginx, scales to zero |
 | Container app job `agent` | Scheduled: news → analysis → risk engine → Alpaca paper order |
@@ -29,8 +29,8 @@ both deployed and running — see [The application](#the-application) and
 | Container app job `weekly-review` | Scheduled Sunday: reviews the week, proposes changes |
 | PostgreSQL Flexible Server + database | Burstable B1ms, Entra-only authentication. The one resource that bills while idle |
 | Action group | Where alerts go — subscription Owners, by role rather than by address |
-| Metric alerts (5) | A failed execution of each job; the database down or near full |
-| Log alert | Log ingestion approaching the daily cap, past which logging stops |
+| Metric alerts (2) | The database is down or near full |
+| Log alerts | Dedicated workspaces get an ingestion-quota alert; the shared platform monitors job failures |
 | Budget | Monthly Azure spend, notifying at 80% actual and 100% forecast |
 | Diagnostic settings (2) | PostgreSQL server logs and Key Vault audit events |
 
@@ -230,10 +230,10 @@ that cannot reach the database may never get far enough to write down why:
 
 | Alert | Fires when | Severity |
 | --- | --- | --- |
-| `*-agent-failed`, `*-summary-failed`, `*-weekly-failed` | A job execution reports `Failed` | 1 |
+| `alert-platform-dev-job-failed` | Any job in the shared environment crashes | 1 |
 | `*-db-down` | The server stops reporting itself alive | 0 |
 | `*-db-storage` | Storage passes 80% of a figure that can never be reduced | 2 |
-| `msqa-*` | Log ingestion approaches the daily cap, past which logging stops | 2 |
+| `msqa-*` (dedicated workspace only) | Log ingestion approaches the daily cap, past which logging stops | 2 |
 
 They reach whoever holds **Owner** on the subscription, via an ARM role receiver
 rather than an address — this repository is public and the tfvars files are
@@ -326,7 +326,7 @@ and that is not a configuration mistake — see below.
 | Container apps | £0 — `min_replicas = 0`, Consumption plan |
 | Container app jobs | £0 — billed only while a scheduled run is in flight |
 | Key Vault | Effectively £0 — priced per operation |
-| Log Analytics / App Insights | £0 up to the 5 GB/month free grant, which `daily_quota_gb = 0.15` keeps ingestion inside |
+| Log Analytics / App Insights | Dev shares platform ingestion and caps; costs accrue in `rg-platform-dev`, outside the app resource-group budget |
 | Managed identity, resource group | Free |
 | Alert rules | A few pence a month each; they read the platform metric store and need no agent or synthetic traffic |
 | PostgreSQL Flexible Server | **~£13/month, always** — ~£9.71 B1ms compute plus ~£3 storage |
@@ -404,6 +404,20 @@ scale-to-zero compute, each PostgreSQL server that exists costs ~£13/month whet
 used or not, and "production" here still means paper trading — so a second and
 third copy would triple the only bill this project has, for nothing. The plumbing is kept so that changing this later is a decision, not a
 rebuild.
+
+Dev sets `shared_platform` to the three existing resources in `rg-platform-dev`
+(subscription `02d69b18-478e-4355-ba6e-3cac5585d1e9`). Terraform reads them as data
+sources; their lifecycle, retention, ingestion caps and workspace-wide quota alerts
+belong to the platform. PostgreSQL and Key Vault diagnostics go to the shared
+workspace, and the workloads receive the shared Application Insights connection
+string. Job alerts and historical log queries filter by environment and job.
+The deployment identity needs read access to those resources and permission to
+join the environment and manage the dashboard certificate there.
+Stg/prd leave `shared_platform` unset and retain dedicated resources.
+
+For an existing dev deployment, follow the
+[shared-platform migration notes](docs/shared-platform-migration.md) before apply:
+the environment change replaces workloads and changes their default hostnames.
 
 These files are **committed, not gitignored** — see `.gitignore`. Don't put
 secrets in them; `gitleaks` (pre-commit and CI) scans every commit as a backstop.

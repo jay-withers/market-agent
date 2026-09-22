@@ -58,11 +58,9 @@ resource "azurerm_monitor_action_group" "this" {
 # ---------------------------------------------------------------------------
 # The jobs and the database
 #
-# One resource for both rules: they differ only in what they watch, and
-# every one of them wants the same name shape, action group and tags. What each
+# One resource for both database rules: they differ only in what they watch,
+# and both want the same name shape, action group and tags. What each
 # watches — and why that threshold — lives beside it in `locals.alerts.tf`.
-# Job failures used to be a third entry here; see `job_failed` below for why
-# they moved to a log alert instead.
 # ---------------------------------------------------------------------------
 
 resource "azurerm_monitor_metric_alert" "this" {
@@ -103,82 +101,6 @@ resource "azurerm_monitor_metric_alert" "this" {
 }
 
 # ---------------------------------------------------------------------------
-# Job failures
-#
-# Tried first as a metric alert on `Microsoft.App/jobs`' `Executions` gauge,
-# identical in shape to the two rules above. Verified live on 2026-09-18 that
-# it never fires: a deliberately-triggered failed execution held
-# `Executions{state=Failed}` at 1 for several minutes — comfortably inside a
-# 15-minute window against a 5-minute evaluation — and
-# `Microsoft.AlertsManagement/alerts` still showed nothing for the resource
-# group days later. The rule was correct by every check Terraform can express;
-# this reads as a platform-side gap in alerting on that particular
-# metric/resource combination.
-#
-# `ContainerAppSystemLogs_CL` is what actually found the failure during that
-# investigation and it ingests reliably, so this queries it instead for the
-# three Reason_s values a real crash loop is observed to emit:
-# `ContainerCrashing` (the exec/OCI failure itself), `BackoffLimitExceeded`
-# (the job giving up), and `StartError` (the replica's own failure record).
-#
-# One rule for every job, not one rule each, the same DRY reasoning as the
-# metric alert above — but a log query has no `dimension` block, so
-# `resource_id_column` does the equivalent job: it is what makes this fire as
-# independently tracked alerts, one per job ARM ID, rather than a single
-# alert that can only ever say "one of the jobs failed." Covers all seven
-# jobs, including sync100/sync500/rebalance, which this rule never covered
-# even in its single-account broker_sync form — closed here rather than
-# carried forward as a gap.
-resource "azurerm_monitor_scheduled_query_rules_alert_v2" "job_failed" {
-  name                = "alert-${local.alert_name_prefix}-job-failed"
-  resource_group_name = azurerm_resource_group.this.name
-  location            = azurerm_resource_group.this.location
-  description         = "A container app job execution crashed instead of running to completion."
-  severity            = 1
-
-  scopes                = [azurerm_log_analytics_workspace.this.id]
-  evaluation_frequency  = "PT5M"
-  window_duration       = "PT15M"
-  target_resource_types = ["Microsoft.App/jobs"]
-
-  criteria {
-    # The case() maps the log's plain job name back to the ARM ID
-    # `resource_id_column` needs, without a second `where` per job.
-    query = <<-KQL
-      ContainerAppSystemLogs_CL
-      | where Reason_s in ("ContainerCrashing", "BackoffLimitExceeded", "StartError")
-      | extend JobArmId = case(
-          JobName_s == "${azurerm_container_app_job.agent100.name}", "${azurerm_container_app_job.agent100.id}",
-          JobName_s == "${azurerm_container_app_job.agent500.name}", "${azurerm_container_app_job.agent500.id}",
-          JobName_s == "${azurerm_container_app_job.daily_summary.name}", "${azurerm_container_app_job.daily_summary.id}",
-          JobName_s == "${azurerm_container_app_job.weekly_review.name}", "${azurerm_container_app_job.weekly_review.id}",
-          JobName_s == "${azurerm_container_app_job.sync100.name}", "${azurerm_container_app_job.sync100.id}",
-          JobName_s == "${azurerm_container_app_job.sync500.name}", "${azurerm_container_app_job.sync500.id}",
-          JobName_s == "${azurerm_container_app_job.rebalance.name}", "${azurerm_container_app_job.rebalance.id}",
-          ""
-        )
-      | where JobArmId != ""
-    KQL
-
-    time_aggregation_method = "Count"
-    resource_id_column      = "JobArmId"
-    operator                = "GreaterThan"
-    threshold               = 0
-
-    failing_periods {
-      minimum_failing_periods_to_trigger_alert = 1
-      number_of_evaluation_periods             = 1
-    }
-  }
-
-  action {
-    action_groups = [azurerm_monitor_action_group.this.id]
-  }
-
-  tags = local.tags
-}
-
-# ---------------------------------------------------------------------------
 # The monitoring watching itself
 # ---------------------------------------------------------------------------
 
@@ -190,13 +112,16 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "job_failed" {
 # ~0.3% of the cap, so the event this catches is a runaway, and an hour's
 # notice of a runaway is plenty.
 resource "azurerm_monitor_scheduled_query_rules_alert_v2" "log_quota" {
+  # Shared-workspace volume and caps belong to the platform, not this app.
+  count = var.shared_platform == null ? 1 : 0
+
   name                = module.naming.monitor_scheduled_query_rules_alert.name
   resource_group_name = azurerm_resource_group.this.name
   location            = azurerm_resource_group.this.location
   description         = "Log ingestion is approaching the workspace daily cap, past which logging stops."
   severity            = 2
 
-  scopes                = [azurerm_log_analytics_workspace.this.id]
+  scopes                = [local.log_analytics_workspace_id]
   evaluation_frequency  = "PT1H"
   window_duration       = "P1D"
   target_resource_types = ["Microsoft.OperationalInsights/workspaces"]

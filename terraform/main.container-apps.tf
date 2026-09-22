@@ -28,7 +28,8 @@ module "naming_dashboard" {
 # confusingly, do require it.
 resource "azurerm_container_app" "api" {
   name                         = module.naming_api.container_app.name
-  container_app_environment_id = azurerm_container_app_environment.this.id
+  container_app_environment_id = local.container_app_environment_id
+  workload_profile_name        = local.container_app_workload_profile_name
   resource_group_name          = azurerm_resource_group.this.name
   revision_mode                = "Single"
 
@@ -156,7 +157,8 @@ resource "azurerm_container_app" "api" {
 
 resource "azurerm_container_app" "dashboard" {
   name                         = module.naming_dashboard.container_app.name
-  container_app_environment_id = azurerm_container_app_environment.this.id
+  container_app_environment_id = local.container_app_environment_id
+  workload_profile_name        = local.container_app_workload_profile_name
   resource_group_name          = azurerm_resource_group.this.name
   revision_mode                = "Single"
 
@@ -276,9 +278,14 @@ resource "azurerm_container_app_environment_managed_certificate" "dashboard" {
   count = var.dashboard_custom_domain_name != "" ? 1 : 0
 
   name                         = "dashboard-${replace(var.dashboard_custom_domain_name, ".", "-")}"
-  container_app_environment_id = azurerm_container_app_environment.this.id
+  container_app_environment_id = local.container_app_environment_id
   subject_name                 = var.dashboard_custom_domain_name
   domain_control_validation    = "CNAME"
+
+  # Azure will not issue a managed certificate until the hostname exists on an
+  # app in this environment. The hostname is initially added with no certificate
+  # below; after this resource exists, the documented CLI step binds the two.
+  depends_on = [azurerm_container_app_custom_domain.dashboard]
 }
 
 resource "azurerm_container_app_custom_domain" "dashboard" {
@@ -286,7 +293,7 @@ resource "azurerm_container_app_custom_domain" "dashboard" {
 
   name                     = var.dashboard_custom_domain_name
   container_app_id         = azurerm_container_app.dashboard.id
-  certificate_binding_type = "SniEnabled"
+  certificate_binding_type = "Disabled"
 
   # container_app_environment_certificate_id deliberately unset: that field is
   # for a bring-your-own (azurerm_container_app_environment_certificate) cert
@@ -296,22 +303,21 @@ resource "azurerm_container_app_custom_domain" "dashboard" {
   # (hashicorp/terraform-provider-azurerm#25788, still open for this exact
   # resource as of azurerm 5.4.0's SDK).
   #
-  # This resource cannot actually finish the bind for a managed certificate —
-  # confirmed live: apply reports certificate_binding_type = "SniEnabled" with
-  # no error, but `az containerapp hostname list` still shows BindingType
-  # Disabled, because ARM's actual bind operation needs the certificate ID in
-  # the request and there is no field here the provider will accept it in
+  # This resource cannot finish the bind for a managed certificate because
+  # ARM's bind operation needs the certificate ID and there is no field here
+  # the provider will accept it in
   # (hashicorp/terraform-provider-azurerm#27362, open, no fix). The real bind
   # is one manual step after every apply that (re)creates this resource or the
   # certificate:
   #
   #   az containerapp hostname bind --hostname <name> \
   #     -g <resource_group_name> -n <dashboard_app_name> \
-  #     --environment <container_app_environment_name> --validation-method CNAME
+  #     --environment <container_app_environment_id> --validation-method CNAME
   #
-  # Same shape as API_REQUIRE_TOKEN and pgaadauth_create_principal elsewhere in
-  # this repo: something `azurerm` cannot express, pushed by hand once. A
-  # subsequent plan reports no diff — the CLI bind updates the same
-  # certificate_binding_type this resource already declares.
-  depends_on = [azurerm_container_app_environment_managed_certificate.dashboard]
+  # Ignore the CLI's Disabled -> SniEnabled update once it has completed the
+  # bind. On initial creation Terraform still sends Disabled, which is required
+  # to establish the hostname before Azure will issue the certificate.
+  lifecycle {
+    ignore_changes = [certificate_binding_type]
+  }
 }
