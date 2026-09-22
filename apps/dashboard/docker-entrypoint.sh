@@ -13,6 +13,9 @@ set -eu
 : "${API_TOKEN:=}"
 : "${IDENTITY_ENDPOINT:=}"
 : "${IDENTITY_HEADER:=}"
+# Not a secret, just unset in a local `docker compose` run — "dev" there beats
+# an empty string, which would render as a blank version badge.
+: "${IMAGE_TAG:=dev}"
 
 mkdir -p /tmp/dashboard
 
@@ -69,7 +72,7 @@ if [ -n "$KEY_VAULT_URI" ]; then
     exit 1
   fi
 fi
-export API_ORIGIN API_TOKEN
+export API_ORIGIN API_TOKEN IMAGE_TAG
 
 # envsubst with an explicit variable list: without it, every $-sign in the
 # template is substituted, which quietly empties anything that looks like a
@@ -78,14 +81,16 @@ export API_ORIGIN API_TOKEN
 # runs as uid 101 and /usr/share/nginx/html is root-owned, so writing there
 # fails with "Permission denied" at start-up. Keeping the document root
 # read-only is the better posture anyway — nginx aliases this one path.
-# shellcheck disable=SC2016  # the literal ${API_ORIGIN}/${API_TOKEN} *are* the
-# argument: envsubst takes the variable list unexpanded, and expanding it here
-# would substitute the values into the list and leave the template untouched.
-envsubst '${API_ORIGIN} ${API_TOKEN}' \
+# shellcheck disable=SC2016  # the literal ${API_ORIGIN}/${API_TOKEN}/${IMAGE_TAG}
+# *are* the argument: envsubst takes the variable list unexpanded, and
+# expanding it here would substitute the values into the list and leave the
+# template untouched.
+envsubst '${API_ORIGIN} ${API_TOKEN} ${IMAGE_TAG}' \
   < /usr/share/nginx/html/config.json.template \
   > /tmp/dashboard/config.json
 
 echo "dashboard: API_ORIGIN=${API_ORIGIN:-(same origin)}"
+echo "dashboard: IMAGE_TAG=${IMAGE_TAG}"
 # Presence only, never the value: this line reaches Log Analytics, and
 # `${API_TOKEN:-(not set)}` alone would have printed the token itself once
 # set, since `:-` only substitutes when the variable is unset or empty.

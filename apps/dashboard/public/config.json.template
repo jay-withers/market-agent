@@ -1,1 +1,1 @@
-{ "apiOrigin": "${API_ORIGIN}", "apiToken": "${API_TOKEN}" }
+{ "apiOrigin": "${API_ORIGIN}", "apiToken": "${API_TOKEN}", "version": "${IMAGE_TAG}" }

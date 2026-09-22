@@ -20,6 +20,7 @@ import {
   displayMoney,
   get,
   getOptional,
+  getVersion,
   pct,
   when,
   withAccount,
@@ -57,6 +58,9 @@ type SharedData = {
   // Null until the first Sunday run, which is a state and not a failure.
   review: Review | null;
   comparison: Comparison;
+  // The dashboard's own image tag — empty locally (docker-entrypoint.sh's
+  // IMAGE_TAG default there is "dev") or if config.json could not be read.
+  version: string;
 };
 
 export default function App() {
@@ -113,9 +117,10 @@ export default function App() {
       // weekly run and one missing section must not blank the page.
       getOptional<Review>("/api/reviews/latest"),
       get<Comparison>("/api/comparison"),
+      getVersion(),
     ])
-      .then(([review, comparison]) => {
-        if (!cancelled) setShared({ review, comparison });
+      .then(([review, comparison, version]) => {
+        if (!cancelled) setShared({ review, comparison, version });
       })
       .catch((exc: Error) => {
         if (!cancelled) setError(exc.message);
@@ -162,7 +167,13 @@ export default function App() {
     <div className="app">
       <header className="masthead">
         <div>
-          <h1>MarketAgent</h1>
+          <h1>
+            MarketAgent
+            {/* Empty in local dev (vite serves no config.json) and on any
+                deploy that predates this — absence reads as "unknown", not
+                as a broken build. */}
+            {shared.version && <span className="version">{shared.version}</span>}
+          </h1>
           <div className="subtitle">
             An AI paper-trading experiment. No real money is ever connected.
           </div>

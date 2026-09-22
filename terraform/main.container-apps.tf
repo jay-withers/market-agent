@@ -205,6 +205,18 @@ resource "azurerm_container_app" "dashboard" {
         value = azurerm_key_vault.this.vault_uri
       }
 
+      # Read by docker-entrypoint.sh and rendered into config.json as
+      # `version`, so the dashboard can say which build it is without anyone
+      # having to cross-reference `az containerapp show` against ghcr.io tags
+      # by hand. This is env[3] below in lifecycle.ignore_changes for the same
+      # reason IMAGE_TAG is ignored on the api app: this seeds the first
+      # revision only, and `make deploy` (--set-env-vars IMAGE_TAG=...) owns
+      # it after that.
+      env {
+        name  = "IMAGE_TAG"
+        value = var.dashboard_image_tag
+      }
+
       # nginx answers this from memory, without reaching the API. A dashboard
       # that restarted whenever the API blipped would be strictly worse than
       # one showing a stale error.
@@ -235,11 +247,19 @@ resource "azurerm_container_app" "dashboard" {
   tags = local.tags
 
   # Same split as the api app: dashboard_image_tag only seeds the first
-  # revision, and `make deploy` (az cli) owns the running image after that.
-  # API_ORIGIN isn't ignored — the deploy script never touches it, so it stays
-  # fully terraform-managed and follows the api app's fqdn if that ever moves.
+  # revision, and `make deploy` (az cli) owns the running image and IMAGE_TAG
+  # after that. Only env[3] (IMAGE_TAG) is ignored, not the whole list —
+  # unlike the api app's env, these four blocks are static literals rather
+  # than a `dynamic` block over a map, so indexing by position is safe here
+  # (the order is fixed in this file, not derived from map iteration). That
+  # keeps API_ORIGIN self-healing: a plain `terraform apply` still follows the
+  # api app's fqdn if it ever moves, which is the property ignoring the whole
+  # list would have quietly given up.
   lifecycle {
-    ignore_changes = [template[0].container[0].image]
+    ignore_changes = [
+      template[0].container[0].image,
+      template[0].container[0].env[3],
+    ]
   }
 }
 
