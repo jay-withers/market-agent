@@ -136,7 +136,7 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "job_failed" {
   description         = "A container app job execution crashed instead of running to completion."
   severity            = 1
 
-  scopes                = [azurerm_log_analytics_workspace.this.id]
+  scopes                = [local.log_analytics_workspace_id]
   evaluation_frequency  = "PT5M"
   window_duration       = "PT15M"
   target_resource_types = ["Microsoft.App/jobs"]
@@ -146,6 +146,7 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "job_failed" {
     # `resource_id_column` needs, without a second `where` per job.
     query = <<-KQL
       ContainerAppSystemLogs_CL
+      | where EnvironmentName_s == "${local.container_app_log_environment_name}"
       | where Reason_s in ("ContainerCrashing", "BackoffLimitExceeded", "StartError")
       | extend JobArmId = case(
           JobName_s == "${azurerm_container_app_job.agent100.name}", "${azurerm_container_app_job.agent100.id}",
@@ -190,13 +191,16 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "job_failed" {
 # ~0.3% of the cap, so the event this catches is a runaway, and an hour's
 # notice of a runaway is plenty.
 resource "azurerm_monitor_scheduled_query_rules_alert_v2" "log_quota" {
+  # Shared-workspace volume and caps belong to the platform, not this app.
+  count = var.shared_platform == null ? 1 : 0
+
   name                = module.naming.monitor_scheduled_query_rules_alert.name
   resource_group_name = azurerm_resource_group.this.name
   location            = azurerm_resource_group.this.location
   description         = "Log ingestion is approaching the workspace daily cap, past which logging stops."
   severity            = 2
 
-  scopes                = [azurerm_log_analytics_workspace.this.id]
+  scopes                = [local.log_analytics_workspace_id]
   evaluation_frequency  = "PT1H"
   window_duration       = "P1D"
   target_resource_types = ["Microsoft.OperationalInsights/workspaces"]

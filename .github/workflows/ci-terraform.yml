@@ -7,9 +7,9 @@ name: ci-terraform
 # in azure-landingzone and terraform-root-aks the root modules resolve each
 # other with data sources, so a plan against a not-yet-applied dependency fails
 # at plan time and reports a CI failure for something that is not a defect.
-# This configuration is a single self-contained root module and plans cleanly,
-# so the plan lives here rather than pushing an exception into a workflow four
-# repos share.
+# Dev reads existing shared platform resources, which must exist before its
+# plan runs. Stg/prd retain dedicated resources. These environment-specific
+# plans stay here rather than in the shared validation workflow.
 #
 # Note stg and prd are planned but deliberately never applied — see
 # "Environments" in the README.

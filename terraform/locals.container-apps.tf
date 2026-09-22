@@ -30,7 +30,7 @@ locals {
     # no password, so the username is the identity and the password is a token
     # minted per connection. Empty POSTGRES_PASSWORD is what selects that path.
     POSTGRES_USER                         = azurerm_user_assigned_identity.this.name
-    APPLICATIONINSIGHTS_CONNECTION_STRING = azurerm_application_insights.this.connection_string
+    APPLICATIONINSIGHTS_CONNECTION_STRING = local.application_insights_connection_string
     ENVIRONMENT                           = var.environment
     # The marketagent tag specifically, not a shared one: this is what the agent
     # records on its `agent_runs` row, so it has to name the image the code
