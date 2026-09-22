@@ -9,8 +9,8 @@ Dev reads these existing resources in subscription
 
 They must exist before planning. Use that subscription for the Azure provider.
 The platform owns their settings and lifecycle, including logging configuration,
-retention, ingestion caps and workspace quota alerts. Application diagnostics and
-the job-failure alert use the shared workspace. The app resource-group budget
+retention, ingestion caps and the environment-wide job-failure and workspace
+quota alerts. Application diagnostics use the shared workspace. The app resource-group budget
 does not include charges incurred in the platform resource group.
 
 Stg/prd still create dedicated resources. The `moved` blocks preserve their

@@ -29,8 +29,8 @@ both deployed and running — see [The application](#the-application) and
 | Container app job `weekly-review` | Scheduled Sunday: reviews the week, proposes changes |
 | PostgreSQL Flexible Server + database | Burstable B1ms, Entra-only authentication. The one resource that bills while idle |
 | Action group | Where alerts go — subscription Owners, by role rather than by address |
-| Metric alerts (5) | A failed execution of each job; the database down or near full |
-| Log alerts | Job failures; dedicated workspaces also get an ingestion quota alert |
+| Metric alerts (2) | The database is down or near full |
+| Log alerts | Dedicated workspaces get an ingestion-quota alert; the shared platform monitors job failures |
 | Budget | Monthly Azure spend, notifying at 80% actual and 100% forecast |
 | Diagnostic settings (2) | PostgreSQL server logs and Key Vault audit events |
 
@@ -230,7 +230,7 @@ that cannot reach the database may never get far enough to write down why:
 
 | Alert | Fires when | Severity |
 | --- | --- | --- |
-| `*-agent-failed`, `*-summary-failed`, `*-weekly-failed` | A job execution reports `Failed` | 1 |
+| `alert-platform-dev-job-failed` | Any job in the shared environment crashes | 1 |
 | `*-db-down` | The server stops reporting itself alive | 0 |
 | `*-db-storage` | Storage passes 80% of a figure that can never be reduced | 2 |
 | `msqa-*` (dedicated workspace only) | Log ingestion approaches the daily cap, past which logging stops | 2 |
