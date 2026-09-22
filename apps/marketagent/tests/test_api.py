@@ -46,6 +46,7 @@ def client(monkeypatch):
 
     monkeypatch.setattr(queries, "overview", lambda c, account: {"portfolio": {"name": account}})
     monkeypatch.setattr(queries, "holdings", lambda c, account: [{"ticker": "NVDA"}])
+    monkeypatch.setattr(queries, "watchlist", lambda c, account: [{"ticker": "NVDA"}])
     monkeypatch.setattr(queries, "performance", lambda c, account, days: {"days": days})
     monkeypatch.setattr(queries, "decisions", lambda c, account, limit, ticker: [{"limit": limit}])
     monkeypatch.setattr(queries, "decision", lambda c, i: None if i == 404 else {"id": i})
@@ -111,6 +112,7 @@ def test_readyz_reports_503_when_the_database_is_down():
     [
         f"/api/overview?account={ACCOUNT}",
         f"/api/holdings?account={ACCOUNT}",
+        f"/api/watchlist?account={ACCOUNT}",
         f"/api/performance?account={ACCOUNT}",
         f"/api/decisions?account={ACCOUNT}",
         "/api/news",
@@ -128,6 +130,7 @@ def test_every_read_endpoint_answers(client, path):
     [
         "/api/overview",
         "/api/holdings",
+        "/api/watchlist",
         "/api/performance",
         "/api/decisions",
         "/api/trades",
@@ -145,6 +148,7 @@ def test_a_per_account_endpoint_requires_the_account_parameter(client, path):
     [
         "/api/overview",
         "/api/holdings",
+        "/api/watchlist",
         "/api/performance",
         "/api/decisions",
         "/api/trades",

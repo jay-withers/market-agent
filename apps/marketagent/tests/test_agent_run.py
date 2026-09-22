@@ -133,7 +133,7 @@ class _FakeLlm:
                 sentiment_score=0.6,
                 rationale="Earnings beat.",
             ),
-            model="claude-haiku-4-5",
+            model="deepseek-flash",
             usage=Usage(input_tokens=100, output_tokens=20),
         )
 
@@ -148,7 +148,7 @@ class _FakeLlm:
                 reasoning="Strong quarter and a market that has not caught up.",
                 risks="Guidance could disappoint next quarter.",
             ),
-            model="claude-sonnet-5",
+            model="deepseek-v4-pro",
             usage=Usage(input_tokens=500, output_tokens=150),
         )
 
@@ -203,7 +203,7 @@ def test_a_buy_is_analysed_approved_and_filled(agent_dsn, monkeypatch):
             "SELECT action, approved_amount_usd, model FROM ai_decisions WHERE run_id = %s",
             (run_id,),
         ).fetchone()
-        assert decision == ("BUY", D("40.0000"), "claude-sonnet-5")
+        assert decision == ("BUY", D("40.0000"), "deepseek-v4-pro")
 
         trade = conn.execute(
             "SELECT status, side, dry_run, notional_usd FROM trades t "

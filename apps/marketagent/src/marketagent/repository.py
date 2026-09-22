@@ -212,7 +212,7 @@ def spend(conn: Any, as_of: date, pid: int | None = None) -> dict[str, Any]:
     `weekly_reviews` cost, which is never split by account — those two jobs
     are combined across both portfolios (see jobs/summary.py, jobs/weekly.py),
     so their spend isn't attributable to one account. The two accounts share
-    one Anthropic API key and one credit balance, so the runway figure the
+    one DeepSeek API key and one account balance, so the runway figure the
     summary email shows is computed once from the `pid=None` total, not twice.
 
     A row with a NULL cost is one written before the column existed, or a run

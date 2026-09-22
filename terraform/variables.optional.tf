@@ -135,7 +135,7 @@ variable "agent_cron_expression" {
 }
 
 variable "agent500_cron_expression" {
-  description = "Schedule for the dynamic-500 account's agent job, as a 5-field cron expression evaluated in UTC. Staggered ten minutes after agent_cron_expression by default so the two accounts do not both call the Anthropic API at the same instant."
+  description = "Schedule for the dynamic-500 account's agent job, as a 5-field cron expression evaluated in UTC. Staggered ten minutes after agent_cron_expression by default so the two accounts do not both call the DeepSeek API at the same instant."
   type        = string
   default     = "10 6 * * *"
 }

@@ -84,11 +84,13 @@ def configure(role: str) -> bool:
         ),
     )
 
-    # Not in the distro, and it is what turns the Alpaca, news and FX calls into
-    # dependency spans. Note this covers `fetch.py` only: the Anthropic SDK
-    # speaks `httpx2`, a different package this instrumentation does not patch,
-    # so the LLM calls stay invisible here — `agent_runs` records their cost and
-    # token counts instead.
+    # Not in the distro, and it is what turns every outbound call into a
+    # dependency span — Alpaca, news, FX, and DeepSeek too, since DeepSeek is a
+    # plain REST endpoint called through `fetch.py`'s own `httpx.Client` rather
+    # than a vendor SDK. That's a genuine improvement over the Anthropic
+    # integration this replaced, whose SDK spoke `httpx2` — a package this
+    # instrumentation does not patch — so LLM calls were invisible here and
+    # `agent_runs`' cost and token counts were the only record of them.
     HTTPXClientInstrumentor().instrument()
 
     _configured = True

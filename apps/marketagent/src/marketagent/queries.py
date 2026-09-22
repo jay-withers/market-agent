@@ -160,6 +160,28 @@ def holdings(conn: Any, portfolio: str) -> list[dict[str, Any]]:
     )
 
 
+def watchlist(conn: Any, portfolio: str) -> list[dict[str, Any]]:
+    """The tickers one account currently trades, and where each one came from.
+
+    Scoped by `portfolio_watchlist` the same way `repository.active_tickers`
+    is: which tickers are tradeable is a per-portfolio fact, and benchmarks are
+    excluded via `companies.is_benchmark` since a benchmark is reference data,
+    never something either account actually trades. Active rows only — a
+    de-watchlisted ticker (still held, if `dynamic-500` drops it from the
+    index) reflects the account's history, not what the agent considers today.
+    """
+    pid = portfolio_id(conn, portfolio)
+    return _rows(
+        conn,
+        "SELECT w.ticker, c.name, c.sector, w.source, w.added_at"
+        " FROM portfolio_watchlist w"
+        " JOIN companies c ON c.ticker = w.ticker"
+        " WHERE w.portfolio_id = %s AND w.is_active AND NOT c.is_benchmark"
+        " ORDER BY w.ticker",
+        (pid,),
+    )
+
+
 def price_history(conn: Any, portfolio: str, days: int = 90) -> list[dict[str, Any]]:
     """Daily closes per held ticker, behind the per-holding trend panels.
 

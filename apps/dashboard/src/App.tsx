@@ -12,6 +12,7 @@ import type {
   Review,
   Run,
   Trade,
+  WatchlistTicker,
 } from "./api";
 import {
   ACCOUNTS,
@@ -34,12 +35,14 @@ import {
   RunsTable,
   StatTile,
   TradesTable,
+  WatchlistTable,
 } from "./components/Tables";
 
 type AccountData = {
   overview: Overview;
   performance: Performance;
   holdings: Holding[];
+  watchlist: WatchlistTicker[];
   prices: PricePoint[];
   decisions: Decision[];
   trades: Trade[];
@@ -81,6 +84,7 @@ export default function App() {
       get<Overview>(withAccount("/api/overview", account)),
       get<Performance>(withAccount("/api/performance", account)),
       get<Holding[]>(withAccount("/api/holdings", account)),
+      get<WatchlistTicker[]>(withAccount("/api/watchlist", account)),
       // A year, filtered to the chosen window on the client: a few hundred rows
       // either way, and switching range then costs nothing.
       get<PricePoint[]>(withAccount("/api/prices?days=365", account)),
@@ -88,9 +92,9 @@ export default function App() {
       get<Trade[]>(withAccount("/api/trades?limit=50", account)),
       get<Run[]>(withAccount("/api/runs?limit=20", account)),
     ])
-      .then(([overview, performance, holdings, prices, decisions, trades, runs]) => {
+      .then(([overview, performance, holdings, watchlist, prices, decisions, trades, runs]) => {
         if (!cancelled)
-          setData({ overview, performance, holdings, prices, decisions, trades, runs });
+          setData({ overview, performance, holdings, watchlist, prices, decisions, trades, runs });
       })
       .catch((exc: Error) => {
         if (!cancelled) setError(exc.message);
@@ -246,6 +250,16 @@ export default function App() {
             <HoldingsTable rows={data.holdings} />
           </section>
         </>
+      )}
+
+      {tab === "/watchlist" && (
+        <section className="card">
+          <h2>Watchlist</h2>
+          <p className="hint">
+            The names this account considers each day, whether or not any is currently held.
+          </p>
+          <WatchlistTable rows={data.watchlist} />
+        </section>
       )}
 
       {tab === "/activity" && (

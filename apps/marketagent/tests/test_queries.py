@@ -58,7 +58,7 @@ def _decision(
             binding_constraint="max_trade_usd",
         ),
         state=PortfolioState(cash_usd=D("500.0000")),
-        model="claude-sonnet-5",
+        model="deepseek-v4-pro",
         prompt_version="v1",
         news_ids=[],
         input_tokens=100,
@@ -260,6 +260,30 @@ def test_holdings_carry_the_company_name_and_the_last_close(conn):
     assert rows[0]["last_close_usd"] == 100.0
 
 
+def test_watchlist_returns_the_seeded_snapshot_with_its_source(conn):
+    rows = queries.watchlist(conn, PORTFOLIO)
+
+    apple = next(r for r in rows if r["ticker"] == "AAPL")
+    assert apple["name"]
+    assert apple["source"] == "sp100_snapshot"
+    assert apple["added_at"]
+
+
+def test_watchlist_excludes_benchmarks(conn):
+    """SPY/VT/EWU are reference data in `companies`, never something either
+    account actually trades — `portfolio_watchlist` never holds them, and the
+    query's `NOT c.is_benchmark` join guards it regardless."""
+    rows = queries.watchlist(conn, PORTFOLIO)
+
+    assert not {r["ticker"] for r in rows} & {"SPY", "VT", "EWU"}
+
+
+def test_watchlist_is_empty_before_dynamic_500_has_ever_rebalanced(conn):
+    """dynamic-500 gets no static seed — its watchlist is populated by the
+    monthly rebalance job, which nothing here has run."""
+    assert queries.watchlist(conn, "dynamic-500") == []
+
+
 def test_the_price_history_covers_held_tickers_only(conn):
     """A watchlist name nobody owns has no trend panel, so it has no series.
 
@@ -417,7 +441,7 @@ def test_one_decision_comes_back_with_the_articles_and_trades_behind_it(conn):
             binding_constraint="max_trade_usd",
         ),
         state=PortfolioState(cash_usd=D("500.0000")),
-        model="claude-sonnet-5",
+        model="deepseek-v4-pro",
         prompt_version="v1",
         news_ids=[news_id],
         input_tokens=100,
@@ -461,7 +485,7 @@ def test_an_article_analysed_for_several_tickers_appears_once(conn):
                 "sentiment": "positive",
                 "sentiment_score": 0.4,
                 "rationale": "r",
-                "model": "claude-haiku-4-5",
+                "model": "deepseek-flash",
                 "prompt_version": "v1",
                 "input_tokens": 10,
                 "output_tokens": 2,
@@ -501,7 +525,7 @@ def test_only_relevant_articles_are_returned_when_asked(conn):
                 "sentiment": "neutral",
                 "sentiment_score": 0.0,
                 "rationale": "r",
-                "model": "claude-haiku-4-5",
+                "model": "deepseek-flash",
                 "prompt_version": "v1",
                 "input_tokens": 10,
                 "output_tokens": 2,

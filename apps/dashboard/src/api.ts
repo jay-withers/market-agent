@@ -80,6 +80,19 @@ export type Holding = {
   last_close_date: string | null;
 };
 
+/* One name on an account's watchlist — what the agent considers each day,
+ * whether or not it is currently held. `source` says how it got there:
+ * `sp100_snapshot` (static-100's frozen seed), `sp500_index` (dynamic-500's
+ * monthly rebalance) or `manual`. A de-watchlisted ticker (still held, if
+ * dynamic-500 has since dropped it) is not part of this — see queries.py. */
+export type WatchlistTicker = {
+  ticker: string;
+  name: string;
+  sector: string | null;
+  source: "sp100_snapshot" | "sp500_index" | "manual";
+  added_at: string;
+};
+
 /* One daily close for one held ticker. Flat, as `/api/prices` returns it: the
  * trend panels group it by ticker themselves. */
 export type PricePoint = {

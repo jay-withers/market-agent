@@ -2,7 +2,7 @@
  *
  * Real paths rather than a hash because nginx already falls back unknown paths
  * to index.html inside the authenticated `location /`, so deep links cost
- * nothing and need no server change. Five static areas with no parameters do
+ * nothing and need no server change. Six static areas with no parameters do
  * not justify react-router; this is the whole of what it would be used for.
  * The account being viewed is state, not a route — every area shows one
  * account's data at a time, so it lives beside the currency toggle instead of
@@ -18,6 +18,7 @@ import { useCallback, useEffect, useState } from "react";
 export const TABS = [
   { path: "/", label: "Overview" },
   { path: "/holdings", label: "Holdings" },
+  { path: "/watchlist", label: "Watchlist" },
   { path: "/activity", label: "Activity" },
   { path: "/review", label: "Review" },
   { path: "/compare", label: "Compare" },

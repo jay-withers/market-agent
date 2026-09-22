@@ -62,7 +62,7 @@ resource "azurerm_monitor_diagnostic_setting" "postgres" {
   # could reach the daily cap on a database this small.
 }
 
-# Who read which secret, and when. The vault holds the Anthropic key, the
+# Who read which secret, and when. The vault holds the DeepSeek key, the
 # Alpaca credentials and the summary recipient, and it is the only place in the
 # system where a credential is handed out — so the read is worth recording.
 # Volume is a handful of events per job run.

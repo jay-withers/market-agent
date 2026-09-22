@@ -1,13 +1,12 @@
 """Shared HTTP plumbing for the outbound APIs.
 
-Both data sources this project reads — Alpaca and Frankfurter — are ordinary
-JSON over HTTPS with no SDK worth taking on. What they do have in common is
-that the agent job runs unattended once a day, so a transient failure that a
-human would simply retry has to be retried here or it costs a whole day's run.
-
-`httpx`, not `httpx2`: the latter is present because the Anthropic 1.x SDK
-depends on it, but depending on another package's transitive dependency is how
-you get broken by an upgrade you didn't make.
+Every outbound call this project makes — Alpaca, Frankfurter, Wikipedia,
+DeepSeek — is ordinary JSON (or, for Wikipedia, HTML) over HTTPS with no SDK
+worth taking on, DeepSeek included: its API is a plain OpenAI-shaped REST
+endpoint, and a dedicated SDK would be one more package's version drift to
+track for what `httpx` already does. What they have in common is that the
+agent job runs unattended once a day, so a transient failure that a human
+would simply retry has to be retried here or it costs a whole day's run.
 """
 
 from __future__ import annotations
@@ -131,6 +130,62 @@ def get_text(
             session.close()
 
 
+def post_json_retrying(
+    url: str,
+    *,
+    body: dict[str, Any],
+    headers: dict[str, str] | None = None,
+    client: httpx.Client | None = None,
+    attempts: int = DEFAULT_ATTEMPTS,
+    timeout: float = TIMEOUT_SECONDS,
+) -> Any:
+    """POST `body` as JSON and return the decoded response, retrying transient failures.
+
+    This is the *other* kind of POST this project makes, alongside the never-
+    retried `post_json` below — and the two exist separately because they are
+    not safe to treat the same way. An order submission cannot be retried: a
+    503 that actually executed before failing to answer is indistinguishable
+    from one that did not, so retrying risks a duplicated trade. An LLM chat
+    completion has no such side effect — a retried call just asks the same
+    question again — so this one gets `get_json`'s retry loop instead of
+    `post_json`'s single attempt.
+
+    `timeout` is overridable, unlike the other functions here: a reasoning
+    LLM call is a fundamentally slower request than an Alpaca/Frankfurter/
+    Wikipedia GET, and `TIMEOUT_SECONDS` (30s, sized for those) leaves a
+    reasoning-heavy DeepSeek call almost no margin — a real run has already
+    timed out here with calls that ordinarily take 15-30s to answer.
+    """
+    owned = client is None
+    session = client or httpx.Client(timeout=timeout)
+    try:
+        last: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                response = session.post(url, json=body, headers=headers)
+                if response.status_code in RETRYABLE_STATUS:
+                    raise FetchError(f"{response.status_code} from {url}")
+                response.raise_for_status()
+                return response.json()
+            except (httpx.TransportError, FetchError) as exc:
+                last = exc
+                if attempt == attempts:
+                    break
+                delay = BACKOFF_SECONDS * attempt
+                logger.warning(
+                    "%s (attempt %d/%d), retrying in %.0fs", exc, attempt, attempts, delay
+                )
+                time.sleep(delay)
+            except httpx.HTTPStatusError as exc:
+                detail = exc.response.text[:200]
+                raise FetchError(f"{exc.response.status_code} from {url}: {detail}") from exc
+
+        raise FetchError(f"{url} failed after {attempts} attempts: {last}") from last
+    finally:
+        if owned:
+            session.close()
+
+
 def post_json(
     url: str,
     *,
@@ -140,8 +195,8 @@ def post_json(
 ) -> Any:
     """POST `body` as JSON and return the decoded response. **Never retried.**
 
-    Deliberately not sharing `get_json`'s retry: the only POST this project
-    makes is an order submission, and a retried order is a duplicated trade. A
+    Deliberately not sharing `get_json`'s retry: the only POST this covers is
+    an order submission, and a retried order is a duplicated trade. A
     503 that actually executed before failing to answer is indistinguishable
     from one that did not, so the safe reading is "assume it happened". A
     failed submission still leaves the decision recorded; a double submission

@@ -1,4 +1,4 @@
-/* The tabular views: holdings, decisions, trades and runs.
+/* The tabular views: holdings, watchlist, decisions, trades and runs.
  *
  * These are tables rather than charts on purpose. Each answers "what are the
  * values" for a handful of rows, which a table does better than any plot — and
@@ -8,8 +8,49 @@
 
 import { Fragment, useState } from "react";
 
-import type { Article, Decision, DecisionDetail, Holding, Run, Trade } from "../api";
+import type { Article, Decision, DecisionDetail, Holding, Run, Trade, WatchlistTicker } from "../api";
 import { day, displayMoney, get, pct, when } from "../api";
+
+// Friendlier than the raw `source` value, which is a CHECK-constrained enum
+// meant for querying (`portfolio_watchlist.source`), not for reading.
+const SOURCE_LABEL: Record<WatchlistTicker["source"], string> = {
+  sp100_snapshot: "S&P 100 snapshot",
+  sp500_index: "S&P 500 index",
+  manual: "manual",
+};
+
+export function WatchlistTable({ rows }: { rows: WatchlistTicker[] }) {
+  if (rows.length === 0) return <div className="state">No watchlist names yet.</div>;
+
+  return (
+    <div className="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Ticker</th>
+            <th>Name</th>
+            <th>Sector</th>
+            <th>Source</th>
+            <th>Added</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.ticker}>
+              <td>{row.ticker}</td>
+              <td>{row.name}</td>
+              <td>{row.sector ?? "—"}</td>
+              <td>
+                <span className="pill">{SOURCE_LABEL[row.source]}</span>
+              </td>
+              <td>{day(row.added_at)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 export function HoldingsTable({ rows }: { rows: Holding[] }) {
   if (rows.length === 0) return <div className="state">Nothing held yet.</div>;

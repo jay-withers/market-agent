@@ -31,6 +31,11 @@ def holdings(account: Account, conn: Any = Depends(connection)) -> list[dict[str
     return queries.holdings(conn, account)
 
 
+@router.get("/watchlist")
+def watchlist(account: Account, conn: Any = Depends(connection)) -> list[dict[str, Any]]:
+    return queries.watchlist(conn, account)
+
+
 @router.get("/prices")
 def prices(
     account: Account,

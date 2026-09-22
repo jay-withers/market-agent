@@ -426,7 +426,7 @@ them land rather than declared up front.
   not append a fresh entry for a cap already recorded, or
   `ai_decisions.risk_verdict` ends up holding the cap with its value and the
   same name again with none. There is a regression test.
-- `settings.secret("ANTHROPIC-API-KEY")` reads `$ANTHROPIC_API_KEY` first and
+- `settings.secret("DEEPSEEK-API-KEY")` reads `$DEEPSEEK_API_KEY` first and
   only then Key Vault. Env-first is what makes `docker compose` work with no
   Azure at all, and it is why Terraform owns no Key Vault references — a
   revision carrying one hard-fails when the secret is absent, which all four
@@ -441,30 +441,66 @@ them land rather than declared up front.
 
 ### The LLM cascade
 
-Two stages, two models, **two different request shapes** — and the shapes are
-the trap, because getting one wrong is a 400 from the API at 06:00 UTC in a
-container, not a wrong answer here.
+Migrated from Anthropic to **DeepSeek** — the git history of `llm/` before
+that still shows the Anthropic shape (`messages.parse()`, `output_config`,
+`thinking={"type": "adaptive"}`) if a comparison is ever useful. DeepSeek's
+API is plain OpenAI-shaped REST, called through `fetch.py`'s own `httpx`
+rather than a vendor SDK — there is no SDK dependency for it at all.
 
-- `claude-haiku-4-5` (`FILTER_MODEL`) screens news for relevance. It predates
-  the 4.6 family, so `output_config={"effort": ...}` **errors** and adaptive
-  thinking does not exist for it. The filter stage therefore sends neither.
-- `claude-sonnet-5` (`ANALYSIS_MODEL`, $2/$10 per MTok) produces the
-  assessment, with `thinking={"type": "adaptive"}` and
-  `output_config={"effort": "high"}`. It rejects `budget_tokens`,
-  `temperature`, `top_p` and `top_k` with a 400. **Sonnet is the user's
-  explicit choice** — an earlier draft defaulted to `claude-opus-5` and was
-  overruled; don't "upgrade" it back.
-- Neither model accepts an assistant prefill.
-- `_reasoning_params()` in `llm/anthropic_provider.py` is what keeps the two
-  apart, by prefix match against `LEGACY_MODEL_PREFIXES` rather than an exact
-  list, so a dated snapshot id can't silently take the wrong branch.
+Two stages, two models, **one real complication**: DeepSeek's structured
+output (`response_format: {"type": "json_object"}`) guarantees valid JSON,
+**not conformance to a schema**. Anthropic's `messages.parse()` gave that for
+free; here `llm/deepseek_provider.py`'s `_structured()` embeds the Pydantic
+model's own `model_json_schema()` in the system prompt, parses the response
+by hand with `model_validate_json()`, and retries once — feeding the
+validation error back to the model — before raising `StructuredOutputError`.
+That retry loop is the first place to look if a scheduled run starts failing
+after this went in; it is new complexity the Anthropic integration never had.
 
-**`messages.parse()` sends your Pydantic model to the model.** It builds the
-JSON schema from the class, and the **class docstring becomes the schema's
-`description`** while `Field(description=...)` becomes each property's. So
-those strings are prompt text, not internal documentation — notes for a future
-maintainer go in a `#` comment instead. The original `Recommendation` docstring
-explained Python `Decimal` coercion and was being sent to the model verbatim.
+- `deepseek-flash` (`FILTER_MODEL`) screens news for relevance, with
+  `"thinking": {"type": "disabled"}` — reasoning is a request-level dial on
+  DeepSeek, not a per-model fact, and the filter stage turns it off outright
+  rather than asking for a lower effort.
+- `deepseek-v4-pro` (`ANALYSIS_MODEL`) produces the assessment, with
+  `"reasoning_effort": settings().analysis_effort` — one of `low`/`high`/`max`,
+  DeepSeek's own scale, not Anthropic's five-step one.
+- Neither stage uses an assistant prefill. DeepSeek supports one (Anthropic
+  did not), but nothing here needs it.
+- Pricing has a shape Anthropic's didn't: **separate cache-hit and cache-miss
+  input rates**, not one input rate plus a multiplier, and **no separate
+  charge for writing to the cache at all**. `llm/base.py`'s `Usage.cost_usd()`
+  was redesigned around this — see its docstring — and it prices everything
+  at DeepSeek's *peak* rate unconditionally rather than modelling DeepSeek's
+  time-of-day/holiday pricing schedule, which happens to be exactly right for
+  the two scheduled agent runs (both land inside the peak window) and a
+  deliberate upper bound everywhere else.
+- **The account's balance is read live**, not typed in. `GET
+  /user/balance` (`llm/deepseek_provider.balance_usd()`) replaced the old
+  hand-typed `ANTHROPIC-CREDIT-USD` secret — Anthropic published no balance
+  endpoint at all, so that figure was a guess nothing checked. `jobs/summary.py`'s
+  `_credit_usd()` catches a failed read and logs rather than raising, the same
+  discipline `mailer.send` applies to email: a balance-API hiccup must not
+  cost the day its summary.
+- **A reasoning call needs a much longer read timeout than `fetch.py`'s
+  default.** `TIMEOUT_SECONDS = 30.0` is sized for Alpaca/Frankfurter/
+  Wikipedia GETs, not for `reasoning_effort="high"` — a real `static-100` run
+  measured individual analysis calls taking 15-30s to answer even when
+  nothing was wrong, which left that 30s default almost no margin, and a
+  later run genuinely failed on exactly that (`ReadTimeout` after three
+  retries). `post_json_retrying` therefore takes an overridable `timeout`,
+  and `deepseek_provider.REASONING_TIMEOUT_SECONDS` (180s) is what the
+  analysis/narrate/review calls use — the filter stage disables reasoning
+  outright and keeps the ordinary 30s. If this starts firing again, the
+  first thing to check is whether 180s has stopped being enough, not whether
+  the retry logic is broken.
+
+**The class docstring becomes the schema's `description`, and
+`Field(description=...)` becomes each property's** — this predates the
+DeepSeek migration and still holds, since the schema is still built from the
+same Pydantic models via `model_json_schema()`. So those strings are prompt
+text, not internal documentation — notes for a future maintainer go in a `#`
+comment instead. The original `Recommendation` docstring explained Python
+`Decimal` coercion and was being sent to the model verbatim.
 
 For the same reason `Recommendation.suggested_amount_usd` is a **`float`**, the
 only place in the system money is not a `Decimal`: declared as `Decimal` it
@@ -473,17 +509,12 @@ null — which is a worse thing to hand a model than a plain number. `money()`
 converts via `str()` so a float's binary artefacts never reach a stored figure,
 and it accepts `float` for that one caller only.
 
-Note that `output_format=` on the `messages.parse()` helper is current, while
-the `output_format` *parameter* on `messages.create()` is deprecated in favour
-of `output_config={"format": ...}`. They are different things, and `parse()`
-merges its own `format` into `output_config` alongside the `effort` we set.
-
-`tests/test_llm.py` passes a fake client and asserts what this code calls;
-`tests/test_llm_wire.py` drives the **real** SDK through an `httpx2`
-`MockTransport` and asserts the request body that would go on the wire. The
-second layer is what caught both schema problems above, so keep it — and note
-it is `httpx2`, not `httpx`: the 1.x SDK moved, and passing an `httpx.Client`
-raises a `TypeError`.
+`tests/test_llm.py` is the only test file now: DeepSeek has no SDK to test
+separately from the wire request/response, so the fake-client-double layer
+and the real-SDK-through-a-mock-transport layer that the Anthropic version
+needed (`test_llm.py` + `test_llm_wire.py`) collapsed into one — an
+`httpx.Client` backed by `MockTransport`, the same pattern `fetch.py`'s other
+callers are tested with.
 
 ### The agent job, and what the live APIs actually do
 
@@ -492,12 +523,20 @@ engine, paper trade, persist — all inside one `agent_runs` row opened before
 any work, so a crash leaves evidence. `llm` and `broker` are injectable, which
 is the only way to exercise the loop without spending money and placing orders.
 
-**The LLM cost, measured on a real run rather than estimated.** One complete
-run over the ten-name watchlist: 82 articles fetched, ~110 filter calls (one per
-article/ticker pair — an article tagged with three watchlist names costs three),
-46 relevant, 9 analyses, **85,643 input and 11,658 output tokens, $0.18, and
-4.1 minutes wall clock**. At one run a day that is about **£4/month**, against
-the database's £13.
+**The LLM cost, measured on a real run rather than estimated — under the
+retired Anthropic cascade.** One complete run over the ten-name watchlist: 82
+articles fetched, ~110 filter calls (one per article/ticker pair — an article
+tagged with three watchlist names costs three), 46 relevant, 9 analyses,
+**85,643 input and 11,658 output tokens, $0.18, and 4.1 minutes wall clock**.
+At one run a day that was about **£4/month**, against the database's £13.
+
+**These dollar figures do not carry over to DeepSeek.** The token counts and
+call shape (article/ticker filter pairs, relevant-article analyses) are still
+representative of the *loop*, but DeepSeek's published rates run roughly an
+order of magnitude below Anthropic's, so the true post-migration figure is
+meaningfully lower and has not yet been measured on a real run. Don't quote
+$0.18 as DeepSeek's cost — replace this paragraph with a fresh measurement
+once one exists, the same discipline that replaced the $0.43 figure below.
 
 An earlier figure of $0.43 in this file was wrong: it came from a rehearsal with
 a stubbed LLM whose token counts were invented, and it overstated the real cost
@@ -510,10 +549,13 @@ now more than a cost one. And 4.1 minutes sits comfortably inside the job's
 looked like it might be.
 
 **Cost must be accumulated per call, never derived from token totals.** The two
-stages use different models at different rates, so pricing a mixed token total
-at either rate is simply wrong — it read 30% high when the filter's Haiku
-tokens were priced as Sonnet ($0.566 against a true $0.434). The token columns
-still hold the mixed totals, which is fine because they are counts.
+stages use different models at different rates (under Anthropic this was
+measured at 30% high when the filter's Haiku tokens were priced as Sonnet —
+$0.566 against a true $0.434), so pricing a mixed token total at either
+model's rate is simply wrong; DeepSeek's cascade carries the same risk, now
+also cache-hit-vs-miss-aware (see `Usage.cost_usd()` in `llm/base.py`). The
+token columns still hold the mixed totals, which is fine because they are
+counts.
 
 **The model is shown its own recent decisions on the ticker.** Five of them,
 most recent first, with the engine's verdict and the resulting order's status —
@@ -534,7 +576,9 @@ same treatment** — a new input with nowhere to be stored breaks the row's clai
 to be a complete record of what was asked.
 
 **One run's model spend is capped by `MAX_RUN_COST_USD`**, defaulting to $1.00
-against a measured $0.18–0.19. It is checked as each call's cost lands rather
+— set against Anthropic's measured $0.18–0.19 and not yet revisited for
+DeepSeek's materially lower rates, so it is a looser ceiling than it looks
+until it is. It is checked as each call's cost lands rather
 than once per stage, because the stage that can run away is the filter at one
 call per article/ticker pair — exactly the one a per-stage check would let
 finish first. Crossing it raises `BudgetExceeded`, which the existing handler
@@ -718,31 +762,35 @@ on a day three trades had executed. The table now states the day's trades
 first and spells out what `simulated` means. `tests/test_summary.py` is the
 regression.
 
-- **The email reports model spend, and there is no balance endpoint to check
-  it against.** Anthropic publishes usage and cost reports
+- **The email reports model spend, and the balance it's checked against is
+  read live.** Unlike Anthropic — which publishes usage and cost reports
   (`/v1/organizations/usage_report/messages`, `/v1/organizations/cost_report`)
-  but nothing that returns a remaining prepaid credit balance — and both of
-  those need an Admin API key, which individual accounts cannot hold at all.
-  So the figure is built from our own ledger: `repository.spend()` sums
-  `agent_runs`, `daily_summaries` and `weekly_reviews`, and the email shows
-  today, the last seven days with a daily rate, and the total. `007-job-costs.sql`
-  exists because the other two jobs never recorded their own call — the weekly
-  review logged the figure and discarded it, the summary never looked — so a
-  total from `agent_runs` alone was low by a call a day and a call a week, and
-  the gap only grows.
-- **The runway needs a number a human supplies.** `optional_secret(
-  "ANTHROPIC-CREDIT-USD")` holds what the account started with; absent means
-  report spend and no runway, the same opt-in shape as `SUMMARY-EMAIL-TO` and
-  in Key Vault for the same reason — this repository is public. A value that
-  will not parse is warned about and ignored rather than fatal: a mistyped
-  credit figure must not cost the day its summary.
+  but nothing that returns a remaining prepaid credit balance, and both of
+  those need an Admin API key individual accounts cannot hold at all —
+  DeepSeek exposes `GET /user/balance` directly, wrapped as
+  `llm/deepseek_provider.balance_usd()`. Spend itself is still built from our
+  own ledger: `repository.spend()` sums `agent_runs`, `daily_summaries` and
+  `weekly_reviews`, and the email shows today, the last seven days with a
+  daily rate, and the total. `007-job-costs.sql` exists because the other two
+  jobs never recorded their own call — the weekly review logged the figure and
+  discarded it, the summary never looked — so a total from `agent_runs` alone
+  was low by a call a day and a call a week, and the gap only grows.
+- **The runway is computed from a live-read balance, not a number a human
+  supplies.** `jobs/summary.py`'s `_credit_usd()` calls `balance_usd()`;
+  absent means report spend and no runway, the same shape the old opt-in
+  `ANTHROPIC-CREDIT-USD` secret had, but now driven by whether the read
+  succeeded rather than whether anyone configured it — there is nothing left
+  to configure. A failed read is caught and logged rather than fatal, the same
+  discipline `mailer.send` applies to email: a balance-API hiccup must not
+  cost the day its summary.
 - **The spend figures cannot include the call that writes the email**, because
   the table is built before `narrate()` runs. The section says so in the text
-  rather than leaving it to be inferred, alongside the fact that the credit was
-  typed by hand and checked against nothing. Both are there so the model cannot
-  describe the figure as complete — the same discipline as the trades table.
-  The daily rate is over the last seven days, not all time, because the
-  question behind it is "how long at the current rate" and the first week of
+  rather than leaving it to be inferred, alongside the fact that the balance is
+  DeepSeek's own reported figure rather than anything typed by hand. Both are
+  there so the model cannot describe the figure as complete — the same
+  discipline as the trades table. The daily rate is over the last seven days,
+  not all time, because the question behind it is "how long at the current
+  rate" and the first week of
   manual runs answers a different one.
 - **Benchmarks live in `companies` with `is_benchmark = true`.** `prices.ticker`
   references `companies`, so storing a close for SPY, VT or EWU failed with a
@@ -1361,8 +1409,8 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
   the images compile, but neither executes a test, so the risk engine was
   guarded only by whoever remembered `make test`. The sharp edge was Renovate:
   `autoApprove` means a dependency bump reaches `main` with no human reading
-  it, so a `psycopg`, `pydantic` or `anthropic` release that broke the engine
-  or the request shapes would have merged green. Being a reusable-workflow
+  it, so a `psycopg` or `pydantic` release that broke the engine or the
+  request shapes would have merged green. Being a reusable-workflow
   call, its status check context is **`test / Test`**, not the bare `test` job
   id — the same namespacing `pre-commit / Pre-commit` has.
 

@@ -7,9 +7,9 @@ Container Apps Key Vault references: a revision carrying a Key Vault reference
 hard-fails if the secret is absent, and CLAUDE.md is explicit that Terraform
 must never own secret values.
 
-The name mapping is mechanical: `secret("ANTHROPIC-API-KEY")` reads
-`$ANTHROPIC_API_KEY`, falling back to the Key Vault secret named
-`ANTHROPIC-API-KEY`. Key Vault forbids underscores in names, environment
+The name mapping is mechanical: `secret("DEEPSEEK-API-KEY")` reads
+`$DEEPSEEK_API_KEY`, falling back to the Key Vault secret named
+`DEEPSEEK-API-KEY`. Key Vault forbids underscores in names, environment
 variables conventionally forbid hyphens, so one of the two has to be rewritten.
 """
 
@@ -72,17 +72,17 @@ class Settings(BaseSettings):
 
     # The model cascade: something cheap screens a large batch of news, and
     # something capable reasons about what survives. One env var each.
-    filter_model: str = "claude-haiku-4-5"
-    analysis_model: str = "claude-sonnet-5"
-    # low | medium | high | xhigh | max. Only meaningful for the analysis
-    # model — `effort` errors on the pre-4.6 filter model.
+    filter_model: str = "deepseek-flash"
+    analysis_model: str = "deepseek-v4-pro"
+    # low | high | max — DeepSeek's own reasoning_effort scale, sent only on
+    # the analysis stage; the filter stage disables reasoning outright.
     analysis_effort: str = "high"
 
     # A hard ceiling on what one agent run may spend with the model, checked as
-    # each call's cost lands. A measured run over the ten-name watchlist costs
-    # $0.18-0.19, so this is about five times the expected figure: it exists to
-    # stop a runaway loop, not to shape ordinary spending. Crossing it fails the
-    # run, which closes the `agent_runs` row with the reason — an unbounded bill
+    # each call's cost lands. It exists to stop a runaway loop, not to shape
+    # ordinary spending — DeepSeek's rates run roughly an order of magnitude
+    # below the Anthropic cascade this replaced. Crossing it fails the run,
+    # which closes the `agent_runs` row with the reason — an unbounded bill
     # accumulating quietly is the outcome worth preventing.
     #
     # `gt=0` rather than treating 0 as "no ceiling": a guard that switches off

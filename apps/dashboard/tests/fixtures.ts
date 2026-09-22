@@ -226,11 +226,46 @@ export const COMPARISON = {
   })),
 };
 
+export const WATCHLIST = [
+  {
+    ticker: "AAPL",
+    name: "Apple Inc.",
+    sector: "Technology",
+    source: "sp100_snapshot",
+    added_at: "2026-01-05T06:00:00Z",
+  },
+  {
+    ticker: "AMD",
+    // The longest name on the watchlist — see the note on HOLDINGS above.
+    name: "Advanced Micro Devices, Inc.",
+    sector: "Technology",
+    source: "sp100_snapshot",
+    added_at: "2026-01-05T06:00:00Z",
+  },
+  {
+    ticker: "SMCI",
+    name: "Super Micro Computer, Inc.",
+    // A watchlist name with no sector recorded — the table shows a dash
+    // rather than an empty cell that reads as a loading state.
+    sector: null,
+    source: "sp500_index",
+    added_at: "2026-08-01T05:00:00Z",
+  },
+  {
+    ticker: "RIVN",
+    name: "Rivian Automotive, Inc.",
+    sector: "Consumer Discretionary",
+    source: "manual",
+    added_at: "2026-09-01T05:00:00Z",
+  },
+];
+
 export const ROUTES: Record<string, unknown> = {
   "/config.json": CONFIG,
   "/api/overview": OVERVIEW,
   "/api/performance": PERFORMANCE,
   "/api/holdings": HOLDINGS,
+  "/api/watchlist": WATCHLIST,
   "/api/prices": PRICES,
   "/api/decisions": DECISIONS,
   "/api/trades": TRADES,
