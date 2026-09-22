@@ -217,7 +217,8 @@ deploy: ## Deploy built images to Container Apps via az cli (needs IMAGE_TAG=vX.
 	  --image $(IMAGE_REGISTRY)/marketagent:$(MARKETAGENT_IMAGE_TAG) \
 	  --set-env-vars IMAGE_TAG=$(MARKETAGENT_IMAGE_TAG); \
 	az containerapp update --name $$DASHBOARD --resource-group $$RG \
-	  --image $(IMAGE_REGISTRY)/dashboard:$(DASHBOARD_IMAGE_TAG); \
+	  --image $(IMAGE_REGISTRY)/dashboard:$(DASHBOARD_IMAGE_TAG) \
+	  --set-env-vars IMAGE_TAG=$(DASHBOARD_IMAGE_TAG); \
 	for JOB in $$AGENT100 $$AGENT500 $$SUMMARY $$WEEKLY $$SYNC100 $$SYNC500 $$REBALANCE; do \
 	  az containerapp job update --name $$JOB --resource-group $$RG \
 	    --image $(IMAGE_REGISTRY)/marketagent:$(MARKETAGENT_IMAGE_TAG) \

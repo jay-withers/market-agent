@@ -165,6 +165,7 @@ export type Run = {
 
 let origin: string | null = null;
 let token: string | null = null;
+let version: string | null = null;
 
 // The value the API's own require_token dependency checks, when
 // API_REQUIRE_TOKEN is on. It rides in config.json next to apiOrigin — both
@@ -177,7 +178,11 @@ async function apiCredentials(): Promise<{ origin: string; token: string }> {
   if (origin !== null && token !== null) return { origin, token };
   try {
     const response = await fetch("/config.json", { cache: "no-store" });
-    const config = (await response.json()) as { apiOrigin?: string; apiToken?: string };
+    const config = (await response.json()) as {
+      apiOrigin?: string;
+      apiToken?: string;
+      version?: string;
+    };
     // An unsubstituted template still contains the placeholder; treating that
     // as an origin produces a confusing CORS error rather than an obvious
     // misconfiguration.
@@ -185,13 +190,24 @@ async function apiCredentials(): Promise<{ origin: string; token: string }> {
     origin = originValue && !originValue.includes("${") ? originValue.replace(/\/$/, "") : "";
     const tokenValue = config.apiToken ?? "";
     token = tokenValue && !tokenValue.includes("${") ? tokenValue : "";
+    const versionValue = config.version ?? "";
+    version = versionValue && !versionValue.includes("${") ? versionValue : "";
   } catch {
     // Same-origin is the right fallback for `vite dev` behind a proxy and for
     // any deployment where the API is served from the same host.
     origin = "";
     token = "";
+    version = "";
   }
   return { origin, token };
+}
+
+// The dashboard's own image tag, for display only. Fetched lazily via the
+// same config.json as the API credentials above, so App.tsx just calls this
+// alongside its first data fetch rather than needing a second round trip.
+export async function getVersion(): Promise<string> {
+  await apiCredentials();
+  return version ?? "";
 }
 
 function authHeaders(token: string): HeadersInit {

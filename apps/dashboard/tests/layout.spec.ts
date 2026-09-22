@@ -190,6 +190,15 @@ test.describe("the watchlist table", () => {
   });
 });
 
+test.describe("the version badge", () => {
+  test("shows the deployed image tag beside the title", async ({ page }) => {
+    await stubApi(page);
+    await page.goto("/");
+
+    await expect(page.locator("h1 .version")).toHaveText("v0.14.0");
+  });
+});
+
 test.describe("navigation", () => {
   test("each tab is reachable by URL and marks itself current", async ({ page }) => {
     await stubApi(page);

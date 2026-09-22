@@ -10,7 +10,7 @@
  * because a layout only breaks on the content that does not fit.
  */
 
-export const CONFIG = { apiOrigin: "", apiToken: "" };
+export const CONFIG = { apiOrigin: "", apiToken: "", version: "v0.14.0" };
 
 const HOLDING_TICKERS = ["AAPL", "AMD", "AVGO", "GOOGL", "META", "NVDA"] as const;
 
