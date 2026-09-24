@@ -16,7 +16,16 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { ROUTES } from "./fixtures";
 
-const TABS = ["/", "/holdings", "/watchlist", "/activity", "/review", "/compare"] as const;
+const TABS = [
+  "/",
+  "/holdings",
+  "/watchlist",
+  "/activity/decisions",
+  "/activity/trades",
+  "/activity/runs",
+  "/review",
+  "/compare",
+] as const;
 
 // 360 is the narrowest mainstream Android; 390 an iPhone; 768 a tablet, where
 // a two-column grid first appears and is the likeliest place for a row to
@@ -80,7 +89,7 @@ for (const width of WIDTHS) {
       test(`${path} fits the viewport`, async ({ page }) => {
         await stubApi(page);
         await page.goto(path);
-        await expect(page.locator(".tabs")).toBeVisible();
+        await expect(page.locator(".tabs:not(.subtabs)")).toBeVisible();
 
         expect(await pageOverflow(page)).toBe(0);
         expect(await clippedOutside(page)).toEqual([]);
@@ -211,8 +220,49 @@ test.describe("navigation", () => {
       ["/compare", "Compare"],
     ] as const) {
       await page.goto(path);
-      await expect(page.locator(".tab.current")).toHaveText(label);
+      await expect(page.locator(".tabs:not(.subtabs) .tab.current")).toHaveText(label);
     }
+  });
+
+  test("activity splits into sub-pages, each with its own URL and only its own table", async ({
+    page,
+  }) => {
+    await stubApi(page);
+    for (const [path, heading] of [
+      ["/activity/decisions", "Decisions"],
+      ["/activity/trades", "Trades"],
+      ["/activity/runs", "Agent runs"],
+    ] as const) {
+      await page.goto(path);
+      await expect(page.locator(".subtabs .tab.current")).toHaveText(heading);
+      await expect(page.locator("section.card h2")).toHaveText([heading]);
+    }
+  });
+
+  test("a bookmark to the old single activity page opens decisions", async ({ page }) => {
+    await stubApi(page);
+    await page.goto("/activity");
+
+    await expect(page.locator(".subtabs .tab.current")).toHaveText("Decisions");
+  });
+
+  test("the sub-tabs move between pages and back navigation follows", async ({ page }) => {
+    await stubApi(page);
+    await page.goto("/activity/decisions");
+
+    await page.locator(".subtabs").getByRole("link", { name: "Trades" }).click();
+    await expect(page).toHaveURL(/\/activity\/trades$/);
+    await expect(page.locator("section.card h2")).toHaveText(["Trades"]);
+
+    await page.goBack();
+    await expect(page.locator("section.card h2")).toHaveText(["Decisions"]);
+  });
+
+  test("the sub-tabs only appear under Activity", async ({ page }) => {
+    await stubApi(page);
+    await page.goto("/holdings");
+
+    await expect(page.locator(".subtabs")).toHaveCount(0);
   });
 });
 
