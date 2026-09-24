@@ -26,7 +26,7 @@ import {
   withAccount,
 } from "./api";
 import { Compare } from "./components/Compare";
-import { Nav, useRoute } from "./components/Nav";
+import { ACTIVITY_SECTIONS, Nav, tabOf, useRoute } from "./components/Nav";
 import { PerformanceChart } from "./components/PerformanceChart";
 import { PriceTrends } from "./components/PriceTrends";
 import { WeeklyReview } from "./components/Review";
@@ -70,7 +70,8 @@ export default function App() {
   const [data, setData] = useState<AccountData | null>(null);
   const [shared, setShared] = useState<SharedData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tab, navigate] = useRoute();
+  const [route, navigate] = useRoute();
+  const tab = tabOf(route);
   const [currency, setCurrency] = useState<DisplayCurrency>(() =>
     localStorage.getItem("marketagent-currency") === "GBP" ? "GBP" : "USD",
   );
@@ -267,6 +268,15 @@ export default function App() {
       )}
 
       <Nav current={tab} onNavigate={navigate} />
+      {tab === "/activity" && (
+        <Nav
+          current={route}
+          onNavigate={navigate}
+          items={ACTIVITY_SECTIONS}
+          label="Activity"
+          className="tabs subtabs"
+        />
+      )}
 
       {tab === "/" && (
         <section className="card">
@@ -298,33 +308,36 @@ export default function App() {
         </section>
       )}
 
-      {tab === "/activity" && (
-        <>
-          <section className="card">
-            <h2>Decisions</h2>
-            <p className="hint">
-              What the model recommended, and what the risk engine allowed. “Bound by” names
-              the rule that decided the outcome.
-            </p>
-            <DecisionsTable rows={data.decisions} />
-          </section>
+      {route === "/activity/decisions" && (
+        <section className="card">
+          <h2>Decisions</h2>
+          <p className="hint">
+            What the model recommended, and what the risk engine allowed. “Bound by” names the
+            rule that decided the outcome.
+          </p>
+          <DecisionsTable rows={data.decisions} />
+        </section>
+      )}
 
-          <section className="card">
-            <h2>Trades</h2>
-            <p className="hint">
-              A scheduled run submits before the market opens, so an order can sit unfilled
-              for hours.
-            </p>
-            <TradesTable rows={data.trades} />
-          </section>
+      {route === "/activity/trades" && (
+        <section className="card">
+          <h2>Trades</h2>
+          <p className="hint">
+            A scheduled run submits before the market opens, so an order can sit unfilled for
+            hours.
+          </p>
+          <TradesTable rows={data.trades} />
+        </section>
+      )}
 
-          <section className="card">
-            <h2>Agent runs</h2>
-            <p className="hint">One row per execution, opened before any work so a crash
-              leaves evidence.</p>
-            <RunsTable rows={data.runs} />
-          </section>
-        </>
+      {route === "/activity/runs" && (
+        <section className="card">
+          <h2>Agent runs</h2>
+          <p className="hint">
+            One row per execution, opened before any work so a crash leaves evidence.
+          </p>
+          <RunsTable rows={data.runs} />
+        </section>
       )}
 
       {tab === "/review" && (

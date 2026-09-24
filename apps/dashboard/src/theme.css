@@ -510,6 +510,18 @@ button.toggle.count {
   border-radius: 4px 4px 0 0;
 }
 
+/* Activity's sub-pages: a second row tucked under the main tabs, smaller so it
+ * reads as part of the Activity tab rather than a second set of areas. */
+.tabs.subtabs {
+  margin-top: -12px;
+  border-bottom-color: transparent;
+}
+
+.subtabs .tab {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
 /* ---------------------------------------------------------------------------
  * Per-holding trend panels (small multiples)
  * ------------------------------------------------------------------------- */
