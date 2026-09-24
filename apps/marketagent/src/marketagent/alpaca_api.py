@@ -16,6 +16,7 @@ from typing import Any
 
 import httpx
 
+from .accounts import secret_suffix
 from .fetch import get_json, post_json
 from .settings import secret, settings
 
@@ -24,35 +25,29 @@ from .settings import secret, settings
 NEWS_PAGE_LIMIT = 50
 BARS_PAGE_LIMIT = 1000
 
-# Key Vault secret name suffix for each account's credential pair — e.g.
-# ALPACA-API-KEY-STATIC100 / ALPACA-SECRET-KEY-STATIC100. Two separate paper
-# accounts need two separate credential pairs; threading an explicit account
-# argument through every call site that reaches Alpaca (marketdata.py,
-# news.py, every AlpacaBroker method) would be a much wider change than the
-# process-scoped setter below.
-ACCOUNT_SECRET_SUFFIX = {"static-100": "STATIC100", "dynamic-500": "DYNAMIC500"}
-
+# A process-scoped account rather than an argument: threading one through every
+# call site that reaches Alpaca (marketdata.py, news.py, every AlpacaBroker
+# method) would be a much wider change than this setter.
 _account: str | None = None
 
 
 def use_account(name: str) -> None:
-    """Select which account subsequent calls in this process authenticate as.
+    """Select which pot's paper account subsequent calls authenticate as.
 
-    Every job process runs exactly one account for its whole lifetime, so this
-    is called once, at the top of a job's `run()`, before any Alpaca call. The
-    combined summary job (which touches both accounts) calls it once per
-    portfolio inside its loop, immediately before that portfolio's work.
+    Every job process runs exactly one pot for its whole lifetime, so this is
+    called once, at the top of a job's `run()`, before any Alpaca call. The
+    combined summary job calls it once per pot inside its loop, immediately
+    before that pot's work.
     """
     global _account
-    if name not in ACCOUNT_SECRET_SUFFIX:
-        raise ValueError(f"unknown account {name!r}")
+    secret_suffix(name)
     _account = name
 
 
 def headers() -> dict[str, str]:
     if _account is None:
         raise RuntimeError("alpaca_api.use_account() must be called before any Alpaca request")
-    suffix = ACCOUNT_SECRET_SUFFIX[_account]
+    suffix = secret_suffix(_account)
     return {
         "APCA-API-KEY-ID": secret(f"ALPACA-API-KEY-{suffix}"),
         "APCA-API-SECRET-KEY": secret(f"ALPACA-SECRET-KEY-{suffix}"),

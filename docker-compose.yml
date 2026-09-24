@@ -112,12 +112,12 @@ services:
   # Not started by default: `docker compose run --rm agent` runs it once. It is
   # a scheduled job rather than a service, and a restarting container would
   # trade repeatedly.
-  # PORTFOLIO selects which of the two accounts a run trades as — set by
-  # `make run-agent PORTFOLIO=dynamic-500`; defaults to static-100.
+  # PORTFOLIO selects which pot a run trades as — set by
+  # `make run-agent PORTFOLIO=health`; defaults to tech.
   agent:
     build:
       context: ./apps/marketagent
-    command: ["agent", "--trigger", "manual", "--portfolio", "${PORTFOLIO:-static-100}"]
+    command: ["agent", "--trigger", "manual", "--portfolio", "${PORTFOLIO:-tech}"]
     profiles: ["jobs"]
     environment:
       ENVIRONMENT: local
@@ -137,7 +137,7 @@ services:
 
   # Also on demand: `docker compose run --rm weekly`. Reads only — no market
   # data, no broker — so the one thing it costs is a single Sonnet call.
-  # Covers both accounts in one run; no PORTFOLIO to set.
+  # Covers every pot in one run; no PORTFOLIO to set.
   weekly:
     build:
       context: ./apps/marketagent
@@ -163,29 +163,7 @@ services:
   sync:
     build:
       context: ./apps/marketagent
-    command: ["sync", "--portfolio", "${PORTFOLIO:-static-100}"]
-    profiles: ["jobs"]
-    environment:
-      ENVIRONMENT: local
-      POSTGRES_HOST: db
-      POSTGRES_DATABASE: marketagent
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: local
-      KEY_VAULT_URI: "${KEY_VAULT_URI:-}"
-      AZURE_KEYVAULT_TOKEN: "${AZURE_KEYVAULT_TOKEN:-}"
-    env_file:
-      - path: .env
-        required: false
-    depends_on:
-      db:
-        condition: service_healthy
-
-  # `docker compose run --rm rebalance`. Touches dynamic-500 only — see
-  # jobs/rebalance.py — and calls no Alpaca/DeepSeek API, only Wikipedia.
-  rebalance:
-    build:
-      context: ./apps/marketagent
-    command: ["rebalance"]
+    command: ["sync", "--portfolio", "${PORTFOLIO:-tech}"]
     profiles: ["jobs"]
     environment:
       ENVIRONMENT: local

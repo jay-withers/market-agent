@@ -12,12 +12,12 @@ with them and no result of that computation goes back into the database. A
 `toFixed` call awkward for no gain in a figure that is only ever looked at.
 
 **Most functions here take a required `portfolio` argument, with no default.**
-There are two accounts ('static-100' and 'dynamic-500') and no sense in which
-either is "the" portfolio, so a forgotten argument must fail loudly rather than
-silently show one account's data under the other's request. `latest_summary`,
-`latest_review` and `news` are the exceptions: the daily summary and weekly
-review are combined reports covering both accounts already, and news is
-ticker-level reference data with no account dimension at all.
+There are several pots and no sense in which any one is "the" portfolio, so a
+forgotten argument must fail loudly rather than silently show one pot's data
+under another's request. `accounts`, `comparison`, `latest_summary`,
+`latest_review` and `news` are the exceptions: the first two span every pot,
+the daily summary and weekly review are combined reports already, and news is
+ticker-level reference data with no pot dimension at all.
 """
 
 from __future__ import annotations
@@ -27,9 +27,15 @@ from typing import Any
 
 from psycopg.rows import dict_row
 
-from .repository import JOB_TIMEOUT_SECONDS, portfolio_id
+from .repository import JOB_TIMEOUT_SECONDS, active_portfolios, portfolio_id
 
-ACCOUNTS = ("static-100", "dynamic-500")
+
+def accounts(conn: Any) -> list[dict[str, Any]]:
+    """The active pots, in the order the dashboard shows them."""
+    return _rows(
+        conn,
+        "SELECT name, description, initial_cash_usd FROM portfolio WHERE is_active ORDER BY id",
+    )
 
 
 def _rows(conn: Any, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
@@ -122,11 +128,11 @@ def performance(conn: Any, portfolio: str, days: int = 180) -> dict[str, Any]:
 
 
 def comparison(conn: Any, days: int = 180) -> dict[str, Any]:
-    """Both accounts' valuation series in one payload, for the Compare view.
+    """Every active pot's valuation series in one payload, for the Compare view.
 
-    Genuinely new shape rather than two calls to `performance`: the dashboard
-    wants both series keyed by account name in one response to plot on one
-    chart, not two separate documents it has to merge itself.
+    One response rather than a `performance` call per pot: the dashboard wants
+    every series keyed by pot name to plot on one chart, not separate
+    documents it has to merge itself.
     """
     return {
         name: _rows(
@@ -137,7 +143,7 @@ def comparison(conn: Any, days: int = 180) -> dict[str, Any]:
             " ORDER BY dp.as_of",
             (name, days),
         )
-        for name in ACCOUNTS
+        for name in active_portfolios(conn)
     }
 
 
@@ -166,9 +172,9 @@ def watchlist(conn: Any, portfolio: str) -> list[dict[str, Any]]:
     Scoped by `portfolio_watchlist` the same way `repository.active_tickers`
     is: which tickers are tradeable is a per-portfolio fact, and benchmarks are
     excluded via `companies.is_benchmark` since a benchmark is reference data,
-    never something either account actually trades. Active rows only — a
-    de-watchlisted ticker (still held, if `dynamic-500` drops it from the
-    index) reflects the account's history, not what the agent considers today.
+    never something any pot actually trades. Active rows only — a
+    de-watchlisted ticker that is still held reflects the pot's history, not
+    what the agent considers today.
     """
     pid = portfolio_id(conn, portfolio)
     return _rows(
@@ -314,7 +320,7 @@ def runs(conn: Any, portfolio: str, limit: int = 30) -> list[dict[str, Any]]:
 
 
 def latest_summary(conn: Any) -> dict[str, Any] | None:
-    """The most recent daily summary — one combined email covering both accounts."""
+    """The most recent daily summary — one combined email covering every pot."""
     return _row(
         conn,
         "SELECT id, as_of, subject, body_markdown, body_html, model, email_status,"
@@ -326,7 +332,7 @@ def latest_summary(conn: Any) -> dict[str, Any] | None:
 def latest_review(conn: Any) -> dict[str, Any] | None:
     """The most recent weekly review, for the dashboard.
 
-    One combined review covering both accounts. Returns the model's prose and
+    One combined review covering every pot. Returns the model's prose and
     its structured proposals, not `body_html`. That column is Markdown-rendered
     model output and Python-Markdown passes raw HTML straight through, so
     serving it to a browser that would inject it into the DOM hands a model an

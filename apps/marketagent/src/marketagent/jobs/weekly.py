@@ -6,9 +6,9 @@ because it reads that summary's valuation as the week's closing figure.
 It answers a question a single day cannot. The daily email says what happened;
 this says whether the *machinery* is working — which risk limit is actually
 shaping each account, which watchlist names never produce anything, whether
-the jobs ran and the emails sent — and proposes changes. Covers both accounts
-in one review, with a comparison between them, for the same reason the daily
-summary does: the point of running them side by side is to compare them.
+the jobs ran and the emails sent — and proposes changes. Covers every active
+pot in one review, with a comparison between them, for the same reason the
+daily summary does: the point of running them side by side is to compare them.
 
 Three rules shape it:
 
@@ -48,8 +48,6 @@ logger = logging.getLogger(__name__)
 # Seven days, inclusive of both ends, so a Sunday run covers the Monday before.
 REVIEW_DAYS = 7
 
-ACCOUNTS = ("static-100", "dynamic-500")
-
 
 def run(
     as_of: date | None = None,
@@ -58,7 +56,7 @@ def run(
     """Produce and send one week's combined review.
 
     Returns the `weekly_reviews` id, or None on a week with no agent runs at
-    all, for either account — there is nothing to review, and an LLM call to
+    all, for any pot — there is nothing to review, and an LLM call to
     say so is worth neither the money nor the credibility of a row that
     reviews nothing.
     """
@@ -69,7 +67,7 @@ def run(
     accounts: dict[str, dict] = {}
     with pool().connection() as conn:
         previous = repo.last_recommendations(conn, before=start)
-        for name in ACCOUNTS:
+        for name in repo.active_portfolios(conn):
             pid = repo.portfolio_id(conn, name=name)
             accounts[name] = {
                 "pid": pid,
@@ -79,11 +77,9 @@ def run(
                 "metrics": repo.week_metrics(conn, pid, start, as_of),
             }
 
-    total_runs = sum(accounts[n]["metrics"]["runs"].get("runs") or 0 for n in ACCOUNTS)
+    total_runs = sum(data["metrics"]["runs"].get("runs") or 0 for data in accounts.values())
     if not total_runs:
-        logger.info(
-            "no agent runs for either account between %s and %s, nothing to review", start, as_of
-        )
+        logger.info("no agent runs for any pot between %s and %s, nothing to review", start, as_of)
         return None
 
     # After the short-circuit, not before: a week with no runs at all is not
@@ -95,15 +91,13 @@ def run(
     # Stored alongside the rest, so "has this fired three weeks running" is a
     # query against weekly_reviews.metrics rather than a re-read of the prose.
     with pool().connection() as conn:
-        for name in ACCOUNTS:
-            data = accounts[name]
+        for data in accounts.values():
             data["metrics"]["integrity"] = repo.week_integrity(conn, data["pid"], start, as_of)
 
-    # The limits each account's engine would actually build, not a second read
+    # The limits each pot's engine would actually build, not a second read
     # of the same environment variables: the table has to show what actually
     # bounded the week's decisions, and two readers of one config can drift.
-    for name in ACCOUNTS:
-        data = accounts[name]
+    for data in accounts.values():
         data["lim"] = risk_limits(frozenset(data["tickers"]))
 
     facts = _facts_table(start, as_of, accounts)
@@ -126,7 +120,7 @@ def run(
             assessment=review.value.assessment,
             body_markdown=body_markdown,
             body_html=body_html,
-            metrics={name: accounts[name]["metrics"] for name in ACCOUNTS},
+            metrics={name: data["metrics"] for name, data in accounts.items()},
             recommendations=[p.model_dump() for p in proposals],
             model=review.model,
             prompt_version=PROMPT_VERSION,
@@ -157,8 +151,8 @@ def _subject(as_of: date, accounts: dict[str, dict], proposals: list[ProposedCha
     """
     count = f"{len(proposals)} proposal{'' if len(proposals) == 1 else 's'}"
     parts = []
-    for name in ACCOUNTS:
-        metrics = accounts[name]["metrics"]
+    for name, data in accounts.items():
+        metrics = data["metrics"]
         valuation = metrics["valuation"]
         if valuation is None:
             parts.append(f"{name} no valuation")
@@ -178,8 +172,8 @@ def _subject(as_of: date, accounts: dict[str, dict], proposals: list[ProposedCha
     # which is the one case where ordinary-looking is wrong — the same reason
     # the daily email carries `no agent run`.
     failed = sum(
-        len([c for c in (accounts[n]["metrics"].get("integrity") or []) if not c["ok"]])
-        for n in ACCOUNTS
+        len([c for c in (data["metrics"].get("integrity") or []) if not c["ok"]])
+        for data in accounts.values()
     )
     if failed:
         subject += f" — {failed} data check{'' if failed == 1 else 's'} failed"
@@ -208,11 +202,10 @@ def _signed(value: Decimal) -> str:
 
 
 def _comparison_section(accounts: dict[str, dict]) -> list[str]:
-    """Which account is ahead this week, and which limit is shaping each one."""
-    totals = {
-        n: (accounts[n]["metrics"]["valuation"] or {}).get("total_value_usd") for n in ACCOUNTS
-    }
-    changes = {n: _week_change(accounts[n]["metrics"])[1] for n in ACCOUNTS}
+    """Which pot leads this week, and which limit is shaping each one."""
+    names = list(accounts)
+    totals = {n: (accounts[n]["metrics"]["valuation"] or {}).get("total_value_usd") for n in names}
+    changes = {n: _week_change(accounts[n]["metrics"])[1] for n in names}
 
     def top_constraint(name: str) -> str:
         rows = accounts[name]["metrics"]["constraints"]
@@ -229,35 +222,32 @@ def _comparison_section(accounts: dict[str, dict]) -> list[str]:
         return f"{idle} of {len(rows)}"
 
     lines = [
-        "## static-100 vs dynamic-500",
+        "## The pots",
         "",
-        "| | " + " | ".join(ACCOUNTS) + " |",
-        "| --- | " + " | ".join(["---"] * len(ACCOUNTS)) + " |",
+        "| | " + " | ".join(names) + " |",
+        "| --- | " + " | ".join(["---"] * len(names)) + " |",
         "| Total value | "
-        + " | ".join(f"${totals[n]}" if totals[n] is not None else "not recorded" for n in ACCOUNTS)
+        + " | ".join(f"${totals[n]}" if totals[n] is not None else "not recorded" for n in names)
         + " |",
         "| Change this week | "
         + " | ".join(
-            f"{_signed(changes[n])}%" if changes[n] is not None else "not computable"
-            for n in ACCOUNTS
+            f"{_signed(changes[n])}%" if changes[n] is not None else "not computable" for n in names
         )
         + " |",
         "| Most frequent binding constraint | "
-        + " | ".join(top_constraint(n) for n in ACCOUNTS)
+        + " | ".join(top_constraint(n) for n in names)
         + " |",
-        "| Watchlist names with no decisions | "
-        + " | ".join(idle_names(n) for n in ACCOUNTS)
-        + " |",
+        "| Watchlist names with no decisions | " + " | ".join(idle_names(n) for n in names) + " |",
         "",
     ]
-    if all(t is not None for t in totals.values()):
-        leader = max(ACCOUNTS, key=lambda n: totals[n])
-        trailer = next(n for n in ACCOUNTS if n != leader)
-        gap = totals[leader] - totals[trailer]
+    if len(names) > 1 and all(t is not None for t in totals.values()):
+        ranked = sorted(names, key=lambda n: totals[n], reverse=True)
+        first, last = ranked[0], ranked[-1]
+        gap = totals[first] - totals[last]
         lines.append(
-            f"**{leader}** is ahead of **{trailer}** by ${gap} this week."
+            f"**{first}** leads and **{last}** trails, ${gap} apart this week."
             if gap
-            else "The two accounts are exactly level this week."
+            else "The pots are exactly level this week."
         )
         lines.append("")
     return lines
@@ -319,8 +309,8 @@ def _facts_table(start: date, end: date, accounts: dict[str, dict]) -> str:
         "",
     ]
     lines += _comparison_section(accounts)
-    for name in ACCOUNTS:
-        lines += _account_section(name, accounts[name])
+    for name, data in accounts.items():
+        lines += _account_section(name, data)
     return "\n".join(lines)
 
 
@@ -626,8 +616,8 @@ def _prompt(facts: str, previous: list[dict[str, Any]]) -> str:
         f"{facts}\n\n"
         f"{context}"
         "Write the assessment that goes under the tables above, and propose the changes "
-        "the week's evidence supports. Address both accounts explicitly — which is ahead "
-        "this week, and whether the evidence points to the universe (static-100 vs "
-        "dynamic-500) or to the risk limits as the more likely explanation — rather than "
-        "assessing them as one merged experiment."
+        "the week's evidence supports. Address each pot explicitly — which leads and which "
+        "trails this week, and whether the evidence points to the pot's sector or to the "
+        "risk limits as the more likely explanation — rather than assessing them as one "
+        "merged experiment."
     )

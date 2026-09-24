@@ -17,10 +17,10 @@ from marketagent import queries
 from marketagent import settings as settings_module
 from marketagent.api import deps
 from marketagent.api.main import create_app
+from tests.helpers import POTS
 
-# One of the two valid values `deps.Account` accepts — used to build request
-# paths for every per-account endpoint below.
-ACCOUNT = "static-100"
+# An active pot — used to build request paths for every per-account endpoint.
+ACCOUNT = POTS[0]
 
 
 class FakeConn:
@@ -44,6 +44,9 @@ def client(monkeypatch):
     app = create_app()
     app.dependency_overrides[deps.connection] = lambda: conn
 
+    # The active pots `deps.Account` checks against, without a database.
+    monkeypatch.setattr(deps.repo, "active_portfolios", lambda c: list(POTS))
+    monkeypatch.setattr(queries, "accounts", lambda c: [{"name": n} for n in POTS])
     monkeypatch.setattr(queries, "overview", lambda c, account: {"portfolio": {"name": account}})
     monkeypatch.setattr(queries, "holdings", lambda c, account: [{"ticker": "NVDA"}])
     monkeypatch.setattr(queries, "watchlist", lambda c, account: [{"ticker": "NVDA"}])
@@ -55,9 +58,7 @@ def client(monkeypatch):
     monkeypatch.setattr(queries, "runs", lambda c, account, limit: [])
     monkeypatch.setattr(queries, "latest_summary", lambda c: None)
     monkeypatch.setattr(queries, "latest_review", lambda c: None)
-    monkeypatch.setattr(
-        queries, "comparison", lambda c, days: {"static-100": [], "dynamic-500": []}
-    )
+    monkeypatch.setattr(queries, "comparison", lambda c, days: {n: [] for n in POTS})
 
     with TestClient(app) as test_client:
         test_client.conn = conn
@@ -119,6 +120,7 @@ def test_readyz_reports_503_when_the_database_is_down():
         f"/api/trades?account={ACCOUNT}",
         f"/api/runs?account={ACCOUNT}",
         "/api/comparison",
+        "/api/accounts",
     ],
 )
 def test_every_read_endpoint_answers(client, path):
@@ -139,7 +141,7 @@ def test_every_read_endpoint_answers(client, path):
 )
 def test_a_per_account_endpoint_requires_the_account_parameter(client, path):
     """No default account: a forgotten `?account=` must fail loudly rather
-    than silently answer for one of the two accounts."""
+    than silently answer for one of the pots."""
     assert client.get(path).status_code == 422
 
 
@@ -156,7 +158,13 @@ def test_a_per_account_endpoint_requires_the_account_parameter(client, path):
     ],
 )
 def test_an_unknown_account_value_is_rejected(client, path):
-    assert client.get(f"{path}?account=made-up").status_code == 422
+    assert client.get(f"{path}?account=made-up").status_code == 404
+
+
+def test_a_retired_account_is_rejected_like_an_unknown_one(client):
+    """The dashboard only shows active pots, so a retired pot's name answers
+    the same way as a name that never existed."""
+    assert client.get("/api/overview?account=static-100").status_code == 404
 
 
 def test_a_missing_decision_is_a_404_not_a_null_body(client):
@@ -223,6 +231,9 @@ def guarded(monkeypatch):
 
     app = create_app()
     app.dependency_overrides[deps.connection] = lambda: FakeConn()
+    # The active pots `deps.Account` checks against, without a database.
+    monkeypatch.setattr(deps.repo, "active_portfolios", lambda c: list(POTS))
+    monkeypatch.setattr(queries, "accounts", lambda c: [{"name": n} for n in POTS])
     monkeypatch.setattr(queries, "overview", lambda c, account: {"ok": True})
     with TestClient(app) as test_client:
         yield test_client

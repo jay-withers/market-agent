@@ -14,6 +14,7 @@ import { day, displayMoney, get, pct, when } from "../api";
 // Friendlier than the raw `source` value, which is a CHECK-constrained enum
 // meant for querying (`portfolio_watchlist.source`), not for reading.
 const SOURCE_LABEL: Record<WatchlistTicker["source"], string> = {
+  sector_snapshot: "sector snapshot",
   sp100_snapshot: "S&P 100 snapshot",
   sp500_index: "S&P 500 index",
   manual: "manual",

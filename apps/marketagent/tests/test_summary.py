@@ -5,11 +5,10 @@ database**. The model writes commentary and is shown the numbers as a table it
 is told not to restate, so what goes into that table decides what the narrative
 can truthfully say.
 
-Covers both accounts in one combined email now, so most tests build a full
-`accounts` dict (both 'static-100' and 'dynamic-500') via the helpers below,
-usually overriding only one account and leaving the other at a clean default —
-which is also what proves the two accounts render independently rather than
-bleeding into each other.
+Covers every pot in one combined email, so most tests build a full `accounts`
+dict (three pots) via the helpers below, usually overriding only one pot and
+leaving the others at a clean default — which is also what proves the pots
+render independently rather than bleeding into each other.
 """
 
 from __future__ import annotations
@@ -19,7 +18,6 @@ from decimal import Decimal
 
 from marketagent.benchmarks import CASH_SYMBOL, BenchmarkPoint
 from marketagent.jobs.summary import (
-    ACCOUNTS,
     _account_run_alert,
     _facts_table,
     _prompt,
@@ -28,6 +26,7 @@ from marketagent.jobs.summary import (
     _spend_section,
 )
 from marketagent.models import PortfolioState, Position
+from tests.helpers import POTS
 
 D = Decimal
 TODAY = date(2026, 9, 3)
@@ -108,13 +107,13 @@ def _account_data(
 
 
 def _accounts(**overrides) -> dict:
-    """Both accounts, clean by default. `overrides['static-100']` etc. replace one."""
-    return {name: overrides.get(name) or _account_data() for name in ACCOUNTS}
+    """Every pot, clean by default. `overrides['tech']` etc. replace one."""
+    return {name: overrides.get(name) or _account_data() for name in POTS}
 
 
 def _table(**kwargs) -> str:
-    """The facts table with 'static-100' overridden and 'dynamic-500' left clean."""
-    return _facts_table(TODAY, _accounts(**{"static-100": _account_data(**kwargs)}), _spend(), None)
+    """The facts table with 'tech' overridden and the other pots left clean."""
+    return _facts_table(TODAY, _accounts(**{"tech": _account_data(**kwargs)}), _spend(), None)
 
 
 # ---------------------------------------------------------------------------
@@ -168,19 +167,24 @@ def test_the_headline_figures_come_from_the_database():
     assert "| Started with | $500.0000 |" in table
 
 
-def test_both_accounts_get_their_own_labelled_section():
+def test_every_pot_gets_its_own_labelled_section():
     table = _table()
 
-    assert "## static-100" in table
-    assert "## dynamic-500" in table
+    for name in POTS:
+        assert f"## {name}" in table
 
 
-def test_the_comparison_section_names_the_leader():
-    """The reason this report exists: which account is ahead, stated plainly."""
+def test_the_comparison_section_ranks_the_pots():
+    """The reason this report exists: which pot leads, stated plainly."""
     table = _table(state=PortfolioState(cash_usd=D("600.0000"), positions=()))
 
-    assert "## static-100 vs dynamic-500" in table
-    assert "**static-100** is ahead of **dynamic-500**" in table
+    assert "## The pots" in table
+    assert "| 1 | tech | $600.0000 |" in table
+    assert "**tech** leads" in table
+
+
+def test_level_pots_are_reported_as_level():
+    assert "The pots are exactly level today." in _table()
 
 
 def test_benchmarks_are_labelled_and_the_cash_arm_is_named():
@@ -202,7 +206,7 @@ def test_a_refused_decision_shows_a_dash_rather_than_a_zero():
 def test_the_prompt_carries_each_accounts_own_reasoning():
     accounts = _accounts(
         **{
-            "static-100": _account_data(
+            "tech": _account_data(
                 decisions=[
                     ("AVGO", "BUY", D("0.62"), D("40"), "Raised AI guidance.", "recommended")
                 ]
@@ -213,12 +217,13 @@ def test_the_prompt_carries_each_accounts_own_reasoning():
     prompt = _prompt("FACTS", accounts)
 
     assert "FACTS" in prompt
-    assert "### static-100" in prompt
+    assert "### tech" in prompt
     assert "- AVGO (BUY): Raised AI guidance." in prompt
-    assert "### dynamic-500" in prompt
+    assert "### health" in prompt
+    assert "### energy" in prompt
 
 
-def test_the_prompt_handles_a_day_with_no_decisions_for_either_account():
+def test_the_prompt_handles_a_day_with_no_decisions_for_any_pot():
     assert "No decisions were taken." in _prompt("FACTS", _accounts())
 
 
@@ -228,7 +233,7 @@ def test_the_prompt_handles_a_day_with_no_decisions_for_either_account():
 
 
 def _spend_by_account(**overrides) -> dict:
-    return {name: overrides.get(name) or _spend() for name in ACCOUNTS}
+    return {name: overrides.get(name) or _spend() for name in POTS}
 
 
 def _spend_text(spend_by_account=None, total_spend=None, credit=None) -> str:
@@ -247,7 +252,7 @@ def test_the_spend_figures_are_the_stored_ones():
 def test_the_daily_rate_is_the_last_seven_days_not_all_time():
     # The question behind the figure is "how long does this last at the rate it
     # is going now", which an average over the whole experiment answers wrongly.
-    # The rate is computed from the *combined* total, not either account's own.
+    # The rate is computed from the *combined* total, not any pot's own.
     assert "$0.20/day" in _spend_text()
 
 
@@ -292,7 +297,17 @@ def test_the_scope_of_the_figures_is_stated_not_left_to_be_inferred():
     assert "excludes the call that writes this email" in text
     assert "read live and checked against the account" in text
     assert "from 2026-08-20 onwards" in text
-    assert "share one DeepSeek API key and one account balance" in text
+    assert "every key draws on one account balance" in text
+
+
+def test_the_combined_only_rows_line_up_with_the_pot_columns():
+    """The credit and runway rows leave one empty cell per pot, so the combined
+    figure lands in the Combined column however many pots there are."""
+    lines = _spend_text(credit=D("25.00")).splitlines()
+    header = next(line for line in lines if line.startswith("| |"))
+    for label in ("| Credit remaining |", "| Runway |"):
+        row = next(line for line in lines if line.startswith(label))
+        assert row.count("|") == header.count("|")
 
 
 def test_a_database_with_no_recorded_spend_says_so():
@@ -396,35 +411,34 @@ def test_a_failure_outranks_a_success_on_the_same_day():
     assert _account_run_alert(runs) == "agent run failed"
 
 
-def test_both_accounts_clean_earns_no_subject_warning():
+def test_every_pot_clean_earns_no_subject_warning():
     assert _run_alert(_accounts()) is None
 
 
-def test_one_accounts_failure_is_named_in_the_combined_alert():
-    accounts = _accounts(
-        **{"static-100": _account_data(runs=[_run(status="failed", error="boom")])}
-    )
+def test_one_pots_failure_is_named_in_the_combined_alert():
+    accounts = _accounts(**{"tech": _account_data(runs=[_run(status="failed", error="boom")])})
 
-    assert _run_alert(accounts) == "static-100: agent run failed"
+    assert _run_alert(accounts) == "tech: agent run failed"
 
 
-def test_both_accounts_failing_are_both_named():
+def test_every_failing_pot_is_named():
     accounts = _accounts(
         **{
-            "static-100": _account_data(runs=[]),
-            "dynamic-500": _account_data(runs=[_run(status="failed", error="boom")]),
+            "tech": _account_data(runs=[]),
+            "energy": _account_data(runs=[_run(status="failed", error="boom")]),
         }
     )
 
     alert = _run_alert(accounts)
-    assert "static-100: no agent run" in alert
-    assert "dynamic-500: agent run failed" in alert
+    assert "tech: no agent run" in alert
+    assert "energy: agent run failed" in alert
+    assert "health" not in alert
 
 
 def test_the_run_section_reaches_the_model():
     """The commentary is written from the facts table, so a failed run has to
     be visible there or the model narrates a quiet day."""
-    accounts = _accounts(**{"static-100": _account_data(runs=[])})
+    accounts = _accounts(**{"tech": _account_data(runs=[])})
     prompt = _prompt(_table(runs=[]), accounts)
 
     assert "No agent run is recorded for today." in prompt

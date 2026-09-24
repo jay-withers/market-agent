@@ -52,11 +52,17 @@ export type Performance = {
   benchmarks: BenchmarkPoint[];
 };
 
-/* The two paper accounts this experiment compares. No default anywhere this
- * appears — every per-account fetch names one explicitly, matching the API's
- * own `?account=` parameter, which has no default either. */
-export type Account = "static-100" | "dynamic-500";
-export const ACCOUNTS: readonly Account[] = ["static-100", "dynamic-500"];
+/* A pot's name. The list of pots comes from `/api/accounts` rather than being
+ * compiled in, so a new pot needs no dashboard change. No default anywhere
+ * this appears — every per-account fetch names one explicitly, matching the
+ * API's own `?account=` parameter, which has no default either. */
+export type Account = string;
+
+export type AccountInfo = {
+  name: Account;
+  description: string | null;
+  initial_cash_usd: number;
+};
 
 /* One account's point in the comparison series — a narrower shape than
  * `PerformancePoint`, matching exactly what `/api/comparison` selects. */
@@ -67,7 +73,7 @@ export type ComparisonPoint = {
   pnl_pct: number;
 };
 
-export type Comparison = Record<Account, ComparisonPoint[]>;
+export type Comparison = Record<Account, ComparisonPoint[] | undefined>;
 
 export type Holding = {
   ticker: string;
@@ -80,16 +86,16 @@ export type Holding = {
   last_close_date: string | null;
 };
 
-/* One name on an account's watchlist — what the agent considers each day,
- * whether or not it is currently held. `source` says how it got there:
- * `sp100_snapshot` (static-100's frozen seed), `sp500_index` (dynamic-500's
- * monthly rebalance) or `manual`. A de-watchlisted ticker (still held, if
- * dynamic-500 has since dropped it) is not part of this — see queries.py. */
+/* One name on a pot's watchlist — what the agent considers each day, whether
+ * or not it is currently held. `source` says how it got there:
+ * `sector_snapshot` (a pot's fixed sector list) or `manual`; the other two
+ * belong to the retired static-100/dynamic-500 accounts. A de-watchlisted
+ * ticker that is still held is not part of this — see queries.py. */
 export type WatchlistTicker = {
   ticker: string;
   name: string;
   sector: string | null;
-  source: "sp100_snapshot" | "sp500_index" | "manual";
+  source: "sector_snapshot" | "sp100_snapshot" | "sp500_index" | "manual";
   added_at: string;
 };
 

@@ -15,7 +15,7 @@ export const CONFIG = { apiOrigin: "", apiToken: "", version: "v0.14.0" };
 const HOLDING_TICKERS = ["AAPL", "AMD", "AVGO", "GOOGL", "META", "NVDA"] as const;
 
 export const OVERVIEW = {
-  portfolio: { name: "static-100", initial_cash_usd: 100000 },
+  portfolio: { name: "tech", initial_cash_usd: 100000 },
   cash_usd: 97350,
   positions_value_usd: 5130,
   total_value_usd: 102480,
@@ -208,22 +208,30 @@ export const REVIEW = {
   sent_at: "2026-09-19T22:00:00Z",
 };
 
+// Three pots, and the longest description the migration seeds, since the
+// Compare view's hint lists every one.
+export const ACCOUNTS = [
+  { name: "tech", description: "S&P 500 Information Technology", initial_cash_usd: 500 },
+  { name: "health", description: "S&P 500 Health Care", initial_cash_usd: 500 },
+  { name: "energy", description: "S&P 500 Energy and Utilities", initial_cash_usd: 500 },
+];
+
+const comparisonSeries = (slope: number) =>
+  series(90, 100000, slope).map((p) => ({
+    as_of: p.as_of,
+    total_value_usd: p.value,
+    pnl_usd: p.value - 100000,
+    pnl_pct: ((p.value - 100000) / 100000) * 100,
+  }));
+
 // Deliberately not the same series as PERFORMANCE.portfolio: the point of
-// this fixture is two accounts that diverge, so the Compare view's "which is
-// ahead" line has something real to say.
+// this fixture is pots that diverge, so the Compare view's "which leads" line
+// has something real to say. `energy` has no valuation yet — a pot added
+// after the others — and must not break the chart or the headline.
 export const COMPARISON = {
-  "static-100": series(90, 100000, 27.5).map((p) => ({
-    as_of: p.as_of,
-    total_value_usd: p.value,
-    pnl_usd: p.value - 100000,
-    pnl_pct: ((p.value - 100000) / 100000) * 100,
-  })),
-  "dynamic-500": series(90, 100000, 19).map((p) => ({
-    as_of: p.as_of,
-    total_value_usd: p.value,
-    pnl_usd: p.value - 100000,
-    pnl_pct: ((p.value - 100000) / 100000) * 100,
-  })),
+  tech: comparisonSeries(27.5),
+  health: comparisonSeries(19),
+  energy: [],
 };
 
 export const WATCHLIST = [
@@ -231,7 +239,7 @@ export const WATCHLIST = [
     ticker: "AAPL",
     name: "Apple Inc.",
     sector: "Technology",
-    source: "sp100_snapshot",
+    source: "sector_snapshot",
     added_at: "2026-01-05T06:00:00Z",
   },
   {
@@ -272,4 +280,5 @@ export const ROUTES: Record<string, unknown> = {
   "/api/runs": RUNS,
   "/api/reviews/latest": REVIEW,
   "/api/comparison": COMPARISON,
+  "/api/accounts": ACCOUNTS,
 };

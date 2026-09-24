@@ -47,78 +47,33 @@ def active_tickers(conn: Any, pid: int) -> list[str]:
     return [r[0] for r in rows]
 
 
-def watchlist_tickers(conn: Any, pid: int) -> set[str]:
-    """Every ticker currently active on this account's watchlist.
-
-    Used by the rebalance job to diff against a freshly fetched index list —
-    `active_tickers` also excludes benchmarks, which is irrelevant here since
-    a benchmark is never inserted into `portfolio_watchlist` in the first
-    place, but this stays separate so a caller does not have to reason about
-    that to trust the result.
-    """
-    rows = conn.execute(
-        "SELECT ticker FROM portfolio_watchlist WHERE portfolio_id = %s AND is_active",
-        (pid,),
-    ).fetchall()
-    return {r[0] for r in rows}
-
-
-def add_to_watchlist(conn: Any, pid: int, tickers: list[tuple[str, str, str | None]]) -> None:
-    """Add or re-activate tickers on an account's watchlist.
-
-    `tickers` is `(ticker, name, sector)`. `companies` is upserted first since
-    `portfolio_watchlist.ticker` references it — a name the rebalance job has
-    never seen before must exist as reference data before it can be added to
-    anyone's watchlist. Re-activating a previously dropped ticker (one back in
-    the index after falling out) clears `removed_at` rather than leaving a
-    stale value, since it is active again.
-    """
-    if not tickers:
-        return
-    with conn.cursor() as cur:
-        cur.executemany(
-            "INSERT INTO companies (ticker, name, sector) VALUES (%s, %s, %s)"
-            " ON CONFLICT (ticker) DO UPDATE SET name = EXCLUDED.name, sector = EXCLUDED.sector",
-            tickers,
-        )
-        cur.executemany(
-            "INSERT INTO portfolio_watchlist (portfolio_id, ticker, is_active, source)"
-            " VALUES (%s, %s, true, 'sp500_index')"
-            " ON CONFLICT (portfolio_id, ticker) DO UPDATE SET"
-            "   is_active = true, source = 'sp500_index', removed_at = NULL",
-            [(pid, t[0]) for t in tickers],
-        )
-
-
-def remove_from_watchlist(conn: Any, pid: int, tickers: list[str]) -> None:
-    """Drop tickers from an account's watchlist without touching any position.
-
-    `is_active = false` only — never a row delete and never a change to
-    `positions`/`trades`/`ai_decisions`. A ticker that falls out of the index
-    simply stops being analysed and traded from its next run onward; any
-    existing holding stays tracked and valued exactly as a manually-held
-    ticker already is, sellable only by a human going directly through
-    Alpaca. The rebalance job never auto-sells.
-    """
-    if not tickers:
-        return
-    conn.execute(
-        "UPDATE portfolio_watchlist SET is_active = false, removed_at = now()"
-        " WHERE portfolio_id = %s AND ticker = ANY(%s)",
-        (pid, tickers),
-    )
-
-
 def portfolio_id(conn: Any, name: str) -> int:
-    """Look up the id of one of the two accounts ('static-100'/'dynamic-500').
+    """Look up a pot's id by name, retired pots included.
 
-    No default: every caller must say which account it means, so a forgotten
-    argument fails loudly instead of silently picking one.
+    No default: every caller must say which pot it means, so a forgotten
+    argument fails loudly instead of silently picking one. Retired pots still
+    resolve because their history stays readable; the jobs that must not touch
+    one check `is_active` themselves.
     """
     row = conn.execute("SELECT id FROM portfolio WHERE name = %s", (name,)).fetchone()
     if row is None:
-        raise LookupError(f"portfolio '{name}' does not exist — run sql/009-two-accounts.sql")
+        raise LookupError(f"portfolio '{name}' does not exist — run sql/011-sector-pots.sql")
     return int(row[0])
+
+
+def active_portfolios(conn: Any) -> list[str]:
+    """The pots currently trading, in id order — the one list every job iterates.
+
+    Ordered by id so the summary's tables, the dashboard's tabs and the chart's
+    colour slots keep a stable order as pots are added.
+    """
+    rows = conn.execute("SELECT name FROM portfolio WHERE is_active ORDER BY id").fetchall()
+    return [str(row[0]) for row in rows]
+
+
+def is_active(conn: Any, pid: int) -> bool:
+    row = conn.execute("SELECT is_active FROM portfolio WHERE id = %s", (pid,)).fetchone()
+    return bool(row and row[0])
 
 
 def load_cash(conn: Any, pid: int) -> Decimal:
@@ -167,9 +122,9 @@ def recent_decisions(conn: Any, pid: int, ticker: str, limit: int) -> list[dict[
     the prompt otherwise tells it that it recommended the same BUY four days
     running, or that the engine clamped every one of them to the same cap.
 
-    Filtered by `pid`: with two accounts able to hold decisions on the same
-    ticker (the two watchlists overlap heavily), an unfiltered query would leak
-    one account's decision history into the other's prompt.
+    Filtered by `pid`: with several pots able to hold decisions on the same
+    ticker, an unfiltered query would leak one pot's decision history into
+    another's prompt.
 
     The verdict and the resulting trade's status both come along, because
     "approved" and "filled" are different facts — a scheduled run submits
@@ -210,10 +165,11 @@ def spend(conn: Any, as_of: date, pid: int | None = None) -> dict[str, Any]:
     `pid` scopes the total to one account's `agent_runs` spend only. With
     `pid=None`, the total additionally folds in `daily_summaries`/
     `weekly_reviews` cost, which is never split by account — those two jobs
-    are combined across both portfolios (see jobs/summary.py, jobs/weekly.py),
-    so their spend isn't attributable to one account. The two accounts share
-    one DeepSeek API key and one account balance, so the runway figure the
-    summary email shows is computed once from the `pid=None` total, not twice.
+    are combined across every pot (see jobs/summary.py, jobs/weekly.py) and
+    run on the shared key, so their spend isn't attributable to one pot. Each
+    pot has its own API key but every key draws on one DeepSeek account
+    balance, so the runway figure the summary email shows is computed once
+    from the `pid=None` total, not per pot.
 
     A row with a NULL cost is one written before the column existed, or a run
     that failed before its first call. Excluded rather than counted as zero:
@@ -365,12 +321,24 @@ def save_news_analysis(conn: Any, rows: list[dict[str, Any]]) -> int:
 JOB_TIMEOUT_SECONDS = 1800
 
 
-def open_run(conn: Any, pid: int, trigger: str, dry_run: bool, image_tag: str | None) -> int:
-    """Open an `agent_runs` row before any work, so a crash leaves evidence."""
+def open_run(
+    conn: Any,
+    pid: int,
+    trigger: str,
+    dry_run: bool,
+    image_tag: str | None,
+    config: dict[str, Any] | None = None,
+) -> int:
+    """Open an `agent_runs` row before any work, so a crash leaves evidence.
+
+    `config` is the run's effective model and risk settings. Pots can override
+    them per job, and `ai_decisions` records the model but not the effort, so
+    without this a decision could not be traced to the settings behind it.
+    """
     row = conn.execute(
-        "INSERT INTO agent_runs (portfolio_id, trigger, dry_run, image_tag)"
-        " VALUES (%s, %s, %s, %s) RETURNING id",
-        (pid, trigger, dry_run, image_tag),
+        "INSERT INTO agent_runs (portfolio_id, trigger, dry_run, image_tag, config)"
+        " VALUES (%s, %s, %s, %s, %s) RETURNING id",
+        (pid, trigger, dry_run, image_tag, Jsonb(config) if config is not None else None),
     ).fetchone()
     return int(row[0])
 
@@ -608,10 +576,10 @@ def save_benchmarks(conn: Any, pid: int, points: list[Any]) -> int:
     """Upsert benchmark points for one account.
 
     Keyed `(portfolio_id, symbol, as_of)`: `close_usd` (the raw market price)
-    ends up harmlessly duplicated across both accounts' rows for the same
-    symbol/day, but `value_usd` ("what this account's notional would be worth")
-    is portfolio-dependent and would otherwise collide between the two
-    accounts under the old `(symbol, as_of)` key.
+    ends up harmlessly duplicated across every pot's rows for the same
+    symbol/day, but `value_usd` ("what this pot's notional would be worth")
+    is portfolio-dependent and would otherwise collide between pots under the
+    old `(symbol, as_of)` key.
     """
     if not points:
         return 0
@@ -811,7 +779,7 @@ def week_metrics(conn: Any, pid: int, start: date, end: date) -> dict[str, Any]:
     # decisions: a ticker the agent never reached is exactly the row worth
     # seeing, and a join driven by `ai_decisions` would omit it. Scoped to this
     # account's watchlist, not the global `companies` table, for the same
-    # reason `active_tickers` is: two accounts trade different universes.
+    # reason `active_tickers` is: each pot trades its own universe.
     # Scalar subqueries because the counts come from three different tables.
     tickers = rows(
         "SELECT w.ticker,"

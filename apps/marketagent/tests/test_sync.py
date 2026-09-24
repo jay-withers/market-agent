@@ -12,11 +12,11 @@ from marketagent.broker.alpaca import AlpacaBroker
 from marketagent.broker.base import BrokerAccount, BrokerPosition, BrokerSnapshot, OpenOrder
 from marketagent.models import PortfolioState, Position
 from marketagent.sync import risk_state
+from tests.helpers import POTS
 
 # Neither of these tests depends on watchlist contents, only on the portfolio
-# row itself, so either seeded account would do; static-100 is used throughout
-# for consistency with the other two test files.
-PORTFOLIO = "static-100"
+# row itself, so any seeded pot would do.
+PORTFOLIO = POTS[0]
 
 
 def snapshot(cash="100000", equity="100000", positions=(), account_id="paper-account"):
@@ -95,18 +95,11 @@ def test_blocked_account_cannot_be_used_for_new_orders():
 
 
 def test_snapshot_parses_the_account_and_pending_orders_without_posting(monkeypatch):
-    # AlpacaBroker authenticates through alpaca_api.headers(), which now needs
-    # an account selected first — the process-scoped setter that lets the two
-    # accounts share credential-fetching code without threading an explicit
-    # account argument through every call site. monkeypatch rather than
-    # `use_account` directly so the module-level state does not leak into
-    # whatever test runs next.
-    monkeypatch.setattr(alpaca_api, "_account", "static-100")
-    # conftest.py's fake_secrets fixture only sets the pre-two-account
-    # ALPACA_API_KEY/ALPACA_SECRET_KEY names; headers() now looks up the
-    # account-suffixed ones.
-    monkeypatch.setenv("ALPACA_API_KEY_STATIC100", "test-alpaca-key")
-    monkeypatch.setenv("ALPACA_SECRET_KEY_STATIC100", "test-alpaca-secret")
+    # AlpacaBroker authenticates through alpaca_api.headers(), which needs a
+    # pot selected first. monkeypatch rather than `use_account` directly so the
+    # module-level state does not leak into whatever test runs next; conftest
+    # already sets every pot's credential pair.
+    monkeypatch.setattr(alpaca_api, "_account", PORTFOLIO)
 
     def handler(request):
         assert request.method == "GET"

@@ -9,10 +9,10 @@ LINES ?= 200
 # hardcoding the dev vault is safe, and overridable for anything else.
 KEY_VAULT_URI ?= https://kv-marketagent-dev.vault.azure.net/
 
-# Which account run-agent/run-sync act as. static-100 is the default so the
-# plain command stays useful without an extra flag; dynamic-500 needs saying
-# explicitly (`make run-agent PORTFOLIO=dynamic-500`).
-PORTFOLIO ?= static-100
+# Which pot run-agent and the logs targets act as. tech is the default so the
+# plain command stays useful without an extra flag; another pot needs saying
+# explicitly (`make run-agent PORTFOLIO=health`).
+PORTFOLIO ?= tech
 
 .DEFAULT_GOAL := help
 
@@ -99,7 +99,7 @@ demo: ## Start the local stack and load fake data for a dashboard preview
 # token is minted here and passed in: it lasts about an hour and is scoped to
 # Key Vault alone, which is a far better thing to hand a container than four
 # long-lived API keys in a .env. Falls back to .env if there is no az login.
-run-agent: ## Run the agent once against the local stack (Alpaca paper orders). PORTFOLIO=static-100|dynamic-500
+run-agent: ## Run the agent once against the local stack (Alpaca paper orders). PORTFOLIO=tech|health|energy
 	KEY_VAULT_URI=$(KEY_VAULT_URI) \
 	PORTFOLIO=$(PORTFOLIO) \
 	AZURE_KEYVAULT_TOKEN="$$(az account get-access-token \
@@ -202,51 +202,47 @@ deploy: ## Deploy built images to Container Apps via az cli (needs IMAGE_TAG=vX.
 	RG=$$(terraform -chdir=$(TF_DIR) output -raw resource_group_name); \
 	API=$$(terraform -chdir=$(TF_DIR) output -raw api_app_name); \
 	DASHBOARD=$$(terraform -chdir=$(TF_DIR) output -raw dashboard_app_name); \
-	AGENT100=$$(terraform -chdir=$(TF_DIR) output -raw agent100_job_name); \
-	AGENT500=$$(terraform -chdir=$(TF_DIR) output -raw agent500_job_name); \
 	SUMMARY=$$(terraform -chdir=$(TF_DIR) output -raw summary_job_name); \
 	WEEKLY=$$(terraform -chdir=$(TF_DIR) output -raw weekly_review_job_name); \
-	SYNC100=$$(terraform -chdir=$(TF_DIR) output -raw sync100_job_name 2>/dev/null) || { \
-	  echo "error: one or more jobs are not in Terraform state — apply the infrastructure change before make deploy" >&2; \
+	POT_JOBS=$$(terraform -chdir=$(TF_DIR) output -json agent_job_names 2>/dev/null | jq -r '.[]'); \
+	SYNC_JOBS=$$(terraform -chdir=$(TF_DIR) output -json sync_job_names 2>/dev/null | jq -r '.[]'); \
+	if [ -z "$$POT_JOBS" ] || [ -z "$$SYNC_JOBS" ]; then \
+	  echo "error: the pots' jobs are not in Terraform state — apply the infrastructure change before make deploy" >&2; \
 	  echo "run: make apply ENV=$(ENV)" >&2; \
 	  exit 1; \
-	}; \
-	SYNC500=$$(terraform -chdir=$(TF_DIR) output -raw sync500_job_name); \
-	REBALANCE=$$(terraform -chdir=$(TF_DIR) output -raw rebalance_job_name); \
+	fi; \
 	az containerapp update --name $$API --resource-group $$RG \
 	  --image $(IMAGE_REGISTRY)/marketagent:$(MARKETAGENT_IMAGE_TAG) \
 	  --set-env-vars IMAGE_TAG=$(MARKETAGENT_IMAGE_TAG); \
 	az containerapp update --name $$DASHBOARD --resource-group $$RG \
 	  --image $(IMAGE_REGISTRY)/dashboard:$(DASHBOARD_IMAGE_TAG) \
 	  --set-env-vars IMAGE_TAG=$(DASHBOARD_IMAGE_TAG); \
-	for JOB in $$AGENT100 $$AGENT500 $$SUMMARY $$WEEKLY $$SYNC100 $$SYNC500 $$REBALANCE; do \
+	for JOB in $$POT_JOBS $$SYNC_JOBS $$SUMMARY $$WEEKLY; do \
 	  az containerapp job update --name $$JOB --resource-group $$RG \
 	    --image $(IMAGE_REGISTRY)/marketagent:$(MARKETAGENT_IMAGE_TAG) \
 	    --set-env-vars IMAGE_TAG=$(MARKETAGENT_IMAGE_TAG); \
 	done
 
 # --container is mandatory here, and it names the container inside the job
-# (`agent100`/`agent500`), not the job itself. Streaming only works while an
-# execution has a live replica: a finished run keeps none, and the CLI then
-# fails with "No replicas found for execution". Use logs-azure-history for a
-# run that is over. PORTFOLIO selects which account, same as run-agent.
-logs-azure: ## Tail an agent job's logs in Azure (only while a run is in flight). PORTFOLIO=static-100|dynamic-500
-	@if [ "$(PORTFOLIO)" = "dynamic-500" ]; then JOB_OUTPUT=agent500_job_name; CONTAINER=agent500; \
-	else JOB_OUTPUT=agent100_job_name; CONTAINER=agent100; fi; \
-	az containerapp job logs show \
-	  --name $$(terraform -chdir=$(TF_DIR) output -raw $$JOB_OUTPUT) \
+# (`agent-<pot>`), not the job itself. Streaming only works while an execution
+# has a live replica: a finished run keeps none, and the CLI then fails with
+# "No replicas found for execution". Use logs-azure-history for a run that is
+# over. PORTFOLIO selects which pot, same as run-agent.
+logs-azure: ## Tail a pot's agent job logs in Azure (only while a run is in flight). PORTFOLIO=tech|health|energy
+	@az containerapp job logs show \
+	  --name $$(terraform -chdir=$(TF_DIR) output -json agent_job_names | jq -r '.["$(PORTFOLIO)"]') \
 	  --resource-group $$(terraform -chdir=$(TF_DIR) output -raw resource_group_name) \
-	  --container $$CONTAINER \
+	  --container agent-$(PORTFOLIO) \
 	  --follow
 
 # Log Analytics keeps what the replicas don't, so this is the one that works
 # after a scheduled run has finished. Ingestion lags by a few minutes, which is
-# why it complements the live tail rather than replacing it.
-logs-azure-history: ## An agent job's recent logs from Log Analytics (LINES=200). PORTFOLIO=static-100|dynamic-500
-	@if [ "$(PORTFOLIO)" = "dynamic-500" ]; then CONTAINER=agent500; JOB_OUTPUT=agent500_job_name; else CONTAINER=agent100; JOB_OUTPUT=agent100_job_name; fi; \
-	az monitor log-analytics query \
+# why it complements the live tail rather than replacing it. Console log rows
+# name the job in ContainerJobName_s; they carry no JobName_s column at all.
+logs-azure-history: ## A pot's recent agent job logs from Log Analytics (LINES=200). PORTFOLIO=tech|health|energy
+	@az monitor log-analytics query \
 	  --workspace $$(terraform -chdir=$(TF_DIR) output -raw log_analytics_workspace_customer_id) \
-	  --analytics-query "ContainerAppConsoleLogs_CL | where EnvironmentName_s == '$$(terraform -chdir=$(TF_DIR) output -raw container_app_log_environment_name)' | where JobName_s == '$$(terraform -chdir=$(TF_DIR) output -raw $$JOB_OUTPUT)' | where ContainerName_s == '$$CONTAINER' | top $(LINES) by TimeGenerated desc | order by TimeGenerated asc | project TimeGenerated, Log_s" \
+	  --analytics-query "ContainerAppConsoleLogs_CL | where EnvironmentName_s == '$$(terraform -chdir=$(TF_DIR) output -raw container_app_log_environment_name)' | where ContainerJobName_s == '$$(terraform -chdir=$(TF_DIR) output -json agent_job_names | jq -r '.["$(PORTFOLIO)"]')' | where ContainerName_s == 'agent-$(PORTFOLIO)' | top $(LINES) by TimeGenerated desc | order by TimeGenerated asc | project TimeGenerated, Log_s" \
 	  -o table
 
 # -backend=false: the azurerm backend is configured partially (see

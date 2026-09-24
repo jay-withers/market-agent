@@ -1,4 +1,4 @@
-"""One entrypoint, six commands — `marketagent api|agent|summary|weekly|sync|rebalance`.
+"""One entrypoint, five commands — `marketagent api|agent|summary|weekly|sync`.
 
 The workloads share one image and differ only by the container's `args`, so
 this is what Terraform's `command = ["marketagent"]` reaches.
@@ -15,11 +15,6 @@ from datetime import date
 
 from . import telemetry
 from .settings import settings
-
-# The two accounts, each run by its own scheduled job. No default anywhere
-# this appears — a forgotten --portfolio must fail loudly, not silently pick
-# one account over the other.
-ACCOUNTS = ("static-100", "dynamic-500")
 
 
 def _configure_logging() -> None:
@@ -73,18 +68,17 @@ def main(argv: list[str] | None = None) -> int:
 
     agent = sub.add_parser("agent", help="run the agent once")
     agent.add_argument("--trigger", default="manual", choices=["manual", "schedule"])
-    agent.add_argument("--portfolio", required=True, choices=ACCOUNTS)
+    # A pot's name, checked against the database by the job itself so a new pot
+    # needs no code change. Required, with no default anywhere: a forgotten
+    # --portfolio must fail loudly, not silently pick one pot over another.
+    agent.add_argument("--portfolio", required=True)
 
     sub.add_parser("summary", help="produce and send the combined daily summary")
 
     sync_parser = sub.add_parser(
         "sync", help="refresh cash, positions and order status from Alpaca"
     )
-    sync_parser.add_argument("--portfolio", required=True, choices=ACCOUNTS)
-
-    sub.add_parser(
-        "rebalance", help="refresh dynamic-500's watchlist against current S&P 500 membership"
-    )
+    sync_parser.add_argument("--portfolio", required=True)
 
     weekly = sub.add_parser("weekly", help="produce and send the combined weekly review")
     # A date rather than always "today", so a week can be reviewed after the
@@ -159,19 +153,6 @@ def main(argv: list[str] | None = None) -> int:
             sync_job.run(portfolio=args.portfolio)
         except (Exception, SystemExit) as exc:
             logging.getLogger("marketagent").error("broker sync failed: %s", exc)
-            return 1
-        finally:
-            telemetry.flush()
-        return 0
-
-    if args.command == "rebalance":
-        from .jobs import rebalance as rebalance_job
-
-        signal.signal(signal.SIGTERM, _terminate)
-        try:
-            rebalance_job.run()
-        except (Exception, SystemExit) as exc:
-            logging.getLogger("marketagent").exception("rebalance failed: %s", exc)
             return 1
         finally:
             telemetry.flush()

@@ -21,6 +21,7 @@ from decimal import Decimal
 from marketagent import queries
 from marketagent import repository as repo
 from marketagent.models import PortfolioState, Recommendation, RiskReason, RiskVerdict
+from tests.helpers import POTS
 
 D = Decimal
 
@@ -29,10 +30,10 @@ OTHER = "MSFT"
 TODAY = date.today()
 
 # `queries.py` takes an account *name*, not a pid, and resolves the pid itself.
-# static-100 is seeded with real watchlist data by 010-seed-sp100-static.sql;
-# nothing here depends on which of the two accounts is used, so one constant
-# keeps every call site consistent.
-PORTFOLIO = "static-100"
+# The tech pot is seeded with real watchlist data by 011-sector-pots.sql;
+# nothing here depends on which pot is used, so one constant keeps every call
+# site consistent.
+PORTFOLIO = "tech"
 
 
 def _decision(
@@ -265,7 +266,7 @@ def test_watchlist_returns_the_seeded_snapshot_with_its_source(conn):
 
     apple = next(r for r in rows if r["ticker"] == "AAPL")
     assert apple["name"]
-    assert apple["source"] == "sp100_snapshot"
+    assert apple["source"] == "sector_snapshot"
     assert apple["added_at"]
 
 
@@ -278,10 +279,18 @@ def test_watchlist_excludes_benchmarks(conn):
     assert not {r["ticker"] for r in rows} & {"SPY", "VT", "EWU"}
 
 
-def test_watchlist_is_empty_before_dynamic_500_has_ever_rebalanced(conn):
-    """dynamic-500 gets no static seed — its watchlist is populated by the
-    monthly rebalance job, which nothing here has run."""
-    assert queries.watchlist(conn, "dynamic-500") == []
+def test_each_pot_has_its_own_fifty_ticker_watchlist(conn):
+    """The seeded lists do not overlap, so no ticker is traded by two pots."""
+    lists = {name: {r["ticker"] for r in queries.watchlist(conn, name)} for name in POTS}
+
+    assert all(len(tickers) == 50 for tickers in lists.values())
+    assert not (lists["tech"] & lists["health"] or lists["health"] & lists["energy"])
+
+
+def test_accounts_lists_the_active_pots_in_order_and_not_the_retired_ones(conn):
+    names = [row["name"] for row in queries.accounts(conn)]
+
+    assert names == list(POTS)
 
 
 def test_the_price_history_covers_held_tickers_only(conn):
@@ -336,11 +345,12 @@ def test_the_price_history_window_excludes_older_bars(conn):
 # ---------------------------------------------------------------------------
 
 
-def test_comparison_returns_both_accounts_keyed_by_name(conn):
-    """Genuinely new shape: both accounts' series in one payload, keyed by
-    account name, rather than two documents the dashboard has to merge itself."""
-    static_pid = repo.portfolio_id(conn, "static-100")
-    dynamic_pid = repo.portfolio_id(conn, "dynamic-500")
+def test_comparison_returns_every_active_pot_keyed_by_name(conn):
+    """Every pot's series in one payload, keyed by pot name, rather than
+    several documents the dashboard has to merge itself. Retired pots are left
+    out."""
+    static_pid = repo.portfolio_id(conn, "tech")
+    dynamic_pid = repo.portfolio_id(conn, "health")
     repo.save_daily_performance(
         conn,
         static_pid,
@@ -364,9 +374,10 @@ def test_comparison_returns_both_accounts_keyed_by_name(conn):
 
     result = queries.comparison(conn, days=30)
 
-    assert set(result) == {"static-100", "dynamic-500"}
-    assert [r["total_value_usd"] for r in result["static-100"]] == [510.0]
-    assert [r["total_value_usd"] for r in result["dynamic-500"]] == [520.0]
+    assert list(result) == list(POTS)
+    assert [r["total_value_usd"] for r in result["tech"]] == [510.0]
+    assert [r["total_value_usd"] for r in result["health"]] == [520.0]
+    assert result["energy"] == []
 
 
 # ---------------------------------------------------------------------------
