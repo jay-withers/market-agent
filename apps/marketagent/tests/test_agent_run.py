@@ -42,10 +42,10 @@ from marketagent.news import Article
 
 D = Decimal
 
-# One of the S&P 100 names sql/010-seed-sp100-static.sql puts on static-100's
+# One of the names sql/011-sector-pots.sql puts on the tech pot's
 # watchlist — this file exercises the loop against that account throughout.
 TICKER = "NVDA"
-PORTFOLIO = "static-100"
+PORTFOLIO = "tech"
 RATE = FxRate(gbp_usd=D("1.3400"), as_of=date(2026, 9, 14))
 BAR_DATE = date(2026, 9, 14)
 
@@ -64,7 +64,8 @@ def _reset(dsn: str) -> None:
         conn.execute("DELETE FROM positions")
         conn.execute(
             "UPDATE portfolio SET initial_cash_usd=100000,cash_usd=100000,equity_usd=NULL,"
-            "buying_power_usd=NULL,broker_account_id=NULL,broker_synced_at=NULL"
+            "buying_power_usd=NULL,broker_account_id=NULL,broker_synced_at=NULL,"
+            "is_active = name NOT IN ('static-100', 'dynamic-500')"
         )
 
 
@@ -320,3 +321,98 @@ def test_paper_fills_are_mirrored_without_applying_cash_twice(agent_dsn):
         assert repo.load_cash(conn, repo.portfolio_id(conn, PORTFOLIO)) == D(99960)
         assert conn.execute("SELECT count(*) FROM positions").fetchone()[0] == 1
         assert conn.execute("SELECT notional_usd FROM trades").fetchone()[0] == D(40)
+
+
+# ---------------------------------------------------------------------------
+# The pre-check: pay the model only for what the risk engine could act on
+# ---------------------------------------------------------------------------
+
+
+def _hold(dsn: str, ticker: str, value: str, cash: str) -> None:
+    """Leave the pot holding `ticker` at `value` with `cash` left over."""
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        pid = repo.portfolio_id(conn, PORTFOLIO)
+        conn.execute("UPDATE portfolio SET cash_usd = %s WHERE id = %s", (D(cash), pid))
+        conn.execute(
+            "INSERT INTO positions (portfolio_id, ticker, quantity, avg_cost_usd, market_value_usd)"
+            " VALUES (%s, %s, 1, %s, %s)",
+            (pid, ticker, D(value), D(value)),
+        )
+
+
+def _record_news(monkeypatch, ticker: str) -> list[list[str]]:
+    asked: list[list[str]] = []
+
+    def fetch(tickers, hours):
+        asked.append(list(tickers))
+        return [_article(ticker)] if ticker in tickers else []
+
+    monkeypatch.setattr(agent, "fetch_news", fetch)
+    return asked
+
+
+def test_a_pot_with_no_buying_headroom_analyses_only_its_holdings(agent_dsn, monkeypatch):
+    """At the 80% exposure ceiling every BUY of an unheld ticker is refused
+    whatever the model says, so only the holding is worth an analysis — for a
+    possible SELL. News is not even fetched for the rest of the watchlist."""
+    monkeypatch.setenv("DRY_RUN", "true")
+    held = "AAPL"
+    _hold(agent_dsn, held, value="390", cash="10")
+    asked = _record_news(monkeypatch, held)
+    llm = _FakeLlm(held, action="SELL", amount_usd=20.0)
+
+    agent.run(portfolio=PORTFOLIO, llm=llm, broker=DryRunBroker())
+
+    assert asked == [[held]]
+    assert llm.analysed == [held]
+
+
+def test_a_pot_with_headroom_analyses_its_whole_watchlist(agent_dsn, monkeypatch):
+    monkeypatch.setenv("DRY_RUN", "true")
+    asked = _record_news(monkeypatch, TICKER)
+
+    agent.run(portfolio=PORTFOLIO, llm=_FakeLlm(TICKER), broker=DryRunBroker())
+
+    assert len(asked[0]) == 50
+
+
+def test_nothing_is_analysed_once_the_daily_trade_limit_is_spent(agent_dsn, monkeypatch):
+    """With the trade budget gone even a SELL is refused, so the run pays for
+    no analysis at all and still closes its row as a success."""
+    monkeypatch.setenv("DRY_RUN", "true")
+    monkeypatch.setenv("RISK_MAX_DAILY_TRADES", "0")
+    asked = _record_news(monkeypatch, TICKER)
+    llm = _FakeLlm(TICKER)
+
+    run_id = agent.run(portfolio=PORTFOLIO, llm=llm, broker=DryRunBroker())
+
+    assert asked == [[]]
+    assert llm.analysed == []
+    with psycopg.connect(agent_dsn) as conn:
+        status = conn.execute("SELECT status FROM agent_runs WHERE id = %s", (run_id,)).fetchone()
+        assert status == ("succeeded",)
+
+
+def test_a_run_records_the_model_and_risk_settings_it_used(agent_dsn, monkeypatch):
+    monkeypatch.setenv("DRY_RUN", "true")
+    monkeypatch.setenv("ANALYSIS_EFFORT", "low")
+
+    run_id = agent.run(portfolio=PORTFOLIO, llm=_FakeLlm(TICKER), broker=DryRunBroker())
+
+    with psycopg.connect(agent_dsn) as conn:
+        row = conn.execute("SELECT config FROM agent_runs WHERE id = %s", (run_id,)).fetchone()
+    config = row[0]
+    assert config["analysis_effort"] == "low"
+    assert config["risk"]["min_trade_usd"] == "5"
+    assert "allowed_tickers" not in config["risk"]
+
+
+def test_a_retired_pot_refuses_to_run_and_opens_no_row(agent_dsn):
+    with psycopg.connect(agent_dsn, autocommit=True) as conn:
+        conn.execute("UPDATE portfolio SET is_active = false WHERE name = %s", (PORTFOLIO,))
+
+    with pytest.raises(RuntimeError, match="retired"):
+        agent.run(portfolio=PORTFOLIO, llm=_FakeLlm(TICKER), broker=DryRunBroker())
+
+    with psycopg.connect(agent_dsn) as conn:
+        assert conn.execute("SELECT count(*) FROM agent_runs").fetchone()[0] == 0

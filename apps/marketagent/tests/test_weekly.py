@@ -6,8 +6,8 @@ shown the numbers as tables it is told not to restate, so what goes into those
 tables decides what the review can truthfully say — and the subject line is
 built here rather than by the model.
 
-Covers both accounts in one combined review now, so most tests build a full
-`accounts` dict (both 'static-100' and 'dynamic-500') via the helpers below,
+Covers every pot in one combined review, so most tests build a full
+`accounts` dict (three pots) via the helpers below,
 usually overriding only one account and leaving the other at a clean default.
 
 Nothing in this file touches a database or the network.
@@ -30,6 +30,7 @@ from marketagent.jobs.weekly import (
     _week_change,
 )
 from marketagent.models import ProposedChange, RiskLimits
+from tests.helpers import POTS
 
 D = Decimal
 END = date(2026, 9, 6)
@@ -124,18 +125,18 @@ def _account_data(initial=None, inception=INCEPTION, lim=None, **metrics_overrid
 
 
 def _accounts(**overrides) -> dict:
-    """Both accounts, clean by default. `overrides['static-100']` etc. replace one."""
-    return {name: overrides.get(name) or _account_data() for name in weekly.ACCOUNTS}
+    """Every pot, clean by default. `overrides['tech']` etc. replace one."""
+    return {name: overrides.get(name) or _account_data() for name in POTS}
 
 
 def _table(**overrides) -> str:
-    """The facts table with 'static-100' overridden and 'dynamic-500' left clean."""
-    return _facts_table(START, END, _accounts(**{"static-100": _account_data(**overrides)}))
+    """The facts table with 'tech' overridden and the other pots left clean."""
+    return _facts_table(START, END, _accounts(**{"tech": _account_data(**overrides)}))
 
 
 def _subject_accounts(**overrides) -> dict:
     """Just enough of the `accounts` shape for `_subject`, which reads `metrics` only."""
-    return {name: {"metrics": overrides.get(name) or _metrics()} for name in weekly.ACCOUNTS}
+    return {name: {"metrics": overrides.get(name) or _metrics()} for name in POTS}
 
 
 # ---------------------------------------------------------------------------
@@ -177,16 +178,16 @@ def test_a_week_with_no_stored_valuation_says_so_instead_of_inventing_one():
     assert "$0.0000" not in table
 
 
-def test_both_accounts_get_their_own_labelled_section():
+def test_every_pot_gets_its_own_labelled_section():
     table = _table()
 
-    assert "## static-100" in table
-    assert "## dynamic-500" in table
+    for name in POTS:
+        assert f"## {name}" in table
 
 
-def test_the_comparison_section_names_the_leader():
-    """The reason this review covers both accounts: which is ahead, and by
-    how much, stated before either account's own detail."""
+def test_the_comparison_section_names_the_leader_and_the_trailer():
+    """The reason this review covers every pot: which leads, and by how much,
+    stated before any pot's own detail."""
     table = _table(
         valuation={
             "as_of": END,
@@ -198,8 +199,9 @@ def test_the_comparison_section_names_the_leader():
         }
     )
 
-    assert "## static-100 vs dynamic-500" in table
-    assert "**static-100** is ahead of **dynamic-500**" in table
+    assert "## The pots" in table
+    assert "| | tech | health | energy |" in table
+    assert "**tech** leads" in table
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +264,7 @@ def test_refusals_and_approvals_are_split_rather_than_pooled():
     as a single ranking of "constraints that fired"."""
     table = _table()
     # Both accounts render the same section heading, so split on the last
-    # occurrence to isolate the overridden 'static-100' account's table.
+    # occurrence to isolate the overridden 'tech' account's table.
     refused, approved = table.rsplit("| Approved, bound by | Decisions |", 1)
 
     assert "| action_is_hold | 45 |" in refused
@@ -363,15 +365,16 @@ def test_the_subject_carries_each_accounts_stored_total_and_the_count_of_proposa
 
     assert subject == (
         "MarketAgent week to 2026-09-06: "
-        "static-100 $507.4000 (+1.0756%), dynamic-500 $507.4000 (+1.0756%), 2 proposals"
+        "tech $507.4000 (+1.0756%), health $507.4000 (+1.0756%), "
+        "energy $507.4000 (+1.0756%), 2 proposals"
     )
 
 
 def test_the_subject_shows_each_accounts_own_figures_independently():
-    subject = _subject(END, _subject_accounts(**{"dynamic-500": _metrics(valuation=None)}), [])
+    subject = _subject(END, _subject_accounts(**{"health": _metrics(valuation=None)}), [])
 
-    assert "static-100 $507.4000 (+1.0756%)" in subject
-    assert "dynamic-500 no valuation" in subject
+    assert "tech $507.4000 (+1.0756%)" in subject
+    assert "health no valuation" in subject
 
 
 def test_the_subject_is_singular_for_one_proposal():
@@ -379,21 +382,22 @@ def test_the_subject_is_singular_for_one_proposal():
 
 
 def test_a_subject_with_no_valuation_says_so_rather_than_carrying_a_figure():
-    accounts = _subject_accounts(**{n: _metrics(valuation=None) for n in weekly.ACCOUNTS})
+    accounts = _subject_accounts(**{n: _metrics(valuation=None) for n in POTS})
     subject = _subject(END, accounts, [])
 
     assert subject == (
         "MarketAgent week to 2026-09-06: "
-        "static-100 no valuation, dynamic-500 no valuation, 0 proposals"
+        "tech no valuation, health no valuation, energy no valuation, 0 proposals"
     )
 
 
 def test_a_first_week_subject_carries_the_total_without_a_change():
-    accounts = _subject_accounts(**{n: _metrics(opening_total_usd=None) for n in weekly.ACCOUNTS})
+    accounts = _subject_accounts(**{n: _metrics(opening_total_usd=None) for n in POTS})
     subject = _subject(END, accounts, [])
 
     assert subject == (
-        "MarketAgent week to 2026-09-06: static-100 $507.4000, dynamic-500 $507.4000, 0 proposals"
+        "MarketAgent week to 2026-09-06: "
+        "tech $507.4000, health $507.4000, energy $507.4000, 0 proposals"
     )
 
 
@@ -430,7 +434,7 @@ def test_the_prompt_carries_the_facts_and_asks_for_the_assessment():
     assert "FACTS" in prompt
     assert "propose the changes" in prompt
     assert "previous review" not in prompt
-    assert "Address both accounts explicitly" in prompt
+    assert "Address each pot explicitly" in prompt
 
 
 def test_last_weeks_proposals_are_included_so_the_review_compounds():
@@ -454,7 +458,7 @@ class _ExplodingLlm:
 
 def test_a_week_with_no_agent_runs_is_not_reviewed_at_all(monkeypatch):
     """An LLM call to say nothing happened is worth neither the money nor the
-    credibility of a stored row that reviews nothing — for either account."""
+    credibility of a stored row that reviews nothing — for any pot."""
     import contextlib
 
     class _Pool:
@@ -462,6 +466,7 @@ def test_a_week_with_no_agent_runs_is_not_reviewed_at_all(monkeypatch):
             return contextlib.nullcontext(object())
 
     monkeypatch.setattr(weekly, "pool", lambda: _Pool())
+    monkeypatch.setattr(weekly.repo, "active_portfolios", lambda _c: list(POTS))
     monkeypatch.setattr(weekly.repo, "portfolio_id", lambda _c, name=None: 1)
     monkeypatch.setattr(weekly.repo, "initial_cash", lambda _c, _p: D("500.0000"))
     monkeypatch.setattr(weekly.repo, "portfolio_inception", lambda _c, _p: INCEPTION)
@@ -519,7 +524,7 @@ def test_a_failed_check_reaches_the_subject_line():
     otherwise, which is the one case where ordinary-looking is wrong."""
     accounts = _subject_accounts(
         **{
-            "static-100": _metrics(
+            "tech": _metrics(
                 integrity=[_check("missing_valuations", ok=False), _check("cash_drift")]
             )
         }
@@ -532,8 +537,8 @@ def test_a_failed_check_reaches_the_subject_line():
 def test_several_failed_checks_are_pluralised_in_the_subject():
     accounts = _subject_accounts(
         **{
-            "static-100": _metrics(integrity=[_check("missing_valuations", ok=False)]),
-            "dynamic-500": _metrics(integrity=[_check("missing_runs", ok=False)]),
+            "tech": _metrics(integrity=[_check("missing_valuations", ok=False)]),
+            "health": _metrics(integrity=[_check("missing_runs", ok=False)]),
         }
     )
     subject = _subject(END, accounts, [_proposal()])
@@ -542,9 +547,7 @@ def test_several_failed_checks_are_pluralised_in_the_subject():
 
 
 def test_a_clean_week_says_nothing_in_the_subject():
-    accounts = _subject_accounts(
-        **{n: _metrics(integrity=[_check("cash_drift")]) for n in weekly.ACCOUNTS}
-    )
+    accounts = _subject_accounts(**{n: _metrics(integrity=[_check("cash_drift")]) for n in POTS})
     subject = _subject(END, accounts, [_proposal()])
 
     assert "data check" not in subject

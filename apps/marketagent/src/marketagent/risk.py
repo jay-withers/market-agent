@@ -197,6 +197,28 @@ def evaluate(
     )
 
 
+def new_buy_headroom(state: PortfolioState, limits: RiskLimits, trades_today: int) -> Decimal:
+    """The largest BUY `evaluate()` could approve for a ticker not already held.
+
+    The agent asks this before paying the model to analyse a ticker it does not
+    hold: below `min_trade_usd` every such BUY is refused whatever the model
+    says, so the analysis cannot change anything. These are the BUY caps above
+    with `held` at zero, which is exactly the case for an unheld ticker — the
+    recommendation's own amount is the only cap left out, since it is not known
+    yet. `test_risk.py` checks the two stay in step.
+    """
+    if trades_today >= limits.max_daily_trades:
+        return ZERO
+    total = state.total_value_usd
+    return min(
+        money(limits.max_trade_usd),
+        _headroom(state.cash_usd),
+        _headroom(money(limits.max_position_usd)),
+        _headroom(_pct(total, limits.max_concentration_pct)),
+        _headroom(_pct(total, limits.max_total_exposure_pct) - state.invested_usd),
+    )
+
+
 def _headroom(value: Decimal) -> Decimal:
     """Clamp a remaining-allowance figure at zero.
 

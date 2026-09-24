@@ -12,6 +12,12 @@ from ..deps import Account, connection
 router = APIRouter(prefix="/api", tags=["portfolio"])
 
 
+@router.get("/accounts")
+def accounts(conn: Any = Depends(connection)) -> list[dict[str, Any]]:
+    """The active pots, which the dashboard builds its tabs from."""
+    return queries.accounts(conn)
+
+
 @router.get("/overview")
 def overview(account: Account, conn: Any = Depends(connection)) -> dict[str, Any]:
     return queries.overview(conn, account)
@@ -50,5 +56,5 @@ def comparison(
     days: int = Query(default=180, ge=1, le=1000),
     conn: Any = Depends(connection),
 ) -> dict[str, Any]:
-    """Both accounts' valuation series in one payload, for the Compare view."""
+    """Every active pot's valuation series in one payload, for the Compare view."""
     return queries.comparison(conn, days=days)

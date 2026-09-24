@@ -217,23 +217,39 @@ test.describe("navigation", () => {
 });
 
 test.describe("account toggle", () => {
-  test("switches the selected account and remembers the choice", async ({ page }) => {
+  test("shows a tab per pot from the API, defaults to the first and remembers the choice", async ({
+    page,
+  }) => {
     await stubApi(page);
     await page.goto("/");
 
-    await expect(page.getByRole("button", { name: "static-100" })).toHaveAttribute(
+    for (const name of ["tech", "health", "energy"]) {
+      await expect(page.getByRole("button", { name, exact: true })).toBeVisible();
+    }
+    await expect(page.getByRole("button", { name: "tech", exact: true })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
-    await page.getByRole("button", { name: "dynamic-500" }).click();
-    await expect(page.getByRole("button", { name: "dynamic-500" })).toHaveAttribute(
+    await page.getByRole("button", { name: "health", exact: true }).click();
+    await expect(page.getByRole("button", { name: "health", exact: true })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
     expect(await pageOverflow(page)).toBe(0);
 
     await page.reload();
-    await expect(page.getByRole("button", { name: "dynamic-500" })).toHaveAttribute(
+    await expect(page.getByRole("button", { name: "health", exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  test("a remembered pot that no longer exists falls back to the first", async ({ page }) => {
+    await stubApi(page);
+    await page.addInitScript(() => localStorage.setItem("marketagent-account", "static-100"));
+    await page.goto("/");
+
+    await expect(page.getByRole("button", { name: "tech", exact: true })).toHaveAttribute(
       "aria-pressed",
       "true",
     );

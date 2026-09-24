@@ -18,7 +18,7 @@ from marketagent.models import (
     Recommendation,
     RiskLimits,
 )
-from marketagent.risk import evaluate
+from marketagent.risk import evaluate, new_buy_headroom
 
 D = Decimal
 
@@ -448,3 +448,49 @@ def test_an_approved_amount_never_exceeds_the_binding_cap():
     caps = {r.constraint: r.cap_usd for r in verdict.reasons}
     assert verdict.approved_amount_usd == caps[verdict.binding_constraint]
     assert all(verdict.approved_amount_usd <= cap for cap in caps.values())
+
+
+# ---------------------------------------------------------------------------
+# The agent's pre-check: could any new BUY be approved at all?
+# ---------------------------------------------------------------------------
+
+
+def test_new_buy_headroom_is_bound_by_the_exposure_ceiling():
+    """The case that stalled both old accounts: 80% invested leaves $2 of buy
+    headroom on a $490 pot, under the $5 minimum."""
+    pot = state(cash=D("100.04"), holdings={"NVDA": D("390.01")})
+
+    assert new_buy_headroom(pot, limits(), trades_today=0) == D("2.0300")
+
+
+def test_new_buy_headroom_is_bound_by_cash_at_a_100_percent_ceiling():
+    pot = state(cash=D(3), holdings={"NVDA": D(97)})
+
+    assert new_buy_headroom(pot, limits(max_total_exposure_pct=D(100)), 0) == D(3)
+
+
+def test_new_buy_headroom_is_zero_once_the_daily_trades_are_spent():
+    assert new_buy_headroom(state(), limits(max_daily_trades=2), trades_today=2) == 0
+
+
+@pytest.mark.parametrize(
+    ("cash", "held"),
+    [(D(420), D(80)), (D("100.04"), D("390.01")), (D(3), D(97)), (D(500), D(0)), (D(0), D(500))],
+)
+@pytest.mark.parametrize("exposure", [D(80), D(100)])
+def test_new_buy_headroom_agrees_with_evaluate_for_an_unheld_ticker(cash, held, exposure):
+    """The pre-check skips an analysis only when evaluate() would refuse every
+    BUY of an unheld ticker, and never otherwise. An oversized request makes
+    the recommendation's own cap irrelevant, so the approved amount is the
+    headroom whenever it clears the minimum."""
+    pot = state(cash=cash, holdings={"NVDA": held} if held else {})
+    lim = limits(max_total_exposure_pct=exposure)
+    headroom = new_buy_headroom(pot, lim, trades_today=0)
+
+    verdict = evaluate(rec(ticker="AAPL", amount=D(10_000)), pot, lim, trades_today=0)
+
+    if headroom >= lim.min_trade_usd:
+        assert verdict.approved
+        assert verdict.approved_amount_usd == headroom
+    else:
+        assert not verdict.approved

@@ -1,15 +1,13 @@
-/* static-100 vs dynamic-500 — the reason this experiment runs two accounts
- * at all.
+/* The pots side by side — the reason this experiment runs several at all.
  *
- * A dedicated two-series chart rather than a third line added to
- * PerformanceChart: that chart already uses all five validated palette slots
- * for one account plus its four benchmarks, and light mode already puts
- * three of those below 3:1 contrast against the surface — adding a sixth
- * series there would need an unvalidated colour or force dropping a
- * benchmark. Here there are only ever two series and no benchmark clutter, so
- * it reuses two of the five already-validated slots instead of inventing a
- * new one. Same table-view fallback as PerformanceChart, for the same
- * accessibility reason.
+ * A dedicated chart rather than more lines added to PerformanceChart: that
+ * chart already uses all five validated palette slots for one pot plus its
+ * four benchmarks. Here there is one series per pot and no benchmark clutter,
+ * so the pots reuse the validated slots in order — which caps this view at
+ * five pots before it would need an unvalidated colour. Light mode puts three
+ * slots below 3:1 contrast against the surface, so the table view is a
+ * required accessibility channel, not a convenience, exactly as in
+ * PerformanceChart.
  */
 
 import { useMemo, useState } from "react";
@@ -24,23 +22,22 @@ import {
   YAxis,
 } from "recharts";
 
-import type { Account, Comparison } from "../api";
-import { ACCOUNTS, displayMoney, pct } from "../api";
+import type { AccountInfo, Comparison } from "../api";
+import { displayMoney, pct } from "../api";
 
-/* Reused from the validated five, not new colours — slot 1 already carries
- * "the account itself" in PerformanceChart, so static-100 keeps it here too;
- * dynamic-500 takes slot 2 rather than a colour nothing has validated. */
-const SERIES: Record<Account, { label: string; color: string }> = {
-  "static-100": { label: "static-100", color: "var(--series-1)" },
-  "dynamic-500": { label: "dynamic-500", color: "var(--series-2)" },
-};
+/* The slot follows the pot's position in the API's id-ordered list, so a pot
+ * keeps its colour however the chart is filtered. The palette's documented
+ * slot order is the colourblind-safety mechanism; never reorder or cycle it. */
+const color = (index: number) => `var(--series-${index + 1})`;
 
-type Row = { as_of: string } & Partial<Record<Account, number>>;
+/* One date's row, keyed by pot name — flat, because recharts reads each line's
+ * value by `dataKey`. */
+type Row = { as_of: string; [pot: string]: string | number };
 
-function toRows(data: Comparison): Row[] {
+function toRows(names: string[], data: Comparison): Row[] {
   const byDate = new Map<string, Row>();
-  for (const account of ACCOUNTS) {
-    for (const point of data[account]) {
+  for (const account of names) {
+    for (const point of data[account] ?? []) {
       const row: Row = byDate.get(point.as_of) ?? { as_of: point.as_of };
       row[account] = point.total_value_usd;
       byDate.set(point.as_of, row);
@@ -50,31 +47,27 @@ function toRows(data: Comparison): Row[] {
 }
 
 /* Today's figures, for the one-line answer this view exists to give: which
- * account is ahead, and by how much. */
-function Headline({ data }: { data: Comparison }) {
-  const latest: Partial<Record<Account, number>> = {};
-  const latestPct: Partial<Record<Account, number>> = {};
-  for (const account of ACCOUNTS) {
-    const points = data[account];
-    const last = points.at(-1);
-    if (last) {
-      latest[account] = last.total_value_usd;
-      latestPct[account] = last.pnl_pct;
-    }
-  }
+ * pot leads, which trails, and by how much. */
+function Headline({ names, data }: { names: string[]; data: Comparison }) {
+  const latest = names
+    .map((name) => ({ name, last: data[name]?.at(-1) }))
+    .filter((entry): entry is { name: string; last: NonNullable<typeof entry.last> } =>
+      Boolean(entry.last),
+    )
+    .sort((x, y) => y.last.total_value_usd - x.last.total_value_usd);
 
-  const [a, b] = ACCOUNTS;
-  if (latest[a] === undefined || latest[b] === undefined) return null;
+  if (latest.length < 2) return null;
 
-  const leader = latest[a] >= latest[b] ? a : b;
-  const trailer = leader === a ? b : a;
-  const gap = Math.abs(latest[a] - latest[b]);
+  const leader = latest[0];
+  const trailer = latest[latest.length - 1];
+  const gap = leader.last.total_value_usd - trailer.last.total_value_usd;
 
   return (
     <p className="hint">
-      <strong>{leader}</strong> is ahead of <strong>{trailer}</strong> by {displayMoney(gap)} as of
-      the last recorded valuation ({SERIES[a].label} {pct(latestPct[a])}, {SERIES[b].label}{" "}
-      {pct(latestPct[b])} since inception).
+      <strong>{leader.name}</strong> leads and <strong>{trailer.name}</strong> trails,{" "}
+      {displayMoney(gap)} apart as of the last recorded valuation (
+      {latest.map((entry) => `${entry.name} ${pct(entry.last.pnl_pct)}`).join(", ")} since
+      inception).
     </p>
   );
 }
@@ -88,7 +81,7 @@ function ChartTooltip({ active, payload, label }: any) {
         <div className="t-row" key={entry.dataKey}>
           <span>
             <span className="swatch" style={{ background: entry.color }} />
-            {SERIES[entry.dataKey as Account]?.label ?? entry.dataKey}
+            {entry.dataKey}
           </span>
           <span className="t-val">{displayMoney(entry.value)}</span>
         </div>
@@ -97,15 +90,22 @@ function ChartTooltip({ active, payload, label }: any) {
   );
 }
 
-export function Compare({ data }: { data: Comparison }) {
+export function Compare({ accounts, data }: { accounts: AccountInfo[]; data: Comparison }) {
   const [asTable, setAsTable] = useState(false);
-  const rows = useMemo(() => toRows(data), [data]);
+  const names = useMemo(() => accounts.map((a) => a.name), [accounts]);
+  // A pot with no valuation yet is left out rather than drawn as an empty
+  // series, the same rule the benchmarks follow. Its colour slot stays its
+  // own, so a pot never changes colour when another one first appears.
+  const charted = useMemo(
+    () => names.filter((name) => (data[name]?.length ?? 0) > 0),
+    [names, data],
+  );
+  const rows = useMemo(() => toRows(charted, data), [charted, data]);
 
   if (rows.length === 0) {
     return (
       <div className="state">
-        No comparison history yet — the summary job writes a point for each account every
-        evening.
+        No comparison history yet — the summary job writes a point for each pot every evening.
       </div>
     );
   }
@@ -114,10 +114,10 @@ export function Compare({ data }: { data: Comparison }) {
     <>
       <div className="row-between">
         <div>
-          <h2>static-100 vs dynamic-500</h2>
+          <h2>The pots compared</h2>
           <p className="hint">
-            The frozen S&amp;P 100 snapshot against the S&amp;P 500, refreshed monthly — same
-            starting cash, same agent, different universes.
+            {accounts.map((a) => (a.description ? `${a.name}: ${a.description}` : a.name)).join(" · ")}
+            {" "}— same starting cash, same agent, different sectors.
           </p>
         </div>
         <button className="toggle" onClick={() => setAsTable((v) => !v)}>
@@ -125,7 +125,7 @@ export function Compare({ data }: { data: Comparison }) {
         </button>
       </div>
 
-      <Headline data={data} />
+      <Headline names={names} data={data} />
 
       {asTable ? (
         <div className="scroll">
@@ -133,10 +133,10 @@ export function Compare({ data }: { data: Comparison }) {
             <thead>
               <tr>
                 <th>Date</th>
-                {ACCOUNTS.map((account) => (
+                {charted.map((account) => (
                   <th className="num" key={account}>
-                    <span className="swatch" style={{ background: SERIES[account].color }} />
-                    {SERIES[account].label}
+                    <span className="swatch" style={{ background: color(names.indexOf(account)) }} />
+                    {account}
                   </th>
                 ))}
               </tr>
@@ -145,9 +145,9 @@ export function Compare({ data }: { data: Comparison }) {
               {rows.map((row) => (
                 <tr key={row.as_of}>
                   <td>{row.as_of}</td>
-                  {ACCOUNTS.map((account) => (
+                  {charted.map((account) => (
                     <td className="num" key={account}>
-                      {row[account] === undefined ? "—" : displayMoney(row[account])}
+                      {typeof row[account] === "number" ? displayMoney(row[account]) : "—"}
                     </td>
                   ))}
                 </tr>
@@ -180,13 +180,13 @@ export function Compare({ data }: { data: Comparison }) {
                 wrapperStyle={{ fontSize: 12, color: "var(--text-secondary)" }}
                 iconType="plainline"
               />
-              {ACCOUNTS.map((account) => (
+              {charted.map((account) => (
                 <Line
                   key={account}
                   type="monotone"
                   dataKey={account}
-                  name={SERIES[account].label}
-                  stroke={SERIES[account].color}
+                  name={account}
+                  stroke={color(names.indexOf(account))}
                   strokeWidth={2}
                   dot={false}
                   activeDot={{ r: 4, strokeWidth: 2, stroke: "var(--surface)" }}

@@ -38,9 +38,9 @@ def test_the_agent_command_runs_the_job(monkeypatch):
     monkeypatch.setattr(cli, "_configure_logging", lambda: None)
     _stub_job(monkeypatch, "agent", _FakeJob(called))
 
-    assert cli.main(["agent", "--trigger", "manual", "--portfolio", "static-100"]) == 0
+    assert cli.main(["agent", "--trigger", "manual", "--portfolio", "tech"]) == 0
     assert called["trigger"] == "manual"
-    assert called["portfolio"] == "static-100"
+    assert called["portfolio"] == "tech"
 
 
 def test_a_failed_agent_run_exits_non_zero_without_re_raising(monkeypatch, caplog):
@@ -53,7 +53,7 @@ def test_a_failed_agent_run_exits_non_zero_without_re_raising(monkeypatch, caplo
     monkeypatch.setattr(cli, "_configure_logging", lambda: None)
     _stub_job(monkeypatch, "agent", _FakeJob({}, error=RuntimeError("credit balance is too low")))
 
-    assert cli.main(["agent", "--portfolio", "static-100"]) == 1
+    assert cli.main(["agent", "--portfolio", "tech"]) == 1
     assert "agent run failed: credit balance is too low" in caplog.text
     # One report, not a re-raised traceback on top of the job's own.
     assert caplog.text.count("credit balance is too low") == 1
@@ -112,7 +112,7 @@ def test_a_terminated_agent_run_still_exits_non_zero(monkeypatch, caplog):
     monkeypatch.setattr(cli, "_configure_logging", lambda: None)
     _stub_job(monkeypatch, "agent", _FakeJob({}, error=SystemExit("terminated by signal 15")))
 
-    assert cli.main(["agent", "--portfolio", "static-100"]) == 1
+    assert cli.main(["agent", "--portfolio", "tech"]) == 1
     assert "terminated by signal 15" in caplog.text
 
 
@@ -171,26 +171,9 @@ def test_the_sync_command_runs_for_the_named_account(monkeypatch):
     monkeypatch.setattr(cli, "_configure_logging", lambda: None)
     _stub_sync(monkeypatch, _FakeSummary(called))
 
-    assert cli.main(["sync", "--portfolio", "dynamic-500"]) == 0
+    assert cli.main(["sync", "--portfolio", "energy"]) == 0
     assert called["ran"] is True
-    assert called["portfolio"] == "dynamic-500"
-
-
-def test_the_rebalance_command_runs_the_rebalance_job(monkeypatch):
-    called = {}
-    monkeypatch.setattr(cli, "_configure_logging", lambda: None)
-    _stub_job(monkeypatch, "rebalance", _FakeSummary(called))
-
-    assert cli.main(["rebalance"]) == 0
-    assert called["ran"] is True
-
-
-def test_a_failed_rebalance_exits_non_zero(monkeypatch, caplog):
-    monkeypatch.setattr(cli, "_configure_logging", lambda: None)
-    _stub_job(monkeypatch, "rebalance", _FakeSummary({}, error=RuntimeError("wikipedia is down")))
-
-    assert cli.main(["rebalance"]) == 1
-    assert "rebalance failed: wikipedia is down" in caplog.text
+    assert called["portfolio"] == "energy"
 
 
 class _FakeSummary:

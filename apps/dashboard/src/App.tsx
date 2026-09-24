@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import type {
   Account,
+  AccountInfo,
   Comparison,
   Decision,
   DisplayCurrency,
@@ -15,7 +16,6 @@ import type {
   WatchlistTicker,
 } from "./api";
 import {
-  ACCOUNTS,
   configureDisplayCurrency,
   displayMoney,
   get,
@@ -64,10 +64,9 @@ type SharedData = {
 };
 
 export default function App() {
-  const [account, setAccount] = useState<Account>(() => {
-    const stored = localStorage.getItem("marketagent-account");
-    return (ACCOUNTS as readonly string[]).includes(stored ?? "") ? (stored as Account) : "static-100";
-  });
+  // Null until /api/accounts answers: which pots exist is the API's to say.
+  const [accounts, setAccounts] = useState<AccountInfo[] | null>(null);
+  const [account, setAccount] = useState<Account | null>(null);
   const [data, setData] = useState<AccountData | null>(null);
   const [shared, setShared] = useState<SharedData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -77,6 +76,31 @@ export default function App() {
   );
 
   useEffect(() => {
+    let cancelled = false;
+
+    get<AccountInfo[]>("/api/accounts")
+      .then((list) => {
+        if (cancelled) return;
+        if (list.length === 0) {
+          setError("the API reports no active pots");
+          return;
+        }
+        // A remembered pot that has since been retired falls back to the first.
+        const stored = localStorage.getItem("marketagent-account");
+        setAccounts(list);
+        setAccount(list.find((a) => a.name === stored)?.name ?? list[0].name);
+      })
+      .catch((exc: Error) => {
+        if (!cancelled) setError(exc.message);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (account === null) return;
     let cancelled = false;
     setData(null);
 
@@ -144,7 +168,7 @@ export default function App() {
     );
   }
 
-  if (!data || !shared) {
+  if (!data || !shared || !accounts) {
     return (
       <div className="app">
         <div className="state">Loading…</div>
@@ -180,8 +204,9 @@ export default function App() {
         </div>
         <div className="masthead-actions">
           <div className="account-toggle" role="group" aria-label="Account">
-            {ACCOUNTS.map((name) => (
+            {accounts.map(({ name, description }) => (
               <button key={name} className={`toggle ${account === name ? "current" : ""}`}
+                title={description ?? undefined}
                 aria-pressed={account === name}
                 onClick={() => chooseAccount(name)}>
                 {name}
@@ -315,7 +340,7 @@ export default function App() {
 
       {tab === "/compare" && (
         <section className="card">
-          <Compare data={shared.comparison} />
+          <Compare accounts={accounts} data={shared.comparison} />
         </section>
       )}
     </div>

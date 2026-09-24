@@ -11,10 +11,10 @@
     Secrets are read from a masked prompt, held only as a SecureString until the
     moment they are passed to `az`, and never written to disk, logged, echoed,
     or placed in shell history. Press Enter at a prompt to skip one — they are
-    needed at different points (DeepSeek and the four Alpaca keys — one
-    credential pair per paper account, static-100 and dynamic-500 — for the
-    agent, Resend only for the daily summary), so there is no need to have them
-    all to hand.
+    needed at different points (per pot, an Alpaca credential pair and a
+    DeepSeek key for that pot's agent; the shared DEEPSEEK-API-KEY for the
+    daily summary and weekly review; Resend only for the daily summary), so
+    there is no need to have them all to hand.
 
     Not everything here is a secret. There is no equivalent of a starting-credit
     figure to type in: unlike Anthropic, DeepSeek reports the account's balance
@@ -116,11 +116,18 @@ param(
     # settings.secret() asks for; it maps each to the underscored, uppercased
     # environment variable it prefers over the vault.
     [string[]]$Name = @(
+        # The shared key: the daily summary and the weekly review.
         'DEEPSEEK-API-KEY'
-        'ALPACA-API-KEY-STATIC100'
-        'ALPACA-SECRET-KEY-STATIC100'
-        'ALPACA-API-KEY-DYNAMIC500'
-        'ALPACA-SECRET-KEY-DYNAMIC500'
+        # One set per pot, named the way accounts.secret_suffix() derives them.
+        'ALPACA-API-KEY-TECH'
+        'ALPACA-SECRET-KEY-TECH'
+        'DEEPSEEK-API-KEY-TECH'
+        'ALPACA-API-KEY-HEALTH'
+        'ALPACA-SECRET-KEY-HEALTH'
+        'DEEPSEEK-API-KEY-HEALTH'
+        'ALPACA-API-KEY-ENERGY'
+        'ALPACA-SECRET-KEY-ENERGY'
+        'DEEPSEEK-API-KEY-ENERGY'
         'RESEND-API-KEY'
         'SUMMARY-EMAIL-TO'
         'DASHBOARD-PASSCODE'
@@ -185,9 +192,13 @@ Write-Host "==> $VaultName holds $($present.Count) secret(s)"
 # costs nothing. Deliberately not a rejection: these prefixes are DeepSeek's
 # and Alpaca's to change, not ours to enforce.
 $expectedPrefixes = @{
-    'DEEPSEEK-API-KEY'          = 'sk-'
-    'ALPACA-API-KEY-STATIC100'  = 'PK'
-    'ALPACA-API-KEY-DYNAMIC500' = 'PK'
+    'DEEPSEEK-API-KEY'        = 'sk-'
+    'DEEPSEEK-API-KEY-TECH'   = 'sk-'
+    'DEEPSEEK-API-KEY-HEALTH' = 'sk-'
+    'DEEPSEEK-API-KEY-ENERGY' = 'sk-'
+    'ALPACA-API-KEY-TECH'     = 'PK'
+    'ALPACA-API-KEY-HEALTH'   = 'PK'
+    'ALPACA-API-KEY-ENERGY'   = 'PK'
 }
 
 # Prompted in the clear, and echoed back on success. This is configuration

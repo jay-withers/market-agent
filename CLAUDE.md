@@ -89,8 +89,9 @@ See `docs/shared-platform-migration.md` before applying to an existing dev stack
 
 Resource group, user-assigned managed identity, Log Analytics workspace,
 Application Insights (workspace-based), Key Vault (RBAC), Container Apps
-environment (Consumption-only), two container apps (`api`, `dashboard`), three
-scheduled container app jobs (`agent`, `daily-summary`, `weekly-review`), a
+environment (Consumption-only), two container apps (`api`, `dashboard`),
+scheduled container app jobs — an `agent-<pot>` and a `sync-<pot>` per pot in
+`local.pots`, plus `summary` and `weekly` covering every pot — a
 PostgreSQL Flexible Server plus database, and the alerting in `main.alerts.tf`
 (action group, five metric alerts, one log alert, a budget, two diagnostic
 settings). Names come from `Azure/naming/azurerm`.
@@ -232,10 +233,16 @@ Two requirements from the user drive this: names use the naming module's
 ```
 rg-marketagent-dev              cae-marketagent-dev   ca-marketagent-dev-api        (22/32)
 kv-marketagent-dev      (18/24) log-marketagent-dev   ca-marketagent-dev-dashboard  (28/32)
-psql-marketagent-dev            appi-marketagent-dev  caj-marketagent-dev-agent     (25/32)
-psqldb-marketagent-dev          uai-marketagent-dev   caj-marketagent-dev-summary   (27/32)
+psql-marketagent-dev            appi-marketagent-dev  caj-marketagent-dev-agent-health (32/32)
+psqldb-marketagent-dev          uai-marketagent-dev   caj-marketagent-dev-sync-health  (31/32)
+                                                      caj-marketagent-dev-summary   (27/32)
                                                       caj-marketagent-dev-weekly    (26/32)
 ```
+
+`agent-<pot>` is what sets the six-character limit on pot names: `health` fills
+all 32. A `precondition` on the agent job and `accounts.secret_suffix()` both
+refuse a longer name, since the naming module would truncate it silently and
+the app derives the pot's secret names from the same string.
 
 The daily summary job is named `summary`, not `daily-summary`: the latter would be
 33 characters against the 32 container app jobs allow, and the naming module
@@ -536,23 +543,73 @@ tagged with three watchlist names costs three), 46 relevant, 9 analyses,
 **85,643 input and 11,658 output tokens, $0.18, and 4.1 minutes wall clock**.
 At one run a day that was about **£4/month**, against the database's £13.
 
-**These dollar figures do not carry over to DeepSeek.** The token counts and
-call shape (article/ticker filter pairs, relevant-article analyses) are still
-representative of the *loop*, but DeepSeek's published rates run roughly an
-order of magnitude below Anthropic's, so the true post-migration figure is
-meaningfully lower and has not yet been measured on a real run. Don't quote
-$0.18 as DeepSeek's cost — replace this paragraph with a fresh measurement
-once one exists, the same discipline that replaced the $0.43 figure below.
+**These dollar figures do not carry over to DeepSeek**, whose per-token rates
+are far lower but whose runs covered far more tickers. Measured on
+2026-09-24, before the move to pots: static-100 made 47 analyses from 175
+articles for **$0.39 in 36.5 minutes**, and dynamic-500 made 92 for **$0.73
+in 65.5 minutes** — about **$0.008 and 38 seconds per analysis**, with 0
+trades between them. Pricing those runs' output tokens alone at `v4-pro`'s
+rate accounts for nearly all of each run's cost: the filter stage is a
+rounding error, and the money is the analysis model's reasoning output
+(about 2,000 tokens per analysis). About 90% of each run's wall clock was the
+analysis loop, one call at a time.
+
+Two things follow, and both shaped the pots below. Cost scales with the
+number of tickers that have relevant news, not with the article count (which
+`fetch_news` caps at 200). And every one of those 139 analyses was paid for
+while both accounts sat at the 80% exposure ceiling with about $2 of buy
+headroom against a $5 minimum, so no BUY could ever have been approved.
 
 An earlier figure of $0.43 in this file was wrong: it came from a rehearsal with
 a stubbed LLM whose token counts were invented, and it overstated the real cost
 by more than double. Quote the measured figure, not that one.
 
-Two consequences. Batching several articles into one filter call would cut ~110
-calls to about 6, but at £4/month the saving is small — it is a latency argument
-now more than a cost one. And 4.1 minutes sits comfortably inside the job's
-`replica_timeout_in_seconds = 1800`, so the timeout is not the constraint it
-looked like it might be.
+Batching several articles into one filter call would cut the filter calls
+sharply, but the filter is not where the money goes — it is a latency argument,
+not a cost one.
+
+### The pots
+
+Three fixed pots, `tech`, `health` and `energy`, each about 50 S&P 500 names
+from one sector (energy is Energy plus Utilities, since Energy alone has about
+22). Each has its own Alpaca paper account and its own DeepSeek key, so
+DeepSeek's usage page attributes cost to a pot. They replaced static-100 and
+dynamic-500 in `sql/011-sector-pots.sql`, which marks the old accounts inactive
+rather than deleting them: their history stays readable, but no job, API route
+or dashboard tab iterates them.
+
+- **The database is the list of pots.** `repository.active_portfolios()` is
+  what the summary, the weekly review, the API's `Account` check and
+  `/api/accounts` (the dashboard's tabs) all iterate. Terraform's `local.pots`
+  is the other half, and the two must name the same pots.
+- **Secret names are derived, not listed.** `accounts.secret_suffix("tech")` is
+  `TECH`, so the pot reads `ALPACA-API-KEY-TECH`, `ALPACA-SECRET-KEY-TECH` and
+  `DEEPSEEK-API-KEY-TECH`. The plain `DEEPSEEK-API-KEY` is the shared key the
+  summary and weekly review use: they cover every pot in one call, so charging
+  them to a pot would inflate that pot's bill. Every key draws on one DeepSeek
+  account balance, so the runway is still computed once.
+- **The lists are fixed.** The rebalance job and the Wikipedia S&P scraping are
+  gone. A new pot is a migration row, a `local.pots` entry and its three
+  secrets, with no code change.
+- **Per-pot settings are env overrides in `local.pots`** (`ANALYSIS_EFFORT`,
+  `RISK_*`, `MAX_RUN_COST_USD`). Every pot uses the same settings for now, so
+  the comparison is between sectors. An override only lands when the job is
+  created, because `env` is under `ignore_changes`; changing one later is
+  `az containerapp job update --set-env-vars`. Each run records its effective
+  settings in `agent_runs.config`, because `ai_decisions` stores the model but
+  not the effort, and a decision has to be traceable to what produced it.
+- **The agent only pays for analyses the risk engine could act on.**
+  `risk.new_buy_headroom()` is the largest BUY `evaluate()` could approve for an
+  unheld ticker (the BUY caps with nothing held). When it is below
+  `min_trade_usd`, the run fetches news for and analyses only the pot's
+  holdings, for a possible SELL; with the daily trade limit spent it analyses
+  nothing. A test checks it agrees with `evaluate()` so the two cannot drift.
+  Checked once, up front: orders submitted before the open do not fill
+  mid-run, so the headroom cannot grow.
+- **The pots run concurrently**, as separate jobs at the same cron time. A pot's
+  run length is its analyses in series, so a 50-ticker pot is roughly 10-18
+  minutes on a normal day. Expect about $0.10-0.19 a day per pot while it is
+  buying and a few cents once it is full.
 
 **Cost must be accumulated per call, never derived from token totals.** The two
 stages use different models at different rates (under Anthropic this was
@@ -1152,7 +1209,7 @@ make run-weekly        # one weekly review against the local stack
 make build             # both images for linux/amd64, tagged with the git SHA
 make push              # both images to ghcr.io (needs write:packages)
 make deploy            # az cli: roll that image tag onto every app and job
-make logs-azure        # tail the deployed agent job's logs
+make logs-azure        # tail a pot's deployed agent job logs (PORTFOLIO=tech)
 make fmt               # terraform fmt -recursive
 make validate          # terraform init + validate (no Azure credentials)
 make plan              # terraform init + plan (set ENV=dev|stg|prd, default dev)
@@ -1170,6 +1227,9 @@ on a missing relation. `006-decision-context.sql` is the same again — the agen
 writes `ai_decisions.prompt_context` on every decision, so a deploy of that code
 against a database without it fails on the first analysis, not at start-up. So
 is `007-job-costs.sql`, which the summary and weekly jobs write to on every run.
+And `011-sector-pots.sql`, the sharpest of them: the API, the dashboard and
+every job read `portfolio.is_active`, and `agent_runs.config` is written at the
+start of every run, so a deploy ahead of it breaks everything at once.
 
 **`make deploy` is `az cli`, not `terraform apply`.** The image and the
 `IMAGE_TAG` env var on the API app and all three jobs carry
@@ -1180,8 +1240,9 @@ risk of a stale local `.tfvars` rolling the image backwards. `marketagent_image_
 / `dashboard_image_tag` (the Terraform variables) only seed the *first*
 revision on a brand-new environment; every deploy after that is `make deploy`,
 which resolves the app/job names and resource group from `terraform output`
-(`api_app_name`, `dashboard_app_name`, `agent_job_name`, `summary_job_name`,
-`weekly_review_job_name`, `resource_group_name`) and calls
+(`api_app_name`, `dashboard_app_name`, `summary_job_name`,
+`weekly_review_job_name`, `resource_group_name`, and the `agent_job_names` and
+`sync_job_names` maps, read with `jq`) and calls
 `az containerapp update` / `az containerapp job update --image ... --set-env-vars
 IMAGE_TAG=...` against each. `--set-env-vars` adds/updates only the name given
 and leaves every other env var alone, which is what lets `IMAGE_TAG` move
@@ -1311,12 +1372,19 @@ rebuild. These files are committed intentionally; don't put secrets in them
 
 ## Scheduling
 
-`agent_cron_expression` (default `0 6 * * *`), `daily_summary_cron_expression`
+`agent_cron_expression` (default `0 6 * * *`, every pot at once), `daily_summary_cron_expression`
 (default `0 21 * * *`) and `weekly_review_cron_expression` (default
 `0 22 * * 0`, Sunday) are **evaluated in UTC**, five fields, no seconds field —
 so the wall-clock time shifts with British Summer Time. `schedule_trigger_config`
 forces replacement, so a schedule change shows as destroy/create; harmless, since
 jobs hold no state.
+
+**06:00 UTC is DeepSeek's peak window on weekdays.** Peak is 01:00-04:00 and
+06:00-10:00 UTC, Monday to Friday; every other hour is half price. A 10:00 UTC
+agent run would still submit hours before the 13:30/14:30 UTC open, at half
+the cost. `llm/base.py` prices every call at the peak rate regardless, so the
+recorded cost is exact for a weekday run and double the real bill at a
+weekend.
 
 **The weekly review must fall after that day's summary.** It reports the
 summary's valuation as the week's close, so scheduling it earlier reviews a week

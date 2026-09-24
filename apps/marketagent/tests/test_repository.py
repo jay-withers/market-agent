@@ -33,6 +33,7 @@ from marketagent.models import (
     RiskVerdict,
 )
 from marketagent.news import Article
+from tests.helpers import POTS
 
 D = Decimal
 
@@ -41,11 +42,9 @@ D = Decimal
 TICKER = "AAPL"
 OTHER = "MSFT"
 
-# The account most tests exercise: 010-seed-sp100-static.sql seeds it with 101
-# real tickers (including TICKER/OTHER above), unlike dynamic-500, which
-# starts with an empty portfolio_watchlist until the rebalance job populates
-# it.
-PORTFOLIO = "static-100"
+# The pot most tests exercise: 011-sector-pots.sql seeds it with 50 real
+# tickers, including TICKER/OTHER above.
+PORTFOLIO = "tech"
 
 
 def _bar(ticker: str = TICKER, day: date = date(2026, 9, 14), close: str = "100.0000") -> Bar:
@@ -129,7 +128,7 @@ def test_the_watchlist_excludes_the_benchmark_companies(conn):
 
     tickers = repo.active_tickers(conn, pid)
 
-    assert tickers, "010-seed-sp100-static.sql seeds static-100's watchlist"
+    assert tickers, "011-sector-pots.sql seeds the tech pot's watchlist"
     assert "SPY" not in tickers
     assert TICKER in tickers
     assert tickers == sorted(tickers)
@@ -137,8 +136,27 @@ def test_the_watchlist_excludes_the_benchmark_companies(conn):
 
 def test_an_unknown_portfolio_names_the_migration_that_creates_one(conn):
     """The failure a fresh database produces, so it has to point somewhere."""
-    with pytest.raises(LookupError, match=r"009-two-accounts\.sql"):
+    with pytest.raises(LookupError, match=r"011-sector-pots\.sql"):
         repo.portfolio_id(conn, "no-such-portfolio")
+
+
+def test_only_the_new_pots_are_active_and_the_old_accounts_are_kept(conn):
+    """Retired, not deleted: the old accounts still resolve so their history
+    stays readable, but nothing iterates them."""
+    assert repo.active_portfolios(conn) == list(POTS)
+    for retired in ("static-100", "dynamic-500"):
+        assert not repo.is_active(conn, repo.portfolio_id(conn, retired))
+    assert repo.is_active(conn, repo.portfolio_id(conn, PORTFOLIO))
+
+
+def test_a_run_records_the_settings_it_decided_under(conn):
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    config = {"analysis_effort": "low", "risk": {"min_trade_usd": "5"}}
+
+    run_id = repo.open_run(conn, pid, "manual", False, "v1.0.0", config)
+
+    stored = conn.execute("SELECT config FROM agent_runs WHERE id = %s", (run_id,)).fetchone()[0]
+    assert stored == config
 
 
 def test_the_seeded_portfolio_starts_at_the_paper_account_default(conn):
@@ -514,8 +532,8 @@ def test_recent_decisions_do_not_leak_across_accounts(conn):
     """`recent_decisions` used to ignore which account a decision belonged to,
     so two heavily-overlapping watchlists would leak one account's history
     into the other's prompt. Filtered by `portfolio_id` as well as ticker now."""
-    static_pid = repo.portfolio_id(conn, "static-100")
-    dynamic_pid = repo.portfolio_id(conn, "dynamic-500")
+    static_pid = repo.portfolio_id(conn, "tech")
+    dynamic_pid = repo.portfolio_id(conn, "health")
     run_id = repo.open_run(conn, static_pid, "schedule", dry_run=False, image_tag=None)
     _decision(conn, static_pid, run_id)
 
@@ -557,8 +575,8 @@ def test_spend_can_be_scoped_to_one_accounts_agent_runs(conn):
     """`pid` excludes the summary/weekly cost, which is never split per
     account — those two jobs cover both portfolios in one call, so their spend
     is not attributable to either one alone."""
-    static_pid = repo.portfolio_id(conn, "static-100")
-    dynamic_pid = repo.portfolio_id(conn, "dynamic-500")
+    static_pid = repo.portfolio_id(conn, "tech")
+    dynamic_pid = repo.portfolio_id(conn, "health")
     today = date.today()
     for pid, cost in ((static_pid, D("0.1000")), (dynamic_pid, D("0.2000"))):
         run_id = repo.open_run(conn, pid, "schedule", dry_run=False, image_tag=None)
@@ -661,13 +679,13 @@ def test_a_benchmark_arm_is_overwritten_rather_than_duplicated_per_day(conn):
 
 
 def test_benchmark_value_does_not_collide_across_two_accounts(conn):
-    """The old `(symbol, as_of)` key let two accounts silently overwrite each
+    """The old `(symbol, as_of)` key let two pots silently overwrite each
     other's `value_usd` for the same benchmark and day — `close_usd` (the raw
     market price) is harmlessly shared, but `value_usd` is notional-dependent
     per account, which is exactly what the new `(portfolio_id, symbol, as_of)`
     key fixes."""
-    static_pid = repo.portfolio_id(conn, "static-100")
-    dynamic_pid = repo.portfolio_id(conn, "dynamic-500")
+    static_pid = repo.portfolio_id(conn, "tech")
+    dynamic_pid = repo.portfolio_id(conn, "health")
     point = BenchmarkPoint(
         symbol="SPY", as_of=date(2026, 9, 14), value_usd=D("505.0000"), close_usd=D("560.0000")
     )
@@ -712,8 +730,8 @@ def test_the_days_activity_does_not_leak_another_accounts_decisions(conn):
     """`runs` and `decisions` used to ignore `pid` entirely — only `trades`/
     `holdings` were filtered — so a decision made for the other account showed
     up in this account's daily summary. Both are portfolio-scoped now."""
-    static_pid = repo.portfolio_id(conn, "static-100")
-    dynamic_pid = repo.portfolio_id(conn, "dynamic-500")
+    static_pid = repo.portfolio_id(conn, "tech")
+    dynamic_pid = repo.portfolio_id(conn, "health")
     run_id = repo.open_run(conn, dynamic_pid, "schedule", dry_run=False, image_tag=None)
     _decision(conn, dynamic_pid, run_id)
 
@@ -855,8 +873,8 @@ def test_the_weeks_runs_are_counted_by_outcome(conn):
 def test_week_metrics_do_not_leak_another_accounts_runs_or_decisions(conn):
     """`runs`, `decisions` and `constraints` used to ignore `pid`, so one
     account's week could silently include the other's activity."""
-    static_pid = repo.portfolio_id(conn, "static-100")
-    dynamic_pid = repo.portfolio_id(conn, "dynamic-500")
+    static_pid = repo.portfolio_id(conn, "tech")
+    dynamic_pid = repo.portfolio_id(conn, "health")
     run_id = repo.open_run(conn, dynamic_pid, "schedule", dry_run=False, image_tag=None)
     repo.close_run(conn, run_id, "succeeded", {"news_fetched": 84}, 100, 20, D("0.1900"))
     _decision(conn, dynamic_pid, run_id)

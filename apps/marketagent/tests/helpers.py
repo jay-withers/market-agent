@@ -1,4 +1,5 @@
-"""Builders for an httpx client whose requests never leave the process."""
+"""Builders for an httpx client whose requests never leave the process, and the
+pot names the suite uses."""
 
 from __future__ import annotations
 
@@ -6,6 +7,9 @@ import json
 from typing import Any
 
 import httpx
+
+# The pots sql/011-sector-pots.sql seeds, in id order.
+POTS = ("tech", "health", "energy")
 
 
 def mock_client(handler) -> httpx.Client:

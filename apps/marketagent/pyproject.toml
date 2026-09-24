@@ -18,7 +18,6 @@ dependencies = [
   "azure-identity>=1.19",
   "azure-keyvault-secrets>=4.9",
   "httpx>=0.28",
-  "beautifulsoup4>=4.12",
   "fastapi>=0.115",
   "uvicorn[standard]>=0.34",
   "markdown>=3.7",

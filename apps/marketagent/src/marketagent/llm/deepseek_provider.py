@@ -29,6 +29,7 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, ValidationError
 
+from ..accounts import SHARED_DEEPSEEK_KEY
 from ..fetch import TIMEOUT_SECONDS, FetchError, get_json, post_json_retrying
 from ..models import DailyNarrative, NewsRelevance, Recommendation, WeeklyReview
 from ..settings import secret, settings
@@ -191,8 +192,12 @@ class DeepseekLlm:
         filter_model: str | None = None,
         analysis_model: str | None = None,
         analysis_effort: str | None = None,
+        api_key_secret: str = SHARED_DEEPSEEK_KEY,
     ) -> None:
         cfg = settings()
+        # Which Key Vault secret holds the key: each pot's agent passes its own,
+        # so DeepSeek's usage page attributes that pot's spend to its key.
+        self.api_key_secret = api_key_secret
         self.filter_model = filter_model or cfg.filter_model
         self.analysis_model = analysis_model or cfg.analysis_model
         self.analysis_effort = analysis_effort or cfg.analysis_effort
@@ -336,7 +341,7 @@ class DeepseekLlm:
         )
 
     def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {secret('DEEPSEEK-API-KEY')}"}
+        return {"Authorization": f"Bearer {secret(self.api_key_secret)}"}
 
 
 def balance_usd(client: httpx.Client | None = None) -> Decimal:
@@ -354,7 +359,7 @@ def balance_usd(client: httpx.Client | None = None) -> Decimal:
     """
     response = get_json(
         f"{API_BASE_URL}/user/balance",
-        headers={"Authorization": f"Bearer {secret('DEEPSEEK-API-KEY')}"},
+        headers={"Authorization": f"Bearer {secret(SHARED_DEEPSEEK_KEY)}"},
         client=client,
     )
     for info in response.get("balance_infos", []):

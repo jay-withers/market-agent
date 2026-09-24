@@ -12,6 +12,7 @@ import pytest
 
 from marketagent import alpaca_api
 from marketagent import settings as settings_module
+from tests.helpers import POTS
 
 
 @pytest.fixture(autouse=True)
@@ -33,13 +34,13 @@ def fake_secrets(monkeypatch):
     memoise, so a value read before these were set would otherwise persist.
     """
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-deepseek-key")
-    # Both accounts' credential pairs, matching alpaca_api.ACCOUNT_SECRET_SUFFIX
-    # — a test exercising either account (or both) needs neither Azure nor a
-    # real key.
-    monkeypatch.setenv("ALPACA_API_KEY_STATIC100", "test-alpaca-key-static100")
-    monkeypatch.setenv("ALPACA_SECRET_KEY_STATIC100", "test-alpaca-secret-static100")
-    monkeypatch.setenv("ALPACA_API_KEY_DYNAMIC500", "test-alpaca-key-dynamic500")
-    monkeypatch.setenv("ALPACA_SECRET_KEY_DYNAMIC500", "test-alpaca-secret-dynamic500")
+    # Every pot's secrets, named the way accounts.secret_suffix derives them —
+    # a test exercising any pot (or several) needs neither Azure nor a real key.
+    for pot in POTS:
+        suffix = pot.upper()
+        monkeypatch.setenv(f"DEEPSEEK_API_KEY_{suffix}", f"test-deepseek-key-{pot}")
+        monkeypatch.setenv(f"ALPACA_API_KEY_{suffix}", f"test-alpaca-key-{pot}")
+        monkeypatch.setenv(f"ALPACA_SECRET_KEY_{suffix}", f"test-alpaca-secret-{pot}")
     monkeypatch.setenv("RESEND_API_KEY", "test-resend-key")
     # Must stay empty: a configured vault URI would let a missing env var fall
     # through to a real network call.
@@ -61,14 +62,14 @@ def fake_secrets(monkeypatch):
 def default_alpaca_account():
     """`alpaca_api.headers()` refuses to answer until an account is selected.
 
-    Most tests don't care which of the two accounts they exercise, so this
-    picks one by default — a test that does care (e.g. asserting the two
-    accounts' credentials are actually kept apart) calls `use_account` itself,
+    Most tests don't care which pot they exercise, so this picks one by
+    default — a test that does care (e.g. asserting two pots' credentials are
+    actually kept apart) calls `use_account` itself,
     which simply overrides this for its own duration. Reset after every test:
     `_account` is process-global module state, and a test that left it set
     must not leak into the next one.
     """
-    alpaca_api.use_account("static-100")
+    alpaca_api.use_account(POTS[0])
     yield
     alpaca_api._account = None
 

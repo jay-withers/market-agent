@@ -24,6 +24,7 @@ from decimal import Decimal
 
 from .. import alpaca_api, risklimits
 from .. import repository as repo
+from ..accounts import deepseek_key
 from ..broker.alpaca import AlpacaBroker
 from ..broker.base import Broker
 from ..broker.dryrun import DryRunBroker
@@ -33,7 +34,7 @@ from ..llm.deepseek_provider import DeepseekLlm
 from ..marketdata import Bar, fetch_daily_bars, latest_close
 from ..models import Recommendation
 from ..news import Article, fetch_news
-from ..risk import evaluate
+from ..risk import evaluate, new_buy_headroom
 from ..settings import settings
 from ..sync import risk_state, synchronize
 
@@ -77,17 +78,17 @@ def run(
 ) -> int:
     """Execute one agent run for one account. Returns the `agent_runs` id.
 
-    `portfolio` is `'static-100'` or `'dynamic-500'` — required, no default,
-    since each account runs as a separate scheduled job (`--portfolio` on the
-    CLI) and a forgotten argument must fail loudly rather than silently trade
-    the wrong account.
+    `portfolio` is a pot's name — required, no default, since each pot runs as
+    a separate scheduled job (`--portfolio` on the CLI) and a forgotten
+    argument must fail loudly rather than silently trade the wrong pot.
 
     `llm` and `broker` are injectable so the whole loop can be exercised
     against a test double — the alternative is a job that can only ever be
     tested by spending money and placing orders.
     """
     cfg = settings()
-    llm = llm or DeepseekLlm()
+    # The pot's own key, so DeepSeek's usage page attributes its spend to it.
+    llm = llm or DeepseekLlm(api_key_secret=deepseek_key(portfolio))
     alpaca_api.use_account(portfolio)
     if broker is None:
         broker = DryRunBroker() if cfg.dry_run else AlpacaBroker()
@@ -111,7 +112,9 @@ def run(
 
     with pool().connection() as conn:
         pid = repo.portfolio_id(conn, name=portfolio)
-        run_id = repo.open_run(conn, pid, trigger, cfg.dry_run, image_tag)
+        if not repo.is_active(conn, pid):
+            raise RuntimeError(f"portfolio {portfolio!r} is retired; its history is read-only")
+        run_id = repo.open_run(conn, pid, trigger, cfg.dry_run, image_tag, _config(llm))
         conn.commit()
         logger.info(
             "run %d started (portfolio=%s, dry_run=%s, trigger=%s)",
@@ -129,8 +132,9 @@ def run(
             raise RuntimeError(f"no active tickers for {portfolio!r} — run its watchlist seed")
 
         paper = not isinstance(broker, DryRunBroker)
+        opening = None
         if paper:
-            synchronize(pid, broker, pool())
+            opening = synchronize(pid, broker, pool())
         else:
             with pool().connection() as conn:
                 synced = conn.execute(
@@ -142,6 +146,10 @@ def run(
                 )
         bars = fetch_daily_bars(tickers, days=PRICE_HISTORY_DAYS)
         closes = latest_close(bars)
+        # The allowlist stays the whole watchlist even when the analysis below
+        # is narrowed to holdings.
+        watchlist = frozenset(tickers)
+        tickers = _analysable(pid, tickers, closes, opening)
         articles = fetch_news(tickers, hours=NEWS_WINDOW_HOURS)
         counts["news_fetched"] = len(articles)
 
@@ -210,7 +218,7 @@ def run(
                 # have refused.
                 raise RuntimeError(f"holdings with no current price: {', '.join(unpriced)}")
 
-            limits = risklimits.limits(frozenset(tickers))
+            limits = risklimits.limits(watchlist)
             result = llm.analyse(_prompt(ticker, relevant[ticker], bars, state, limits, history))
             usage += result.usage
             cost_usd += result.cost_usd
@@ -305,6 +313,48 @@ def run(
             conn.commit()
         logger.exception("run %d failed", run_id)
         raise
+
+
+def _config(llm: Llm) -> dict[str, object]:
+    """The effective settings this run decides under, for `agent_runs.config`."""
+    cfg = settings()
+    limits = risklimits.limits(frozenset())
+    return {
+        "filter_model": getattr(llm, "filter_model", cfg.filter_model),
+        "analysis_model": getattr(llm, "analysis_model", cfg.analysis_model),
+        "analysis_effort": getattr(llm, "analysis_effort", cfg.analysis_effort),
+        "max_run_cost_usd": str(cfg.max_run_cost_usd),
+        "risk": limits.model_dump(mode="json", exclude={"allowed_tickers"}),
+    }
+
+
+def _analysable(pid: int, tickers: list[str], closes: dict[str, Bar], opening) -> list[str]:
+    """The tickers worth paying the model to look at today.
+
+    When no new BUY could clear `min_trade_usd` — the pot is at its exposure
+    ceiling, out of cash or out of trades for the day — a BUY on anything not
+    held is refused whatever the model says, so only holdings are analysed,
+    for a possible SELL. With the daily trade limit spent even a SELL is
+    refused, so nothing is. Checked once, up front: orders submitted before
+    the open do not fill during the run, so the headroom cannot grow mid-run.
+    """
+    with pool().connection() as conn:
+        state, _ = repo.build_state(conn, pid, closes)
+        already = repo.trades_today(conn, pid)
+    if opening:
+        state = risk_state(state, opening)
+    limits = risklimits.limits(frozenset(tickers))
+    if new_buy_headroom(state, limits, already) >= limits.min_trade_usd:
+        return tickers
+    if already >= limits.max_daily_trades:
+        logger.info("daily trade limit reached (%d); nothing to analyse", already)
+        return []
+    held = {p.ticker for p in state.positions}
+    kept = [t for t in tickers if t in held]
+    logger.info(
+        "no buying headroom; analysing %d holding(s) of %d tickers", len(kept), len(tickers)
+    )
+    return kept
 
 
 def _execute(

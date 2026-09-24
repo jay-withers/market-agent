@@ -43,38 +43,23 @@ locals {
     ALPACA_TRADING_BASE_URL = "https://paper-api.alpaca.markets"
   })
 
-  # Per-account cost ceiling and (for dynamic-500 only) a daily-trade bump.
-  # Not exposed as Terraform variables — RISK_* and MAX_RUN_COST_USD were
-  # never wired through Terraform even for the single-account job (see the
-  # application's own docs: the cost ceiling's default "applies to the
-  # deployed job and an override is an env var on the container"); these
-  # locals are that same style of override.
+  # One entry per pot, each with its own agent job, sync job, Alpaca paper
+  # account and DeepSeek key. The key must match a `portfolio` row (sql/011);
+  # the app derives the pot's Key Vault secret names from it.
   #
-  # MAX_RUN_COST_USD is an informed estimate against the measured 10-ticker
-  # baseline (~$0.18/run in ~4 minutes), extrapolated by relative watchlist
-  # size — not a firm prediction, and worth revisiting after each account's
-  # first real week of runs. This one genuinely does scale with watchlist
-  # size: it bounds LLM spend, which scales with articles and tickers
-  # analysed regardless of account size.
+  # `env` is where one pot differs from the others — ANALYSIS_EFFORT, a RISK_*
+  # limit or MAX_RUN_COST_USD — merged over the agent's defaults. Every pot
+  # runs the same settings today so the comparison is between sectors, and an
+  # override lands only when the job is created: `env` is under ignore_changes,
+  # so changing one later is `az containerapp job update --set-env-vars`.
   #
-  # RISK_MAX_DAILY_TRADES does NOT scale with watchlist size the same way,
-  # and static-100 gets no override at all — both new Alpaca accounts hold
-  # $500 real cash, not the $100,000 risklimits.py's own defaults are sized
-  # for (see its docstring), so `max_concentration_pct`/`max_total_exposure_pct`
-  # (percentage caps, which scale automatically) cap the account at roughly 3-4
-  # open positions regardless of watchlist size — a 500-ticker watchlist means
-  # more candidates to filter, not more room to trade. dynamic-500 gets a
-  # modest bump to 15 (the single-account default, already raised 3 -> 6 -> 10
-  # through real iteration, is 10) purely because five hundred tickers gives a
-  # somewhat higher chance of several independent names clearing analysis on
-  # the same newsy day — not because the account can afford more total
-  # exposure, which it can't.
-  agent100_env = merge(local.agent_base_env, {
-    MAX_RUN_COST_USD = "5.00"
-  })
+  # No MAX_RUN_COST_USD override: the app's $1.00 default is about 2.5x what a
+  # 50-ticker pot costs even with news on every ticker (~$0.008 per analysis).
+  pots = {
+    tech   = { env = {} }
+    health = { env = {} }
+    energy = { env = {} }
+  }
 
-  agent500_env = merge(local.agent_base_env, {
-    RISK_MAX_DAILY_TRADES = "15"
-    MAX_RUN_COST_USD      = "25.00"
-  })
+  agent_env = { for pot, cfg in local.pots : pot => merge(local.agent_base_env, cfg.env) }
 }

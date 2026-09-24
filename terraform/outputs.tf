@@ -70,42 +70,27 @@ output "dashboard_app_name" {
 
 # The job names are the deploy targets: a scheduled job has to be started by
 # hand to test it, with `az containerapp job start --name <this>`.
-output "agent100_job_name" {
-  description = "Name of the static-100 account's agent container app job, for `az containerapp job start`."
-  value       = azurerm_container_app_job.agent100.name
+output "agent_job_names" {
+  description = "Each pot's agent container app job name, keyed by pot, for `make deploy` and `az containerapp job start`."
+  value       = { for pot, job in azurerm_container_app_job.agent : pot => job.name }
 }
 
-output "agent500_job_name" {
-  description = "Name of the dynamic-500 account's agent container app job, for `az containerapp job start`."
-  value       = azurerm_container_app_job.agent500.name
+output "sync_job_names" {
+  description = "Each pot's broker sync container app job name, keyed by pot, for `make deploy`."
+  value       = { for pot, job in azurerm_container_app_job.sync : pot => job.name }
 }
 
 output "summary_job_name" {
-  description = "Name of the daily summary container app job (covers both accounts), for `az containerapp job start`."
+  description = "Name of the daily summary container app job (covers every pot), for `az containerapp job start`."
   value       = azurerm_container_app_job.daily_summary.name
 }
 
 output "weekly_review_job_name" {
-  description = "Name of the weekly review container app job (covers both accounts), for `az containerapp job start`."
+  description = "Name of the weekly review container app job (covers every pot), for `az containerapp job start`."
   value       = azurerm_container_app_job.weekly_review.name
 }
 
 output "identity_client_id" {
   description = "Client ID of the workload identity, which the containers receive as `AZURE_CLIENT_ID` and use to acquire Key Vault and PostgreSQL tokens."
   value       = azurerm_user_assigned_identity.this.client_id
-}
-
-output "sync100_job_name" {
-  description = "Name of the static-100 account synchronization job, used by make deploy."
-  value       = azurerm_container_app_job.sync100.name
-}
-
-output "sync500_job_name" {
-  description = "Name of the dynamic-500 account synchronization job, used by make deploy."
-  value       = azurerm_container_app_job.sync500.name
-}
-
-output "rebalance_job_name" {
-  description = "Name of the dynamic-500 watchlist rebalance job, used by make deploy."
-  value       = azurerm_container_app_job.rebalance.name
 }

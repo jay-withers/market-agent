@@ -19,7 +19,7 @@ from ..models import DailyNarrative, NewsRelevance, Recommendation, WeeklyReview
 # on every `news_analysis` and `ai_decisions` row and is part of the
 # `news_analysis` unique key, so a re-analysis after a prompt change adds rows
 # instead of destroying the record of what the old prompt concluded.
-PROMPT_VERSION = "v4"
+PROMPT_VERSION = "v5"
 
 # US dollars per million tokens, as published on DeepSeek's pricing page.
 # A snapshot, not a live lookup — it only feeds the cost figure recorded on
@@ -32,15 +32,14 @@ PROMPT_VERSION = "v4"
 # has no separate charge for *writing* to the cache at all — caching is
 # automatic and only ever shows up as a cheaper rate on a later hit.
 #
-# DeepSeek also prices by time of day — off-peak (00:30-08:30 UTC) runs at
-# roughly half these rates. The figures here are the *peak* rate, used
-# unconditionally rather than modelling the peak/off-peak schedule (which
-# also carves out Chinese public holidays, not worth tracking for a cost
-# estimate). That makes this a deliberate upper bound, not a precise one —
-# consistent with MAX_RUN_COST_USD existing to catch a runaway, not to
-# meter ordinary spending to the cent — and it happens to be exactly right
-# for the two scheduled agent runs, which both land at 06:00-06:10 UTC,
-# inside the peak window.
+# DeepSeek also prices by time of day. Peak is 01:00-04:00 and 06:00-10:00
+# UTC, Monday to Friday excluding Chinese public holidays; every other hour,
+# weekends included, is off-peak at half these rates (checked 2026-09-24).
+# The figures here are the *peak* rate, used unconditionally rather than
+# modelling that schedule. That makes this a deliberate upper bound, not a
+# precise one — consistent with MAX_RUN_COST_USD existing to catch a runaway,
+# not to meter ordinary spending to the cent. It is exact for a weekday agent
+# run at the default 06:00 UTC and double the real bill for a weekend one.
 PRICES_USD_PER_MTOK: dict[str, tuple[Decimal, Decimal, Decimal]] = {
     # model: (input_cache_miss, input_cache_hit, output)
     "deepseek-flash": (Decimal("0.30"), Decimal("0.006"), Decimal("1.20")),
