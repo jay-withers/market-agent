@@ -23,7 +23,7 @@ FROM base AS builder
 # uv is copied in rather than supplying the base image, which is exactly what
 # lets the builder share the runtime's interpreter. UV_PYTHON_DOWNLOADS=never
 # then stops uv fetching a different one of its own.
-COPY --from=ghcr.io/astral-sh/uv:0.12.17@sha256:10787c682e4184e4f290de1171fd4703dc63de99221f10fe1c99002ce7fa9acc /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.12.19@sha256:04d046b13e60d6bcec73cbc5e1cad25d680dea90c8573340950a0ac2d1aef424 /uv /uvx /bin/
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
