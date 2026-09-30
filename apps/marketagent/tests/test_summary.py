@@ -265,22 +265,24 @@ def test_an_unreadable_balance_reports_spend_and_no_runway():
 
 def test_a_configured_credit_gives_what_is_left_and_a_runway():
     text = _spend_text(credit=D("25.00"))
-    assert "$20.00 of $25.00" in text
-    # 20.00 remaining at 0.20/day.
-    assert "about 100 days" in text
+    # The balance is what is left; recorded spend is not subtracted again.
+    assert "$25.00" in text
+    assert " of $" not in text
+    # 25.00 remaining at 0.20/day.
+    assert "about 125 days" in text
 
 
 def test_the_runway_is_rounded_down_rather_than_up():
     # A runway is a limit like any other here: rounding it up would promise a
     # day that is not paid for.
     # $5.00 left at $0.30/day is 16.67 days, and 16 is the honest half.
-    text = _spend_text(total_spend=_spend(last_7_days_usd=D("2.100000")), credit=D("10.000000"))
+    text = _spend_text(total_spend=_spend(last_7_days_usd=D("2.100000")), credit=D("5.000000"))
     assert "about 16 days" in text
 
 
 def test_exhausted_credit_says_so_rather_than_reporting_zero_days():
-    text = _spend_text(total_spend=_spend(to_date_usd=D("30.000000")), credit=D("25.00"))
-    assert "none — the recorded spend has reached the credit" in text
+    text = _spend_text(credit=D("0"))
+    assert "none — the account balance is empty" in text
     assert "about" not in text
 
 

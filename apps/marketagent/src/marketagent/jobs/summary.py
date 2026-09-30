@@ -320,10 +320,12 @@ def _spend_section(
     ]
 
     if credit is not None:
-        remaining = credit - total_spend["to_date_usd"]
-        lines.append(f"| Credit remaining |{blanks} {_usd(remaining)} of {_usd(credit)} |")
+        # DeepSeek's balance is already what is left: spend has come off it, so
+        # subtracting our recorded spend again would double-count it.
+        remaining = credit
+        lines.append(f"| Credit remaining |{blanks} {_usd(remaining)} |")
         if remaining <= 0:
-            lines.append(f"| Runway |{blanks} none — the recorded spend has reached the credit |")
+            lines.append(f"| Runway |{blanks} none — the account balance is empty |")
         elif daily > 0:
             # Whole days, rounded towards zero by the int() — the same
             # direction money() rounds, and the safe one for a runway.
