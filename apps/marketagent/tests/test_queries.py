@@ -279,11 +279,13 @@ def test_watchlist_excludes_benchmarks(conn):
     assert not {r["ticker"] for r in rows} & {"SPY", "VT", "EWU"}
 
 
-def test_each_pot_has_its_own_fifty_ticker_watchlist(conn):
-    """The seeded lists do not overlap, so no ticker is traded by two pots."""
+def test_each_pot_has_its_own_watchlist(conn):
+    """The seeded lists do not overlap, so no ticker is traded by two pots.
+    Tech was narrowed to ten by 012-narrow-tech-pot.sql; the others hold 50."""
     lists = {name: {r["ticker"] for r in queries.watchlist(conn, name)} for name in POTS}
 
-    assert all(len(tickers) == 50 for tickers in lists.values())
+    assert len(lists["tech"]) == 10
+    assert len(lists["health"]) == len(lists["energy"]) == 50
     assert not (lists["tech"] & lists["health"] or lists["health"] & lists["energy"])
 
 
