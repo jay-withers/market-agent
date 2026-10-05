@@ -217,7 +217,7 @@ to come from something that costs nothing while idle.
 **The daily email is the primary channel**, and it reports whether the agent ran
 before it reports anything the agent did. This matters more than it sounds:
 `No trades were made.` is the same sentence on a day the model held every
-position and on a day the 06:00 job died, and the trades, decisions and holdings
+position and on a day the 10:30 job died, and the trades, decisions and holdings
 sections are all silent in exactly the same way. An `Agent run` table states the
 day's runs, their status and any error; a failed, abandoned or absent run also
 lands in the **subject line**, which is the part that reaches a phone's lock
@@ -501,7 +501,7 @@ container.
 
 ## Scheduling
 
-Job schedules are `agent_cron_expression` (default `0 6 * * *`) and
+Job schedules are `agent_cron_expression` (default `30 10 * * *`) and
 `daily_summary_cron_expression` (default `0 21 * * *`). Both are **evaluated in
 UTC** — five fields, no seconds — so the wall-clock time shifts by an hour with
 British Summer Time.

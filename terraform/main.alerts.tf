@@ -1,7 +1,7 @@
 # Alerting, and the reason it is worth its cost on a £13/month deployment.
 #
 # Every workload here is scale-to-zero or a scheduled job that runs for four
-# minutes and stops. Nothing is watching at 06:00, and `agent_runs` only records
+# minutes and stops. Nothing is watching at 10:30, and `agent_runs` only records
 # a failure the job survived long enough to write — a replica killed before it
 # opens its row leaves no evidence at all. These rules read the platform's own
 # metric store, so they need no agent, no synthetic traffic and no replica kept
@@ -39,7 +39,7 @@ resource "azurerm_monitor_action_group" "this" {
   }
 
   # A second receiver alongside the role, not instead of it: the Owner role
-  # resolves to the work account, and a run that fails at 06:00 is worth hearing
+  # resolves to the work account, and a run that fails at 10:30 is worth hearing
   # about wherever you actually read mail. Empty disables it; `dynamic` rather
   # than a static block so an empty string means no receiver rather than a
   # receiver with no address.

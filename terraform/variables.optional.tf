@@ -142,9 +142,9 @@ variable "agent_dry_run" {
 }
 
 variable "agent_cron_expression" {
-  description = "Schedule for every pot's agent job, as a 5-field cron expression evaluated in UTC. The pots run concurrently, each on its own DeepSeek key."
+  description = "Schedule for every pot's agent job, as a 5-field cron expression evaluated in UTC. The pots run concurrently, each on its own DeepSeek key. 10:30 sits outside DeepSeek's weekday peak windows (01:00-04:00 and 06:00-10:00 UTC), which halves the model bill, and still submits hours before the US open."
   type        = string
-  default     = "0 6 * * *"
+  default     = "30 10 * * *"
 }
 
 variable "daily_summary_cron_expression" {

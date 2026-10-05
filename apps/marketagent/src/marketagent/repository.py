@@ -600,7 +600,7 @@ def day_activity(conn: Any, pid: int, as_of: date) -> dict[str, Any]:
     `runs` is here because "no trades" and "the agent never ran" produce an
     identical trades list, and the summary is the only thing that reaches a
     human unprompted. Without it the email reports a quiet day on a day the
-    06:00 job died — see `_run_section`.
+    10:30 job died — see `_run_section`.
     """
     runs = conn.execute(
         "SELECT started_at, finished_at, status, trigger, dry_run, error,"

@@ -1,8 +1,8 @@
 """What the agent job needs from a broker, and the shape of a submission.
 
-**A submitted order usually has no fill yet.** The agent runs at 06:00 UTC and
+**A submitted order usually has no fill yet.** The agent runs at 10:30 UTC and
 the US market opens at 14:30, so a market order placed by the scheduled job
-sits `accepted` for eight hours. Everything below is therefore built around
+sits `accepted` for about four hours. Everything below is therefore built around
 "submitted, outcome unknown" being the normal case rather than an error:
 quantity and price are optional, and the notional — which *is* known at
 submission — carries the size.

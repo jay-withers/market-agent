@@ -79,7 +79,7 @@ def conninfo() -> str:
     else:
         # require, not verify-full: Azure terminates TLS with a public CA, but
         # the container image carries no CA bundle pinning and a certificate
-        # change would take the agent down silently at 06:00 UTC.
+        # change would take the agent down silently at 10:30 UTC.
         parts.append("sslmode=require")
     return " ".join(parts)
 

@@ -511,7 +511,7 @@ def _trades_section(metrics: dict[str, Any]) -> list[str]:
         )
     lines += [
         "",
-        "`submitted` is the normal outcome of a scheduled run: the agent runs at 06:00 "
+        "`submitted` is the normal outcome of a scheduled run: the agent runs at 10:30 "
         "UTC and the US market opens at 14:30, so an order rests for hours. `simulated` "
         "means a dry run — the portfolio moved but no order reached the broker.",
         "",
