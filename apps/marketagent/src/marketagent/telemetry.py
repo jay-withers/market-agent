@@ -17,7 +17,7 @@ into that same workspace:
   stdout already lands. Our own records are the ones worth paying for twice.
 - **Performance counters and live metrics are off.** Both are periodic emissions
   from workloads that are either scale-to-zero or a four-minute job — there is
-  no live stream worth watching at 06:00, and Container Apps already reports CPU
+  no live stream worth watching at 10:30, and Container Apps already reports CPU
   and memory as free platform metrics.
 """
 

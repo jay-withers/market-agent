@@ -373,7 +373,8 @@ def test_a_pot_with_headroom_analyses_its_whole_watchlist(agent_dsn, monkeypatch
 
     agent.run(portfolio=PORTFOLIO, llm=_FakeLlm(TICKER), broker=DryRunBroker())
 
-    assert len(asked[0]) == 50
+    # 012-narrow-tech-pot.sql cut tech from 50 names to these ten.
+    assert len(asked[0]) == 10
 
 
 def test_nothing_is_analysed_once_the_daily_trade_limit_is_spent(agent_dsn, monkeypatch):

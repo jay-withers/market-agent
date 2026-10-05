@@ -19,7 +19,7 @@ from ..models import DailyNarrative, NewsRelevance, Recommendation, WeeklyReview
 # on every `news_analysis` and `ai_decisions` row and is part of the
 # `news_analysis` unique key, so a re-analysis after a prompt change adds rows
 # instead of destroying the record of what the old prompt concluded.
-PROMPT_VERSION = "v5"
+PROMPT_VERSION = "v6"
 
 # US dollars per million tokens, as published on DeepSeek's pricing page.
 # A snapshot, not a live lookup — it only feeds the cost figure recorded on
@@ -38,8 +38,8 @@ PROMPT_VERSION = "v5"
 # The figures here are the *peak* rate, used unconditionally rather than
 # modelling that schedule. That makes this a deliberate upper bound, not a
 # precise one — consistent with MAX_RUN_COST_USD existing to catch a runaway,
-# not to meter ordinary spending to the cent. It is exact for a weekday agent
-# run at the default 06:00 UTC and double the real bill for a weekend one.
+# not to meter ordinary spending to the cent. The agent's default 10:30 UTC
+# run is off-peak, so its recorded cost is double the real bill on every day.
 PRICES_USD_PER_MTOK: dict[str, tuple[Decimal, Decimal, Decimal]] = {
     # model: (input_cache_miss, input_cache_hit, output)
     "deepseek-flash": (Decimal("0.30"), Decimal("0.006"), Decimal("1.20")),

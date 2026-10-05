@@ -653,8 +653,8 @@ deployed job and an override is an env var on the container. `DRY_RUN` is wired
 through Terraform's `agent_dry_run`, which defaults to false for paper trading.
 
 **"Submitted, no fill" is the normal outcome of a scheduled run.** The agent
-runs at 06:00 UTC and the US market opens at 14:30, so a market order sits
-`accepted` for eight hours. Consequences: `trades.quantity` had to become
+runs at 10:30 UTC and the US market opens at 13:30/14:30, so a market order
+sits `accepted` for three or four hours. Consequences: `trades.quantity` had to become
 nullable (a notional order never names a quantity — Alpaca derives it), a
 `client_order_id` column was added so a fill can be reconciled later, and cash
 and positions move **only** on an actual fill. `002-trade-submission-fields.sql`
@@ -808,7 +808,7 @@ process cannot bind below 1024.
 ### The summary job
 
 `jobs/summary.py` runs at 21:00 UTC and does the thing the agent could not:
-the agent submits at 06:00 and the US market opens at 14:30, so **this is where
+the agent submits at 10:30 and the US market opens at 14:30, so **this is where
 a fill becomes known**, cash and positions move, and the day gets a valuation.
 Then benchmarks, a written commentary, an email, and a `daily_summaries` row.
 
@@ -1119,7 +1119,7 @@ never alive to find out.
 **The daily email states whether the agent ran, before anything it did.** This
 is the gap the whole `_run_section`/`_run_alert` pair exists to close:
 `No trades were made.` is the same sentence on a day the model held everything
-and on a day the 06:00 job died, and the trades, decisions and holdings sections
+and on a day the 10:30 job died, and the trades, decisions and holdings sections
 are silent in exactly the same way, so nothing further down the email can tell
 the two apart. `day_activity` therefore returns `runs` alongside the rest, and
 the section renders before the trades table.
@@ -1372,19 +1372,22 @@ rebuild. These files are committed intentionally; don't put secrets in them
 
 ## Scheduling
 
-`agent_cron_expression` (default `0 6 * * *`, every pot at once), `daily_summary_cron_expression`
+`agent_cron_expression` (default `30 10 * * *`, every pot at once), `daily_summary_cron_expression`
 (default `0 21 * * *`) and `weekly_review_cron_expression` (default
 `0 22 * * 0`, Sunday) are **evaluated in UTC**, five fields, no seconds field —
 so the wall-clock time shifts with British Summer Time. `schedule_trigger_config`
 forces replacement, so a schedule change shows as destroy/create; harmless, since
 jobs hold no state.
 
-**06:00 UTC is DeepSeek's peak window on weekdays.** Peak is 01:00-04:00 and
-06:00-10:00 UTC, Monday to Friday; every other hour is half price. A 10:00 UTC
-agent run would still submit hours before the 13:30/14:30 UTC open, at half
-the cost. `llm/base.py` prices every call at the peak rate regardless, so the
-recorded cost is exact for a weekday run and double the real bill at a
-weekend.
+**The agent runs at 10:30 UTC to dodge DeepSeek's peak window.** Peak is
+01:00-04:00 and 06:00-10:00 UTC, Monday to Friday; every other hour is half
+price. It was 06:00, squarely in peak; 10:30 rather than 10:00 leaves margin so
+a run never straddles the boundary, and still submits hours before the
+13:30/14:30 UTC open. `llm/base.py` prices every call at the peak rate
+regardless, so **the recorded cost is now double the real bill every day** —
+`agent_runs.cost_usd`, the email's spend figures and the weekly review's cost
+reasoning all overstate by 2x. DeepSeek's balance, read live, is the true
+figure.
 
 **The weekly review must fall after that day's summary.** It reports the
 summary's valuation as the week's close, so scheduling it earlier reviews a week

@@ -1,7 +1,7 @@
 """The daily summary job: reconcile, value, compare, write, send.
 
 Runs at 21:00 UTC, and its first job is the one the agent could not do. The
-agent submits at 06:00 and the US market opens at 14:30, so a scheduled run's
+agent submits at 10:30 and the US market opens at 14:30, so a scheduled run's
 orders are still resting when it finishes — **this** is where a fill becomes
 known, cash and positions move, and the day gets a valuation.
 
@@ -505,7 +505,7 @@ def _run_section(runs) -> list[str]:
     """Whether the agent ran, stated before anything it did or did not do.
 
     `No trades were made.` is the same sentence on a day the model held every
-    position and on a day the 06:00 job died before reaching the first
+    position and on a day the 10:30 job died before reaching the first
     analysis. The trades, decisions and holdings sections below are all silent
     in exactly the same way, so nothing further down can distinguish them
     either — this section is the only thing that can.
