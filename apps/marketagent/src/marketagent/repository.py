@@ -766,6 +766,40 @@ def week_metrics(conn: Any, pid: int, start: date, end: date) -> dict[str, Any]:
         " GROUP BY binding, approved ORDER BY decisions DESC, binding"
     )
 
+    # Which limit shrank each `below_min_trade_usd` refusal under the floor.
+    # The refusal names only the floor, which reads as "the model asked for
+    # too little" — and the 2026-10-12 review proposed a prompt change on
+    # exactly that reading. The cause is the cap the engine clamped to: the
+    # smallest `cap_usd`, ties going to the earlier reason because that is how
+    # `evaluate()` picks. `recommended_amount` means the model's own size was
+    # under the floor; anything else means a limit cut a larger one down.
+    below_min = rows(
+        "SELECT cause.constraint_name AS cause, count(*) AS decisions"
+        " FROM ai_decisions d"
+        " CROSS JOIN LATERAL ("
+        "   SELECT r.value->>'constraint' AS constraint_name"
+        "   FROM jsonb_array_elements(d.risk_verdict->'reasons') WITH ORDINALITY AS r(value, ord)"
+        "   WHERE r.value->>'cap_usd' IS NOT NULL"
+        "   ORDER BY (r.value->>'cap_usd')::numeric, r.ord LIMIT 1"
+        " ) cause"
+        " WHERE d.portfolio_id = %(pid)s"
+        "   AND d.risk_verdict->>'binding_constraint' = 'below_min_trade_usd'"
+        "   AND d.decided_at::date BETWEEN %(start)s AND %(end)s"
+        " GROUP BY cause ORDER BY decisions DESC, cause"
+    )
+
+    # The review is told what the limits are now but was never told the
+    # prompts had changed, so a prompt proposal that had been acted on looked
+    # identical to one that had not, and was proposed again. A version split
+    # makes the change visible the same way the limits table does.
+    prompt_versions = rows(
+        "SELECT prompt_version, count(*) AS decisions,"
+        "       min(decided_at)::date AS first_day, max(decided_at)::date AS last_day"
+        " FROM ai_decisions WHERE portfolio_id = %(pid)s"
+        "   AND decided_at::date BETWEEN %(start)s AND %(end)s"
+        " GROUP BY prompt_version ORDER BY min(decided_at)"
+    )
+
     trades = rows(
         "SELECT status, count(*) AS trades,"
         "       count(*) FILTER (WHERE dry_run) AS simulated,"
@@ -845,6 +879,8 @@ def week_metrics(conn: Any, pid: int, start: date, end: date) -> dict[str, Any]:
         "runs": runs or {},
         "decisions": decisions,
         "constraints": constraints,
+        "below_min": below_min,
+        "prompt_versions": prompt_versions,
         "trades": trades,
         "tickers": tickers,
         "valuation": valuation,
