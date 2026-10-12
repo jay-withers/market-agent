@@ -935,6 +935,15 @@ model those figures, and stores an assessment plus structured proposals.
   them back and applies them — a risk limit changes when a human edits
   `risklimits.py`, which is the entire point of the limits sitting outside the
   model's reach. The system prompt says so, and there is a test that it does.
+- **A `below_min_trade_usd` refusal is split by what made it too small**, and
+  **decisions are split by `prompt_version`.** Both exist because the
+  2026-10-12 review re-proposed a prompt change already shipped in v6: it
+  could see neither that the prompt had changed nor that the refusals came
+  from a cap clamping a normal-sized BUY under the $5 floor rather than from
+  the model asking for too little. The cause is the reason with the smallest
+  `cap_usd`, ties to the earlier one — the same pick `evaluate()` makes.
+  `PROMPT_VERSION` is shared by every prompt, so a new version says *some*
+  prompt changed, not which.
 - **The previous review's proposals go into the prompt**, so the review
   compounds instead of restarting every Sunday. The model is told the list
   cannot tell it whether any were acted on — a rejected proposal and one nobody

@@ -292,6 +292,46 @@ def test_nothing_refused_and_nothing_approved_are_stated_as_zero_not_omitted():
     assert "| nothing was refused | 0 |" in table
 
 
+def test_a_refusal_below_the_minimum_says_what_made_it_too_small():
+    """The 2026-10-12 review read `below_min_trade_usd` as the model asking for
+    too little and proposed a prompt fix, when a cap clamping a larger
+    suggestion produces the same refusal. Only one of those is a prompt problem."""
+    table = _table(
+        below_min=[
+            {"cause": "max_total_exposure_pct", "decisions": 2},
+            {"cause": "recommended_amount", "decisions": 1},
+        ]
+    )
+
+    assert "| Below the minimum because of | Decisions |" in table
+    assert "| max_total_exposure_pct | 2 |" in table
+    assert "no change to the prompt can prevent" in table
+
+
+def test_the_below_minimum_split_is_absent_when_nothing_fell_below_it():
+    assert "Below the minimum because of" not in _table()
+
+
+def test_decisions_are_split_by_the_prompt_version_that_made_them():
+    """A prompt change is otherwise invisible to the review, so a prompt
+    proposal that was acted on looks like one that was ignored."""
+    table = _table(
+        prompt_versions=[
+            {
+                "prompt_version": "v5",
+                "decisions": 4,
+                "first_day": START,
+                "last_day": START,
+            },
+            {"prompt_version": "v6", "decisions": 20, "first_day": START, "last_day": END},
+        ]
+    )
+
+    assert f"The prompts in force now are version {weekly.PROMPT_VERSION}." in table
+    assert f"| v5 | 4 | {START} | {START} |" in table
+    assert f"| v6 | 20 | {START} | {END} |" in table
+
+
 # ---------------------------------------------------------------------------
 # Activity, trades, and the watchlist
 # ---------------------------------------------------------------------------
@@ -444,6 +484,8 @@ def test_last_weeks_proposals_are_included_so_the_review_compounds():
     # And the model is told what the list cannot tell it: a proposal that was
     # rejected and one nobody read look identical here.
     assert "does not say whether any of them were acted on" in prompt
+    # The prompt versions are where a prompt proposal that was acted on shows.
+    assert "a prompt proposal that was acted on shows up as a newer version" in prompt
 
 
 # ---------------------------------------------------------------------------

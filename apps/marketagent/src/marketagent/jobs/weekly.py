@@ -424,6 +424,22 @@ def _activity_section(runs: dict[str, Any], metrics: dict[str, Any]) -> list[str
                 f"| {row['action']} | {row['decisions']} | "
                 f"{'—' if confidence is None else f'{confidence:.2f}'} | {row['approved']} |"
             )
+
+    versions = metrics.get("prompt_versions") or []
+    if versions:
+        lines += [
+            "",
+            f"The prompts in force now are version {PROMPT_VERSION}. One version number "
+            "covers every prompt in the system, so a new version means at least one "
+            "prompt's wording changed.",
+            "",
+            "| Prompt version | Decisions | First day | Last day |",
+            "| --- | --- | --- | --- |",
+        ]
+        lines += [
+            f"| {v['prompt_version']} | {v['decisions']} | {v['first_day']} | {v['last_day']} |"
+            for v in versions
+        ]
     lines.append("")
     return lines
 
@@ -477,6 +493,19 @@ def _risk_section(metrics: dict[str, Any], lim: RiskLimits) -> list[str]:
         lines += [f"| {r['binding'] or '—'} | {r['decisions']} |" for r in refused]
     else:
         lines.append("| nothing was refused | 0 |")
+
+    if below_min := metrics.get("below_min"):
+        lines += [
+            "",
+            "`below_min_trade_usd` names only the floor. This splits those refusals by what "
+            "made the amount too small: `recommended_amount` means the model's own "
+            "suggested size was under the minimum; any other entry is a limit that cut a "
+            "larger suggestion down below it, which no change to the prompt can prevent.",
+            "",
+            "| Below the minimum because of | Decisions |",
+            "| --- | --- |",
+        ]
+        lines += [f"| {r['cause']} | {r['decisions']} |" for r in below_min]
 
     lines += ["", "| Approved, bound by | Decisions |", "| --- | --- |"]
     if approved:
@@ -605,7 +634,9 @@ def _prompt(facts: str, previous: list[dict[str, Any]]) -> str:
             f"{history}\n\n"
             "This list does not say whether any of them were acted on — a proposal that "
             "was rejected and one that was never read look the same here. The limits "
-            "table above is the current state, so compare against that. Do not simply "
+            "table and the prompt versions above are the current state, so compare "
+            "against those: a prompt proposal that was acted on shows up as a newer "
+            "version. Do not simply "
             "repeat a proposal; if it still stands, say that it does and why the "
             "evidence is now stronger.\n\n"
         )

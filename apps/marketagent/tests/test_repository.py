@@ -843,6 +843,61 @@ def test_the_binding_constraint_histogram_splits_approvals_from_refusals(conn):
     assert by_outcome[("daily_trade_limit", False)] == 1
 
 
+def test_a_refusal_below_the_minimum_is_attributed_to_the_cap_that_shrank_it(conn):
+    """The smallest cap is what the engine clamped to, ties going to the
+    earlier reason, and the floor's own entry carries no cap so is skipped."""
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    run_id = repo.open_run(conn, pid, "schedule", dry_run=False, image_tag=None)
+
+    def below_min(*caps: tuple[str, str]) -> RiskVerdict:
+        reasons = [RiskReason(constraint=n, detail="cap", cap_usd=D(c)) for n, c in caps]
+        reasons.append(RiskReason(constraint="below_min_trade_usd", detail="floor"))
+        return RiskVerdict(
+            approved=False,
+            approved_amount_usd=None,
+            reasons=tuple(reasons),
+            binding_constraint="below_min_trade_usd",
+        )
+
+    clamped = below_min(
+        ("recommended_amount", "40.0000"),
+        ("max_trade_usd", "50.0000"),
+        ("max_total_exposure_pct", "2.1400"),
+    )
+    _decision(conn, pid, run_id, verdict=clamped)
+    _decision(conn, pid, run_id, verdict=clamped)
+    # A tie with a later cap still names the model's own suggestion.
+    _decision(
+        conn,
+        pid,
+        run_id,
+        verdict=below_min(("recommended_amount", "3.0000"), ("available_cash", "3.0000")),
+    )
+    _decision(conn, pid, run_id, verdict=_verdict(approved=True, constraint="max_trade_usd"))
+    today = date.today()
+
+    metrics = repo.week_metrics(conn, pid, today - timedelta(days=6), today)
+
+    assert metrics["below_min"] == [
+        {"cause": "max_total_exposure_pct", "decisions": 2},
+        {"cause": "recommended_amount", "decisions": 1},
+    ]
+
+
+def test_the_weeks_decisions_are_split_by_prompt_version(conn):
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    run_id = repo.open_run(conn, pid, "schedule", dry_run=False, image_tag=None)
+    _decision(conn, pid, run_id)
+    _decision(conn, pid, run_id)
+    today = date.today()
+
+    metrics = repo.week_metrics(conn, pid, today - timedelta(days=6), today)
+
+    assert metrics["prompt_versions"] == [
+        {"prompt_version": "v1", "decisions": 2, "first_day": today, "last_day": today}
+    ]
+
+
 def test_a_week_with_no_runs_reports_zero_rather_than_null(conn):
     """`run()` returns None on an empty week, but the figures still have to be
     readable — a None would render as "None" in the email."""
