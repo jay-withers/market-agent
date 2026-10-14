@@ -217,7 +217,9 @@ def decisions(
     params = (pid, ticker, limit) if ticker else (pid, limit)
     return _rows(
         conn,
-        "SELECT d.id, d.run_id, d.decided_at, d.ticker, d.action, d.confidence,"
+        # S608: the f-string only splices fixed SQL fragments chosen by a flag; every value goes
+        # through %s parameters.
+        "SELECT d.id, d.run_id, d.decided_at, d.ticker, d.action, d.confidence,"  # noqa: S608
         "       d.recommended_amount_usd, d.approved_amount_usd, d.model,"
         "       d.risk_verdict->>'binding_constraint' AS binding_constraint,"
         "       (d.risk_verdict->>'approved')::boolean AS approved,"
@@ -272,7 +274,9 @@ def news(conn: Any, limit: int = 50, relevant_only: bool = False) -> list[dict[s
     having = "HAVING bool_or(a.relevant)" if relevant_only else ""
     return _rows(
         conn,
-        "SELECT n.id, n.headline, n.summary, n.url, n.source, n.published_at, n.tickers,"
+        # S608: the f-string only splices fixed SQL fragments chosen by a flag; every value goes
+        # through %s parameters.
+        "SELECT n.id, n.headline, n.summary, n.url, n.source, n.published_at, n.tickers,"  # noqa: S608
         "       bool_or(a.relevant) AS any_relevant,"
         "       avg(a.sentiment_score) AS avg_sentiment,"
         "       count(a.id) AS analysis_count"
