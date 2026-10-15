@@ -97,13 +97,17 @@ def paginate_data(
         if isinstance(chunk, dict):
             if merged is None:
                 merged = {}
-            assert isinstance(merged, dict)
+            # S101: type narrowing only; the branch above guarantees it, so -O stripping it changes
+            # nothing.
+            assert isinstance(merged, dict)  # noqa: S101
             for symbol, rows in chunk.items():
                 merged.setdefault(symbol, []).extend(rows)
         elif isinstance(chunk, list):
             if merged is None:
                 merged = []
-            assert isinstance(merged, list)
+            # S101: type narrowing only; the branch above guarantees it, so -O stripping it changes
+            # nothing.
+            assert isinstance(merged, list)  # noqa: S101
             merged.extend(chunk)
 
         token = payload.get("next_page_token")

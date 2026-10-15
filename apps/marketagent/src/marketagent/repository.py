@@ -187,7 +187,9 @@ def spend(conn: Any, as_of: date, pid: int | None = None) -> dict[str, Any]:
     )
     with conn.cursor(row_factory=dict_row) as cur:
         return cur.execute(
-            "WITH all_spend AS ("
+            # S608: the f-string only splices fixed SQL fragments chosen by a flag; every value goes
+            # through %s parameters.
+            "WITH all_spend AS ("  # noqa: S608
             "   SELECT started_at::date AS on_date, cost_usd FROM agent_runs"
             f"     WHERE cost_usd IS NOT NULL {agent_filter}"
             f"   {job_totals}"
