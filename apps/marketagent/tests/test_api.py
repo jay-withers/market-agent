@@ -70,6 +70,15 @@ def client(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def test_every_response_carries_hsts():
+    """Including the unauthenticated ones: a passive DAST scan sees nothing else."""
+    with TestClient(create_app()) as client:
+        response = client.get("/healthz")
+
+    assert response.headers["strict-transport-security"] == "max-age=31536000; includeSubDomains"
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
 def test_healthz_never_touches_the_database():
     """Liveness must not restart the container over a database blip."""
     app = create_app()

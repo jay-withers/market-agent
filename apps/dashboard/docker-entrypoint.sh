@@ -89,6 +89,39 @@ envsubst '${API_ORIGIN} ${API_TOKEN} ${IMAGE_TAG}' \
   < /usr/share/nginx/html/config.json.template \
   > /tmp/dashboard/config.json
 
+# Security headers, included by every location in nginx/default.conf. Rendered
+# here rather than shipped because connect-src must name the API's origin,
+# which is only known at run time. Validated first: it is interpolated into an
+# nginx string, where a quote or a semicolon would end the directive.
+case $API_ORIGIN in
+  "" | http://* | https://*) ;;
+  *)
+    echo "dashboard: API_ORIGIN must be empty or an http(s) origin — refusing to start" >&2
+    exit 1
+    ;;
+esac
+case $API_ORIGIN in
+  *[\;\"\'\\\ ]*)
+    echo "dashboard: API_ORIGIN contains a space, quote, backslash or semicolon — refusing to start" >&2
+    exit 1
+    ;;
+esac
+
+# style-src keeps 'unsafe-inline': login.html's styles are inline by design,
+# and recharts sets style attributes. Scripts have no such exception.
+csp="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+csp="$csp; img-src 'self' data:; connect-src 'self' ${API_ORIGIN}; object-src 'none'"
+csp="$csp; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+
+cat > /tmp/dashboard/headers.conf <<CONF
+add_header Content-Security-Policy "${csp}" always;
+add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header X-Frame-Options "DENY" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()" always;
+CONF
+
 echo "dashboard: API_ORIGIN=${API_ORIGIN:-(same origin)}"
 echo "dashboard: IMAGE_TAG=${IMAGE_TAG}"
 # Presence only, never the value: this line reaches Log Analytics, and
