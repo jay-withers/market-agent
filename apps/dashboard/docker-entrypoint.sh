@@ -89,6 +89,39 @@ envsubst '${API_ORIGIN} ${API_TOKEN} ${IMAGE_TAG}' \
   < /usr/share/nginx/html/config.json.template \
   > /tmp/dashboard/config.json
 
+# Security headers, included by every location in nginx/default.conf. Rendered
+# here rather than shipped because connect-src must name the API's origin,
+# which is only known at run time. Validated first, as an allow-list of an
+# origin's shape: it is interpolated into an nginx string, where a quote, a
+# semicolon or a `$` (nginx's own variables) would change what it means. grep
+# checks line by line, so a newline is rejected separately.
+case $API_ORIGIN in
+  *"
+"*)
+    echo "dashboard: API_ORIGIN contains a newline — refusing to start" >&2
+    exit 1
+    ;;
+esac
+if [ -n "$API_ORIGIN" ] && ! printf '%s' "$API_ORIGIN" | LC_ALL=C grep -Eqx 'https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?'; then
+  echo "dashboard: API_ORIGIN must be empty or scheme://host[:port] — refusing to start" >&2
+  exit 1
+fi
+
+# style-src keeps 'unsafe-inline': login.html's styles are inline by design,
+# and recharts sets style attributes. Scripts have no such exception.
+csp="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+csp="$csp; img-src 'self' data:; connect-src 'self' ${API_ORIGIN}; object-src 'none'"
+csp="$csp; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+
+cat > /tmp/dashboard/headers.conf <<CONF
+add_header Content-Security-Policy "${csp}" always;
+add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header X-Frame-Options "DENY" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()" always;
+CONF
+
 echo "dashboard: API_ORIGIN=${API_ORIGIN:-(same origin)}"
 echo "dashboard: IMAGE_TAG=${IMAGE_TAG}"
 # Presence only, never the value: this line reaches Log Analytics, and

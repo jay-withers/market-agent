@@ -9,6 +9,8 @@
       The body nginx renders for a 401, which is why it is a standalone file
       with inlined styles rather than part of the SPA: it has to be servable
       before the gate is cleared, and the SPA's bundle is behind that gate.
+      Its script is login.js, not inline, because the CSP blocks inline
+      scripts.
 
       It holds no secret. The passcode is only ever compared by nginx — this
       page's whole job is to put what was typed into a cookie and reload, so
@@ -121,55 +123,6 @@
       </p>
     </main>
 
-    <script>
-      (function () {
-        var COOKIE = "ma_passcode";
-        var form = document.getElementById("f");
-        var input = document.getElementById("p");
-        var error = document.getElementById("e");
-
-        // This page is only ever rendered as the body of a 401. So if we get
-        // here having just submitted, the passcode we set was rejected — that
-        // flag is the only way a static page can tell a first visit from a
-        // failed attempt.
-        try {
-          if (sessionStorage.getItem("tried") === "1") {
-            error.hidden = false;
-            sessionStorage.removeItem("tried");
-          }
-        } catch (ignored) {
-          // Private mode, or storage blocked. The form still works; it just
-          // cannot explain a rejection.
-        }
-
-        form.addEventListener("submit", function (event) {
-          event.preventDefault();
-          var value = input.value.trim();
-          if (!value) return;
-
-          try {
-            sessionStorage.setItem("tried", "1");
-          } catch (ignored) {
-            /* see above */
-          }
-
-          // Session-length by default. Secure only over HTTPS, or the cookie
-          // would be dropped on a plain-HTTP local run and the gate would look
-          // broken rather than open.
-          var cookie =
-            COOKIE +
-            "=" +
-            encodeURIComponent(value) +
-            "; path=/; max-age=2592000; samesite=lax";
-          if (location.protocol === "https:") cookie += "; secure";
-          document.cookie = cookie;
-
-          // Back to whatever was originally asked for: this page is the 401
-          // body for that URL, so the address bar still holds it and a reload
-          // retries it with the cookie attached.
-          location.reload();
-        });
-      })();
-    </script>
+    <script src="/login.js"></script>
   </body>
 </html>

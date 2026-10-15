@@ -14,12 +14,13 @@ an outage into a crash loop. So `/healthz` answers from memory alone and
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import Depends, FastAPI, Response, status
+from fastapi import Depends, FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 
 from ..db import close_pool
 from ..settings import settings
@@ -61,6 +62,24 @@ def create_app() -> FastAPI:
         allow_methods=["GET"],
         allow_headers=["authorization", "content-type"],
     )
+
+    # Container Apps ingress terminates TLS but sets no HSTS of its own. No CSP:
+    # this serves JSON, and /docs loads Swagger UI from a CDN that one would
+    # have to allow-list for no protection a JSON response needs.
+    @app.middleware("http")
+    async def _security_headers(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        try:
+            response = await call_next(request)
+        except Exception:
+            # Starlette's ServerErrorMiddleware sits outside this one, so the
+            # 500 it would build carries neither header. Build it here.
+            logger.exception("unhandled error on %s %s", request.method, request.url.path)
+            response = PlainTextResponse("Internal Server Error", status_code=500)
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
     @app.get("/healthz", tags=["health"])
     def healthz() -> dict[str, str]:
