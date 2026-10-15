@@ -91,21 +91,21 @@ envsubst '${API_ORIGIN} ${API_TOKEN} ${IMAGE_TAG}' \
 
 # Security headers, included by every location in nginx/default.conf. Rendered
 # here rather than shipped because connect-src must name the API's origin,
-# which is only known at run time. Validated first: it is interpolated into an
-# nginx string, where a quote or a semicolon would end the directive.
+# which is only known at run time. Validated first, as an allow-list of an
+# origin's shape: it is interpolated into an nginx string, where a quote, a
+# semicolon or a `$` (nginx's own variables) would change what it means. grep
+# checks line by line, so a newline is rejected separately.
 case $API_ORIGIN in
-  "" | http://* | https://*) ;;
-  *)
-    echo "dashboard: API_ORIGIN must be empty or an http(s) origin — refusing to start" >&2
+  *"
+"*)
+    echo "dashboard: API_ORIGIN contains a newline — refusing to start" >&2
     exit 1
     ;;
 esac
-case $API_ORIGIN in
-  *[\;\"\'\\\ ]*)
-    echo "dashboard: API_ORIGIN contains a space, quote, backslash or semicolon — refusing to start" >&2
-    exit 1
-    ;;
-esac
+if [ -n "$API_ORIGIN" ] && ! printf '%s' "$API_ORIGIN" | LC_ALL=C grep -Eqx 'https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?'; then
+  echo "dashboard: API_ORIGIN must be empty or scheme://host[:port] — refusing to start" >&2
+  exit 1
+fi
 
 # style-src keeps 'unsafe-inline': login.html's styles are inline by design,
 # and recharts sets style attributes. Scripts have no such exception.

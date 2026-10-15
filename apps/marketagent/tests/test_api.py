@@ -79,6 +79,21 @@ def test_every_response_carries_hsts():
     assert response.headers["x-content-type-options"] == "nosniff"
 
 
+def test_an_unhandled_error_still_carries_hsts():
+    """ServerErrorMiddleware would otherwise send a bare 500."""
+    app = create_app()
+
+    @app.get("/boom")
+    def boom() -> None:
+        raise RuntimeError("boom")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/boom")
+
+    assert response.status_code == 500
+    assert response.headers["strict-transport-security"] == "max-age=31536000; includeSubDomains"
+
+
 def test_healthz_never_touches_the_database():
     """Liveness must not restart the container over a database blip."""
     app = create_app()

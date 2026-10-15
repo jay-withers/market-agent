@@ -20,6 +20,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 
 from ..db import close_pool
 from ..settings import settings
@@ -69,7 +70,13 @@ def create_app() -> FastAPI:
     async def _security_headers(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception:
+            # Starlette's ServerErrorMiddleware sits outside this one, so the
+            # 500 it would build carries neither header. Build it here.
+            logger.exception("unhandled error on %s %s", request.method, request.url.path)
+            response = PlainTextResponse("Internal Server Error", status_code=500)
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         response.headers["X-Content-Type-Options"] = "nosniff"
         return response
