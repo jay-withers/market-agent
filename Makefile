@@ -182,6 +182,11 @@ push: ## Push both images to ghcr.io (needs write:packages)
 # --replace-env-vars) — so IMAGE_TAG moves without disturbing KEY_VAULT_URI,
 # POSTGRES_HOST and the rest of common_env.
 #
+# DASHBOARD_ORIGINS rides along on the API for the same reason: it is under the
+# same ignore, and setting it on every deploy is what stops the CORS allow-list
+# drifting back to the any-origin fallback. Built from outputs already in
+# state, mirroring local.dashboard_origins, so no apply has to come first.
+#
 # Same immutable-tag guard as the (now-unused-for-this-path) Terraform
 # validation: a `latest`/`main`/`unset` tag would report success here while
 # Container Apps creates no new revision at all, because the template hasn't
@@ -202,6 +207,9 @@ deploy: ## Deploy built images to Container Apps via az cli (needs IMAGE_TAG=vX.
 	RG=$$(terraform -chdir=$(TF_DIR) output -raw resource_group_name); \
 	API=$$(terraform -chdir=$(TF_DIR) output -raw api_app_name); \
 	DASHBOARD=$$(terraform -chdir=$(TF_DIR) output -raw dashboard_app_name); \
+	DASHBOARD_FQDN=$$(terraform -chdir=$(TF_DIR) output -raw dashboard_fqdn); \
+	DASHBOARD_CUSTOM=$$(terraform -chdir=$(TF_DIR) output -raw dashboard_custom_domain_url); \
+	ORIGINS="https://$$DASHBOARD_FQDN$${DASHBOARD_CUSTOM:+,$$DASHBOARD_CUSTOM}"; \
 	SUMMARY=$$(terraform -chdir=$(TF_DIR) output -raw summary_job_name); \
 	WEEKLY=$$(terraform -chdir=$(TF_DIR) output -raw weekly_review_job_name); \
 	POT_JOBS=$$(terraform -chdir=$(TF_DIR) output -json agent_job_names 2>/dev/null | jq -r '.[]'); \
@@ -213,7 +221,7 @@ deploy: ## Deploy built images to Container Apps via az cli (needs IMAGE_TAG=vX.
 	fi; \
 	az containerapp update --name $$API --resource-group $$RG \
 	  --image $(IMAGE_REGISTRY)/marketagent:$(MARKETAGENT_IMAGE_TAG) \
-	  --set-env-vars IMAGE_TAG=$(MARKETAGENT_IMAGE_TAG); \
+	  --set-env-vars IMAGE_TAG=$(MARKETAGENT_IMAGE_TAG) DASHBOARD_ORIGINS=$$ORIGINS; \
 	az containerapp update --name $$DASHBOARD --resource-group $$RG \
 	  --image $(IMAGE_REGISTRY)/dashboard:$(DASHBOARD_IMAGE_TAG) \
 	  --set-env-vars IMAGE_TAG=$(DASHBOARD_IMAGE_TAG); \

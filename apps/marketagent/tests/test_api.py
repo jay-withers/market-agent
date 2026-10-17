@@ -237,6 +237,63 @@ def test_only_get_is_allowed(client):
 
 
 # ---------------------------------------------------------------------------
+# CORS
+# ---------------------------------------------------------------------------
+
+DASHBOARD = "https://dashboard.example"
+CUSTOM_DOMAIN = "https://marketagent.example"
+ELSEWHERE = "https://elsewhere.example"
+
+
+@pytest.fixture
+def locked(monkeypatch):
+    monkeypatch.setenv("DASHBOARD_ORIGINS", f"{DASHBOARD}, {CUSTOM_DOMAIN}")
+    settings_module.settings.cache_clear()
+    with TestClient(create_app()) as test_client:
+        yield test_client
+    settings_module.settings.cache_clear()
+
+
+@pytest.mark.parametrize("origin", [DASHBOARD, CUSTOM_DOMAIN])
+def test_each_dashboard_origin_is_allowed(locked, origin):
+    response = locked.get("/healthz", headers={"Origin": origin})
+
+    assert response.headers["access-control-allow-origin"] == origin
+    assert "access-control-allow-credentials" not in response.headers
+
+
+def test_any_other_origin_gets_no_cors_allowance(locked):
+    response = locked.get("/healthz", headers={"Origin": ELSEWHERE})
+    assert "access-control-allow-origin" not in response.headers
+
+
+def test_a_preflight_from_any_other_origin_is_refused(locked):
+    response = locked.options(
+        "/api/overview",
+        headers={
+            "Origin": ELSEWHERE,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "access-control-allow-origin" not in response.headers
+
+
+def test_unset_origins_allow_any_origin_but_never_credentials(monkeypatch):
+    """The local fallback, safe only because no response is readable with a cookie."""
+    monkeypatch.delenv("DASHBOARD_ORIGINS", raising=False)
+    settings_module.settings.cache_clear()
+    with TestClient(create_app()) as client:
+        response = client.get("/healthz", headers={"Origin": ELSEWHERE, "Cookie": "s=1"})
+    settings_module.settings.cache_clear()
+
+    assert response.headers["access-control-allow-origin"] == "*"
+    assert "access-control-allow-credentials" not in response.headers
+
+
+# ---------------------------------------------------------------------------
 # The bearer gate
 # ---------------------------------------------------------------------------
 

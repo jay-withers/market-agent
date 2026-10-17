@@ -38,6 +38,17 @@ locals {
     IMAGE_TAG = var.marketagent_image_tag
   }
 
+  # The API's CORS allow-list: every origin the dashboard is served from.
+  # Built from the dashboard's name rather than read off its ingress fqdn,
+  # because the dashboard already reads the API's fqdn for API_ORIGIN and the
+  # reverse reference would be a cycle. An external Container App's fqdn is its
+  # name under the environment's default domain. `make deploy` builds the same
+  # list from the dashboard_fqdn and dashboard_custom_domain_url outputs.
+  dashboard_origins = compact([
+    "https://${module.naming_dashboard.container_app.name}.${local.container_app_default_domain}",
+    var.dashboard_custom_domain_name != "" ? "https://${var.dashboard_custom_domain_name}" : "",
+  ])
+
   agent_base_env = merge(local.common_env, {
     DRY_RUN                 = tostring(var.agent_dry_run)
     ALPACA_TRADING_BASE_URL = "https://paper-api.alpaca.markets"
