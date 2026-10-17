@@ -53,8 +53,10 @@ def create_app() -> FastAPI:
 
     # The dashboard learns the API's address at runtime and is served from its
     # own origin, so it needs an explicit CORS allowance. Only the dashboard's
-    # origin, and only GET — there is nothing here to POST to.
-    origins = [o for o in (cfg.dashboard_origin,) if o]
+    # origins, and only GET — there is nothing here to POST to. Credentials stay
+    # off: the bearer token is a header the dashboard's own code attaches, not a
+    # cookie a browser would send on another site's behalf.
+    origins = [o.strip() for o in cfg.dashboard_origins.split(",") if o.strip()]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins or ["*"],

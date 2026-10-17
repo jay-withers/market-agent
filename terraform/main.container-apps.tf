@@ -83,6 +83,13 @@ resource "azurerm_container_app" "api" {
         value = "true"
       }
 
+      # Unset, the API allows any origin — the local `docker compose` default,
+      # and what every Azure environment silently ran with before this was set.
+      env {
+        name  = "DASHBOARD_ORIGINS"
+        value = join(",", local.dashboard_origins)
+      }
+
       # Liveness deliberately hits /healthz, which does **not** touch the
       # database. A failed liveness probe restarts the container, so a probe
       # that depended on PostgreSQL would turn a database blip into a
@@ -141,6 +148,9 @@ resource "azurerm_container_app" "api" {
   # by hand once with `az containerapp update --name <api_app_name>
   # --resource-group <resource_group_name> --set-env-vars
   # API_REQUIRE_TOKEN=true`.
+  #
+  # DASHBOARD_ORIGINS is caught too but needs no hand push: `make deploy` sets
+  # it alongside IMAGE_TAG on every deploy.
   #
   # `command` joined this list after the InvestAgent -> MarketAgent rename
   # showed the alternative: with image ignored but command not, a plain
