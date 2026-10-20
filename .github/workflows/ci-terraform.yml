@@ -28,7 +28,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    uses: jay-withers/workflows/.github/workflows/terraform.yml@fb1c41960759020f9425e1351bf3cd893143d657 # v1.4.14
+    uses: jay-withers/workflows/.github/workflows/terraform.yml@0619e50b64233b7132aa7557fb78b2331fd9c5b1 # v1.5.2
 
   # Plans against Azure using GitHub OIDC, once per environment. Skipped until
   # the AZURE_CLIENT_ID repository variable is set (see README), so the check
