@@ -15,7 +15,7 @@
 # image that produced had no site-packages on sys.path at all and died with a
 # bare "No module named 'marketagent'". One FROM line for the version means the
 # two cannot drift apart again.
-FROM python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83 AS base
+FROM python:3.15-slim-bookworm@sha256:2a41267d9de9d358f77a1de356e0f16ecba8d39827855be0ce9ef4792edce402 AS base
 
 
 FROM base AS builder
@@ -23,7 +23,7 @@ FROM base AS builder
 # uv is copied in rather than supplying the base image, which is exactly what
 # lets the builder share the runtime's interpreter. UV_PYTHON_DOWNLOADS=never
 # then stops uv fetching a different one of its own.
-COPY --from=ghcr.io/astral-sh/uv:0.13.0@sha256:cdc6093146eb3ff6a40107b38f008b789e050e77ad87865e381d9917da55a168 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.3@sha256:bee0a2a458fd956c5df7b8b4c5fed2257b0af34866e3da7b51db0be3acb375d1 /uv /uvx /bin/
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
