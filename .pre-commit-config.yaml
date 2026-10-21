@@ -65,7 +65,7 @@ repos:
   # apps/marketagent/pyproject.toml — ruff walks up from each file to find it,
   # so nothing needs pointing at it from here.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: 44b5042edab9382aba712eed4f9c7bab7a3d6a3e # frozen: v0.17.0
+    rev: 38bfb07c0c64c304f47eb52090f8288150c77730 # frozen: v0.17.1
     hooks:
       - id: ruff-check
         args: [--fix]
@@ -124,7 +124,7 @@ repos:
         exclude: \.terraform/.*$
 
   - repo: https://github.com/antonbabenko/pre-commit-terraform
-    rev: 80c8033123f6d6b9ccd1a9458562ea4180742af7 # frozen: v1.109.2
+    rev: 443ffdff1cc1663b701ae73e7459029fe883455a # frozen: v1.109.3
     hooks:
       - id: terraform_fmt
 
