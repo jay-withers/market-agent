@@ -62,7 +62,9 @@ def main(argv: list[str] | None = None) -> int:
     api = sub.add_parser("api", help="serve the read-only API")
     # Binds all interfaces because it runs behind Container Apps ingress, which
     # reaches the container over the pod network.
-    api.add_argument("--host", default="0.0.0.0")
+    # S104: binds all interfaces on purpose: Container Apps ingress reaches the container over the
+    # pod network, and 127.0.0.1 would be unreachable.
+    api.add_argument("--host", default="0.0.0.0")  # noqa: S104
     api.add_argument("--port", type=int, default=8000)
     api.add_argument("--reload", action="store_true")
 

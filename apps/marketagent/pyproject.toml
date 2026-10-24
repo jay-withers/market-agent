@@ -65,6 +65,7 @@ select = [
   "B",       # bugbear
   "SIM",     # simplify
   "RUF",
+  "S",       # bandit security rules: fail the commit, not just the PR
 ]
 
 # B008 flags a call in an argument default because a mutable default is shared
@@ -83,6 +84,13 @@ extend-immutable-calls = [
   "fastapi.Path",
   "fastapi.Query",
 ]
+
+# Test code is exempt from the bandit rules that only make sense in shipped
+# code: pytest is built on `assert` (S101), fixtures use dummy tokens (S105,
+# S106) and loopback binds (S104), and a test may shell out on purpose (S603,
+# S607). Everything else under "S" still applies to tests.
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S104", "S105", "S106", "S603", "S607"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
