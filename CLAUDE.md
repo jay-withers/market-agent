@@ -1509,9 +1509,10 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
   a fresh clone. `python-version` is pinned to 3.14 to match the image's base,
   and the reusable workflow runs `uv run --locked`, so a `pyproject.toml`
   edited without its lockfile fails here rather than on someone's machine.
-  It is deliberately **not** path filtered, unlike `ci-container-build`: the
-  suite takes seconds, and a required check skipped by a path filter never
-  reports, which blocks a PR instead of passing it.
+  It is deliberately **not** path filtered: the suite takes seconds, and a
+  required check skipped by a path filter never reports, which blocks a PR
+  instead of passing it. (`ci-container-build` filters inside the workflow
+  instead, behind its always-reporting `container-build` gate.)
 
   **Coverage is reported and never gated.** `coverage: marketagent` and
   `coverage-pr-comment: true` are inputs on the shared workflow, which puts the
@@ -1587,7 +1588,8 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
     that namespacing only applies to reusable-workflow calls. It is not in
     `github-repos`' required list yet; add it there if it should block a merge.
 - **ci-container-build**: builds `apps/marketagent` and `apps/dashboard` on PRs
-  touching `apps/**`, without pushing, by calling the shared `docker.yml` with
+  touching `apps/**` (decided by a `changes` job, so the required
+  `container-build` gate reports on every PR), without pushing, by calling the shared `docker.yml` with
   `push` left at its default of false. The runner is natively amd64, which is
   what Container Apps runs, so this also proves the target architecture builds —
   a local `make build` on Apple Silicon reaches amd64 only through QEMU. Nothing
