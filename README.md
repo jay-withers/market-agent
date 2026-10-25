@@ -428,8 +428,9 @@ Terraform creates the Key Vault and grants access to it. It deliberately creates
 **no secret values** — there is no `azurerm_key_vault_secret` anywhere, so nothing
 sensitive reaches Terraform source or state.
 
-Whoever runs `terraform apply` is granted `Key Vault Secrets Officer`
-automatically (add others via `key_vault_administrator_object_ids`), and populates
+`Key Vault Secrets Officer` goes to the object IDs in
+`key_vault_administrator_object_ids` (each environment's tfvars), not to
+whoever applies, since CD applies as a pipeline identity. One of them populates
 the secrets by hand:
 
 ```bash
@@ -542,29 +543,30 @@ that genuinely fires and a deliberate cost or destroyability trade-off.
 `make plan` uses whatever the `azurerm` provider picks up normally — `az login`,
 or `ARM_*` environment variables.
 
-In CI, the `ci-terraform` **plan** job runs once per environment using GitHub
-OIDC (no long-lived secrets). It is **skipped until you set the
-`AZURE_CLIENT_ID` repository variable**, so the check stays green before Azure
-auth is wired up. The **validate** job needs no credentials and always runs on a
-Terraform change. All three environments currently share one subscription; the
-plan job's matrix is where to split per-environment credentials if that changes.
+In CI, `ci-terraform` plans **dev** on every PR touching Terraform through the
+shared `terraform-deploy.yml`, using GitHub OIDC (no long-lived secrets) and
+commenting the plan on the PR. The **validate** job needs no credentials.
 
-To enable it:
+On merge, `cd-terraform` plans dev again. If anything changes it opens a
+`terraform-pending` issue, and **applies only when you run it** from the
+Actions tab, applying exactly the plan it prints. Stg and prd are never planned
+or applied in CI.
 
-1. Create an Azure app registration or managed identity and add a **federated
-   credential** trusting this repository's GitHub Actions.
-2. Grant it the roles it needs on the target subscription.
-3. Add three **repository variables** (Settings → Secrets and variables →
-   Actions → Variables): `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
-   `AZURE_SUBSCRIPTION_ID`.
+The identity, `uai-market-agent-deploy-dev`, and the `dev` GitHub environment
+holding `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID` come
+from [jay-withers/github-repos](https://github.com/jay-withers/github-repos)'s
+`state_consumers`. It has Contributor on `rg-marketagent-dev`, Reader on the
+subscription and join on `cae-platform-dev`, but cannot create role
+assignments. Run `make apply ENV=dev` locally for a change that adds one, or
+that (re)creates the dashboard's managed certificate on the shared environment.
 
 ## Repository settings
 
 Branch protection and other repo-level GitHub settings aren't templated here.
 This repository is managed centrally by
 [jay-withers/github-repos](https://github.com/jay-withers/github-repos)'s
-Terraform root module. Mark **`ci-terraform`** as the required status check — it
-always runs and aggregates the validate and plan jobs.
+Terraform root module, which requires `terraform / Terraform` and
+`terraform-plan` (among others) on every PR.
 ## Structure
 
 ```
@@ -634,7 +636,8 @@ scripts/
 docs/deployment-plan.md         # the agreed plan; complete
 .github/workflows/
   ci-pre-commit.yml             # lints all files on PRs to main
-  ci-terraform.yml              # terraform validate + plan (dev/stg/prd)
+  ci-terraform.yml              # terraform validate + dev plan (commented on the PR)
+  cd-terraform.yml              # plans dev on merge; applies on a manual run
   ci-container-build.yml        # builds both app images on PRs (no push)
   cd-tag.yml                    # auto-tags on merge to main, then publishes
   cd-publish.yml                # builds + pushes the app images for a tag

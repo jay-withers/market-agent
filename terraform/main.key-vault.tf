@@ -43,13 +43,11 @@ resource "azurerm_role_assignment" "key_vault_secrets_user" {
   principal_type = "ServicePrincipal"
 }
 
-# Whoever runs `terraform apply` is always included, so a fresh deployment is
-# immediately usable.
+# Explicit object IDs, never whoever runs `terraform apply`: cd-terraform
+# applies as the pipeline identity, which would move the grant to itself and
+# fail, since it has no right to create role assignments.
 resource "azurerm_role_assignment" "key_vault_secrets_officer" {
-  for_each = toset(concat(
-    [data.azurerm_client_config.current.object_id],
-    var.key_vault_administrator_object_ids,
-  ))
+  for_each = toset(var.key_vault_administrator_object_ids)
 
   scope                = azurerm_key_vault.this.id
   role_definition_name = "Key Vault Secrets Officer"
