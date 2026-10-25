@@ -201,7 +201,7 @@ subscription fails the container apps environment with
   public repo.
 - **`principal_name` must be the UPN, not the display name** — ARM makes it the
   PostgreSQL role name verbatim. Registered as `Jay Withers`, the role really is
-  called `Jay Withers`, and connecting as `jay.withers@appvia.io` fails with
+  called `Jay Withers`, and connecting as the UPN fails with
   `password authentication failed`, which points at the token rather than the
   missing role and makes this hard to diagnose. Confirmed both ways: the display
   name broke the login, the UPN fixed it. Note the `az` flag for this is called

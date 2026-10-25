@@ -104,7 +104,7 @@ token = _cred.get_token("https://ossrdbms-aad.database.windows.net/.default")
 ```
 
 The token is the **password**; the username is the DB role. In Azure that is
-`uai-marketagent-dev`; locally it is your UPN `jay.withers@appvia.io` — and per
+`uai-marketagent-dev`; locally it is your UPN (`principal_name` in `terraform/main.database.tf`) — and per
 CLAUDE.md's trap, the UPN, never the display name.
 
 Token expiry is the thing to get right for the long-lived API pool. A
