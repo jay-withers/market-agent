@@ -1,7 +1,8 @@
 name: cd-publish
 
-# Publishes the application images to GHCR for a given tag. Invoked by cd-tag
-# after a version bump, or manually to (re)publish an existing tag.
+# Publishes the application images to GHCR for a given tag, then deploys them
+# to dev and smoke-tests them. Invoked by cd-tag after a version bump, or
+# manually to (re)publish and redeploy an existing tag.
 #
 # This replaces `make build && make push` from a laptop as the release path.
 # That worked, but it published whatever was in the working tree, tagged with
@@ -57,7 +58,7 @@ jobs:
       contents: read
       packages: write
       security-events: write # Trivy findings to code scanning
-    uses: jay-withers/workflows/.github/workflows/docker.yml@c3cb744bf5ded408403142ab2ad28b5cdefe08c1 # v1.12.0
+    uses: jay-withers/workflows/.github/workflows/docker.yml@b698317b1e5a71597aa412b58d354f15f6c21d77 # v1.14.0
     with:
       images: |
         [{"name": "marketagent", "context": "apps/marketagent"},
@@ -66,4 +67,24 @@ jobs:
       push: true
       tags: ${{ inputs.version }}
       tag-with-sha: true
-      summary-note: Deploy with `make deploy IMAGE_TAG=${{ inputs.version }}`.
+      summary-note: The `deploy` job rolls this onto dev. To redeploy, re-run this workflow with the tag.
+
+  # Rolls the tag just published onto dev with this repo's own `make deploy`,
+  # through the shared container-apps-deploy.yml: OIDC in the `dev` GitHub
+  # environment as uai-market-agent-deploy-dev, then `make deploy` from a
+  # checkout of the tag, then `make smoke` (the API and dashboard serving it,
+  # a selfcheck run of every job), rolling back to the previous tag if either
+  # fails. It runs on a manual re-publish too, so workflow_dispatch is also how
+  # to redeploy an existing tag.
+  #
+  # id-token: write must also be granted by cd-tag's publish job, which calls
+  # this workflow: a called workflow never holds more than its caller.
+  deploy:
+    needs: publish
+    permissions:
+      id-token: write
+      contents: read
+      issues: write # the deploy-failed issue
+    uses: jay-withers/workflows/.github/workflows/container-apps-deploy.yml@b698317b1e5a71597aa412b58d354f15f6c21d77 # v1.14.0
+    with:
+      version: ${{ inputs.version }}

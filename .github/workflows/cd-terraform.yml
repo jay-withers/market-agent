@@ -7,7 +7,7 @@ name: cd-terraform
 # issue. Infrastructure changes wait for a human; app deploys don't.
 #
 # Only dev, because only dev is ever applied — see "Environments" in the
-# README. App images still deploy by hand (`make deploy IMAGE_TAG=...`).
+# README. App images deploy through cd-publish, not here.
 #
 # Auth is the OIDC identity github-repos creates for this repo. The shared
 # job runs in the `dev` GitHub environment, which holds AZURE_CLIENT_ID,
@@ -37,7 +37,7 @@ jobs:
       id-token: write
       contents: read
       issues: write # the deploy-failed issue
-    uses: jay-withers/workflows/.github/workflows/terraform-deploy.yml@c3cb744bf5ded408403142ab2ad28b5cdefe08c1 # v1.12.0
+    uses: jay-withers/workflows/.github/workflows/terraform-deploy.yml@b698317b1e5a71597aa412b58d354f15f6c21d77 # v1.14.0
     with:
       environment: dev
       apply: ${{ github.event_name == 'workflow_dispatch' }}
