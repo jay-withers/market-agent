@@ -16,7 +16,7 @@ PORTFOLIO ?= tech
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install lint test test-db secrets sql up down logs demo run-agent run-weekly build push deploy logs-azure init fmt validate plan apply
+.PHONY: help install lint test test-db secrets sql up down logs demo run-agent run-weekly build push deploy deployed-tag smoke logs-azure init fmt validate plan apply
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -230,6 +230,37 @@ deploy: ## Deploy built images to Container Apps via az cli (needs IMAGE_TAG=vX.
 	    --image $(IMAGE_REGISTRY)/marketagent:$(MARKETAGENT_IMAGE_TAG) \
 	    --set-env-vars IMAGE_TAG=$(MARKETAGENT_IMAGE_TAG); \
 	done
+
+# What cd-publish rolls back to when a deploy fails its smoke test: the tag
+# on the API now, or nothing if it isn't one of this repo's images yet (a fresh
+# apply leaves Terraform's placeholder image). One tag for both images, the way
+# a release deploys them.
+deployed-tag: ## Print the image tag live on the API
+	@terraform -chdir=$(TF_DIR) init -reconfigure -backend-config=backends/$(ENV).hcl >/dev/null
+	@az containerapp show \
+		--name "$$(terraform -chdir=$(TF_DIR) output -raw api_app_name)" \
+		--resource-group "$$(terraform -chdir=$(TF_DIR) output -raw resource_group_name)" \
+		--query 'properties.template.containers[0].image' -o tsv \
+		| sed -n 's|^$(IMAGE_REGISTRY)/marketagent:||p'
+
+# Run by cd-publish after every deploy (and by hand after a local one); a
+# failure there rolls back to `make deployed-tag`'s answer. Twice, once per
+# image: the API and every job run marketagent, the dashboard its own. Each job
+# gets one `marketagent selfcheck` run, which places no order and calls no LLM.
+smoke: ## Check MARKETAGENT_IMAGE_TAG/DASHBOARD_IMAGE_TAG are live and ready, and selfcheck every job (IMAGE_TAG required)
+	@if [ -z "$(IMAGE_TAG_EXPLICIT)" ] && { [ -z "$(MARKETAGENT_TAG_EXPLICIT)" ] || [ -z "$(DASHBOARD_TAG_EXPLICIT)" ]; }; then \
+	  echo "error: pass the tag to check, e.g. make smoke IMAGE_TAG=vX.Y.Z" >&2; exit 1; fi
+	@terraform -chdir=$(TF_DIR) init -reconfigure -backend-config=backends/$(ENV).hcl >/dev/null
+	RG="$$(terraform -chdir=$(TF_DIR) output -raw resource_group_name)"; \
+	JOBS=$$( { terraform -chdir=$(TF_DIR) output -json agent_job_names; \
+	  terraform -chdir=$(TF_DIR) output -json sync_job_names; } | jq -r '.[]'); \
+	scripts/smoke.sh $(MARKETAGENT_IMAGE_TAG) "$$RG" $(IMAGE_REGISTRY)/marketagent \
+	  app:"$$(terraform -chdir=$(TF_DIR) output -raw api_app_name)" \
+	  $$(for JOB in $$JOBS; do printf 'job:%s ' "$$JOB"; done) \
+	  job:"$$(terraform -chdir=$(TF_DIR) output -raw summary_job_name)" \
+	  job:"$$(terraform -chdir=$(TF_DIR) output -raw weekly_review_job_name)" && \
+	scripts/smoke.sh $(DASHBOARD_IMAGE_TAG) "$$RG" $(IMAGE_REGISTRY)/dashboard \
+	  app:"$$(terraform -chdir=$(TF_DIR) output -raw dashboard_app_name)"
 
 # --container is mandatory here, and it names the container inside the job
 # (`agent-<pot>`), not the job itself. Streaming only works while an execution

@@ -1475,7 +1475,7 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
   apply opens `deploy-failed`. The identity can't create role assignments or
   write to `cae-platform-dev` beyond joining it, so an apply that adds a role
   assignment or (re)creates the dashboard's managed certificate still runs
-  locally (`make apply ENV=dev`). Images still deploy by hand (`make deploy`).
+  locally (`make apply ENV=dev`). Images deploy through cd-publish, not here.
 - **ci-python**: runs `pytest` on every PR, by calling the reusable
   `jay-withers/workflows/.github/workflows/python.yml` (pinned by commit SHA
   with the tag as a comment, like `ci-pre-commit`). Nothing in CI ran the suite
@@ -1617,7 +1617,16 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
   expected, not a bug — and `cd-publish`'s `workflow_dispatch` is still there
   to publish one by hand if that's ever wanted.
 - **cd-publish**: reusable (`workflow_call`) and manual (`workflow_dispatch`),
-  delegating the build to the shared `docker.yml`. It stays a workflow of its
+  delegating the build to the shared `docker.yml` and then the deploy to the
+  shared `container-apps-deploy.yml`, which runs `make deploy` and `make smoke`
+  and rolls back to `make deployed-tag`'s answer if either fails. The smoke
+  test runs `marketagent selfcheck` (`selfcheck.py`) once in every job: keep it
+  free of side effects (no order, no LLM, no email), and add a secret to it when
+  a job starts reading one, or a release missing it deploys green and fails at
+  its first scheduled run. `scripts/smoke.sh` is shared verbatim with gym-log,
+  finances, career, repo-agent and security-testing. The dashboard's `/healthz`
+  and `/readyz` serve `health.json`, which its entrypoint renders with the
+  image tag as `version`; the smoke test needs that field. It stays a workflow of its
   own rather than folding into cd-tag because `workflow_dispatch` is the
   documented way to re-publish an existing tag after a failed build, without
   minting a new version. Both images are pushed under two immutable tags — the

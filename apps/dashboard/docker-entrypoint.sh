@@ -122,6 +122,15 @@ add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()" always;
 CONF
 
+# /healthz and /readyz (nginx/default.conf). The tag goes into JSON, so only
+# an image tag's own characters are let through; anything else reads as
+# "unknown", which `make smoke` then rejects rather than this refusing to start.
+case $IMAGE_TAG in
+  *[!A-Za-z0-9_.-]*) health_version=unknown ;;
+  *) health_version=$IMAGE_TAG ;;
+esac
+printf '{"status":"ok","version":"%s"}\n' "$health_version" > /tmp/dashboard/health.json
+
 echo "dashboard: API_ORIGIN=${API_ORIGIN:-(same origin)}"
 echo "dashboard: IMAGE_TAG=${IMAGE_TAG}"
 # Presence only, never the value: this line reaches Log Analytics, and

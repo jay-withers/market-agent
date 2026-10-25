@@ -126,14 +126,33 @@ az containerapp job update --name caj-marketagent-dev-agent \
 
 ## Deploying
 
-All five workloads run from public ghcr.io images. **Merging to `main` builds
-and pushes them**: `cd-tag` bumps the semver tag, then `cd-publish` builds both
-images on a native amd64 runner and pushes each under two immutable tags — the
-release (`v1.2.3`) and the commit's short SHA, which is what `IMAGE_TAG`
-already defaults to. Deploying is then:
+All five workloads run from public ghcr.io images. **Merging to `main` builds,
+pushes and deploys them**: `cd-tag` bumps the semver tag, then `cd-publish`
+builds both images on a native amd64 runner, pushes each under two immutable
+tags — the release (`v1.2.3`) and the commit's short SHA, which is what
+`IMAGE_TAG` already defaults to — and its `deploy` job runs this same
+`make deploy IMAGE_TAG=<release>` against dev, through the shared
+`container-apps-deploy.yml` (OIDC in the `dev` GitHub environment, as
+`uai-market-agent-deploy-dev`). To redeploy an existing tag, run `cd-publish`
+from the Actions tab with it.
+
+**Every deploy is smoke-tested, and a failed one rolls back.** Before deploying,
+the workflow records `make deployed-tag` (the tag on the API now). After it,
+`make smoke` (`scripts/smoke.sh`) checks the API and the dashboard: each is
+configured with the new tag, its `/healthz` on the default FQDN reports it as
+`version` (allowing five minutes for a cold start), and `/readyz` answers 200.
+It then starts one run of every job (each pot's agent and sync, the summary and
+the weekly review) with its args swapped for `marketagent selfcheck`, which
+checks the settings, PostgreSQL and every secret a run reads, and places no
+order, calls no LLM and sends nothing; and waits for each to succeed. If the
+deploy or the smoke test fails, the workflow redeploys the recorded tag and
+fails the run, so a `deploy-failed` issue says whether dev is back on the old
+version. Rolling back moves the images only: `make sql` is not part of a
+deploy, so a release must not need a schema the previous version can't read.
 
 ```bash
-make deploy IMAGE_TAG=v1.2.3   # update existing apps and jobs to a published tag
+make deploy IMAGE_TAG=v1.2.3   # what cd-publish runs: update every app and job to a published tag
+make smoke  IMAGE_TAG=v1.2.3   # and what it checks afterwards
 ```
 
 Building locally is still there for iteration, and is the only way to test an
@@ -640,7 +659,7 @@ docs/deployment-plan.md         # the agreed plan; complete
   cd-terraform.yml              # plans dev on merge; applies on a manual run
   ci-container-build.yml        # builds both app images on PRs (no push)
   cd-tag.yml                    # auto-tags on merge to main, then publishes
-  cd-publish.yml                # builds + pushes the app images for a tag
+  cd-publish.yml                # builds + pushes the app images for a tag, then deploys and smoke-tests them
 .pre-commit-config.yaml
 commitlint.config.js
 renovate.json

@@ -1,4 +1,4 @@
-"""One entrypoint, five commands — `marketagent api|agent|summary|weekly|sync`.
+"""One entrypoint, six commands — `marketagent api|agent|summary|weekly|sync|selfcheck`.
 
 The workloads share one image and differ only by the container's `args`, so
 this is what Terraform's `command = ["marketagent"]` reaches.
@@ -92,6 +92,11 @@ def main(argv: list[str] | None = None) -> int:
         help="last day of the week to review (default: today, in UTC)",
     )
 
+    sub.add_parser(
+        "selfcheck",
+        help="check settings, database and secrets as a job would, doing nothing",
+    )
+
     args = parser.parse_args(argv)
     _configure_logging()
     # Before any of the four branches, and in particular before uvicorn imports
@@ -183,6 +188,14 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             telemetry.flush()
         return 0
+
+    if args.command == "selfcheck":
+        from . import selfcheck
+
+        try:
+            return selfcheck.run()
+        finally:
+            telemetry.flush()
 
     return 1
 
