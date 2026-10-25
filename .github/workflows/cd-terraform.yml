@@ -1,0 +1,43 @@
+name: cd-terraform
+
+# Plans dev on every merge to main that touches Terraform, through the shared
+# terraform-deploy.yml, and applies only when run by hand (Actions -> Run
+# workflow). A merge whose plan has changes opens a `terraform-pending` issue
+# instead; the manual run applies exactly the plan it prints and closes the
+# issue. Infrastructure changes wait for a human; app deploys don't.
+#
+# Only dev, because only dev is ever applied — see "Environments" in the
+# README. App images still deploy by hand (`make deploy IMAGE_TAG=...`).
+#
+# Auth is the OIDC identity github-repos creates for this repo. The shared
+# job runs in the `dev` GitHub environment, which holds AZURE_CLIENT_ID,
+# AZURE_TENANT_ID and AZURE_SUBSCRIPTION_ID and makes the token subject
+# `<repo prefix>:environment:dev` — the subject the identity's one federated
+# credential trusts, for ci-terraform's plans and this apply alike. The
+# identity holds Contributor on rg-marketagent-dev, Reader on the subscription
+# and join on cae-platform-dev, nothing more. So an apply that adds a role
+# assignment, or (re)creates the dashboard's managed certificate on the shared
+# environment, fails here: run those as `make apply ENV=dev` locally.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - ".terraform-version"
+      - ".github/workflows/cd-terraform.yml"
+  # The manual apply: also re-runs a failed apply, or corrects drift.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    permissions:
+      id-token: write
+      contents: read
+      issues: write # the deploy-failed issue
+    uses: jay-withers/workflows/.github/workflows/terraform-deploy.yml@c3cb744bf5ded408403142ab2ad28b5cdefe08c1 # v1.12.0
+    with:
+      environment: dev
+      apply: ${{ github.event_name == 'workflow_dispatch' }}

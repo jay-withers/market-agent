@@ -1,5 +1,5 @@
-# Supplies tenant_id for the Key Vault and SQL server, and object_id for the
-# default Key Vault Secrets Officer and SQL administrator assignments.
+# Supplies tenant_id for the Key Vault and PostgreSQL server, and the
+# subscription the shared-platform precondition checks.
 data "azurerm_client_config" "current" {}
 
 data "azurerm_log_analytics_workspace" "platform" {

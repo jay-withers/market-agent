@@ -296,8 +296,10 @@ group created out of band.
 
 Terraform owns the Key Vault and its RBAC but creates **no**
 `azurerm_key_vault_secret`: values are set out of band with
-`az keyvault secret set` by whoever holds `Key Vault Secrets Officer` (granted to
-the deploying principal automatically, plus `key_vault_administrator_object_ids`).
+`az keyvault secret set` by whoever holds `Key Vault Secrets Officer` (exactly
+`key_vault_administrator_object_ids` in the environment's tfvars, never the
+deploying principal: cd-terraform applies as a pipeline identity that cannot
+create role assignments).
 The workload identity gets read-only `Key Vault Secrets User`. Never add secret
 values to Terraform or tfvars.
 
@@ -1162,8 +1164,7 @@ constantly on success.
 usable here — this repository is public and `terraform/environments/*.tfvars`
 are committed, the same constraint that put the summary recipient in Key Vault.
 Key Vault is *not* an option for this: a `data` source on the vault would fail
-the stg and prd plan legs in CI, which plan against resource groups that do not
-exist. `TF_VAR_alert_email_address` adds a specific address on top.
+any stg or prd plan, since those resource groups do not exist. `TF_VAR_alert_email_address` adds a specific address on top.
 
 **All five metric alerts are one `for_each` resource over `local.metric_alerts`.**
 They differ only in what they watch, so the name shape, action group and tags are
@@ -1441,9 +1442,6 @@ by commit SHA with the tag as a comment, and holding only what is specific to
 this repo. A change to how a job *works* belongs in that repo so every
 consuming repo picks it up; only what is specific to market-agent stays here.
 
-The one deliberate exception is `ci-terraform`'s `plan` job, for the reason
-recorded under that entry.
-
 Because they are reusable-workflow calls, the status check contexts are
 namespaced `<caller job id> / <reusable job name>` rather than the bare job id
 — read them off `gh pr checks` rather than inferring them, and see
@@ -1455,39 +1453,29 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
   commit SHA, with the tag as a comment). Because it's a reusable-workflow call,
   the status check context it reports is `pre-commit / Pre-commit`
   (`<caller job id> / <reusable job name>`), not the bare `pre-commit` job id.
-- **ci-terraform**: **the one workflow that is only half shared**, and the split
-  is the thing to understand. `validate` (`init -backend=false` + `validate`, no
-  credentials) comes from the shared `terraform.yml`, which reports
-  `terraform / Terraform`. The `plan` job stays in this repo.
+- **ci-terraform**: `validate` (`init -backend=false` + `validate`, no
+  credentials) from the shared `terraform.yml`, reporting `terraform / Terraform`,
+  and a dev `plan` from the shared `terraform-deploy.yml`, which comments the
+  plan on the PR. Same shape as gym-log and the other app repos.
 
-  That shared workflow **deliberately runs no plan job**, and the reason is
-  about the other repos that call it: in `azure-landingzone` and
-  `terraform-root-aks` the root modules resolve each other with data sources, so
-  a plan against a not-yet-applied dependency fails at plan time and reports a
-  CI failure for something that is not a defect. This configuration is a single
-  self-contained root module and plans cleanly, so the plan lives here rather
-  than pushing an exception into a workflow four repos share. Don't "finish the
-  migration" by moving it.
-
-  Two consequences of that split:
-
-  - **The plan job reuses the shared workflow's path filter** via its `changed`
-    output, rather than declaring a second `dorny/paths-filter` here that would
-    drift from it. The cost is ordering: `needs:` waits for the whole called
-    workflow, so `plan` starts after `validate` finishes instead of beside it.
-    It is not `always()` — if `validate` failed, `init` fails here for the same
-    reason and three legs of runner time buy nothing the required check has not
-    already reported.
-  - **`plan` needs its own always-reporting gate**, the `terraform-plan` job,
-    because `terraform / Terraform` only covers what runs *inside* the shared
-    workflow. Skipped counts as success there, so a PR touching no Terraform is
-    not blocked.
-
-  `plan` is matrixed over `environment: [dev, stg, prd]` via Azure OIDC and
-  additionally gated on `if: vars.AZURE_CLIENT_ID != ''`. That variable is
-  **not set today**, so the plan legs have never actually run — they stay
-  skipped until `AZURE_CLIENT_ID`/`AZURE_TENANT_ID`/`AZURE_SUBSCRIPTION_ID` are
-  set, and all three legs then share one subscription.
+  - **The plan runs in the `dev` GitHub environment**, as
+    `uai-market-agent-deploy-dev` (github-repos' `state_consumers`), which holds
+    Contributor on `rg-marketagent-dev`, Reader on the subscription and join on
+    `cae-platform-dev`. The environment's `AZURE_*` variables are invisible to
+    the calling job, so nothing here gates on them.
+  - **Only dev is planned.** Stg and prd remain in the configuration (and keep
+    their tfvars and backends) but have no identity and are never applied.
+  - **`plan` reuses the shared workflow's path filter** via its `changed`
+    output, so it starts after `validate`, and needs its own always-reporting
+    gate, `terraform-plan`, because `terraform / Terraform` only covers what
+    runs inside the shared workflow. Skipped counts as success.
+- **cd-terraform**: plans dev on every merge touching Terraform and **applies
+  only when run by hand** (Actions → Run workflow), applying exactly the plan
+  it prints. A plan with changes opens a `terraform-pending` issue; a failed
+  apply opens `deploy-failed`. The identity can't create role assignments or
+  write to `cae-platform-dev` beyond joining it, so an apply that adds a role
+  assignment or (re)creates the dashboard's managed certificate still runs
+  locally (`make apply ENV=dev`). Images still deploy by hand (`make deploy`).
 - **ci-python**: runs `pytest` on every PR, by calling the reusable
   `jay-withers/workflows/.github/workflows/python.yml` (pinned by commit SHA
   with the tag as a comment, like `ci-pre-commit`). Nothing in CI ran the suite

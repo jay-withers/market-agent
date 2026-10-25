@@ -40,7 +40,7 @@ variable "tags" {
 }
 
 variable "key_vault_administrator_object_ids" {
-  description = "Additional Entra object IDs granted `Key Vault Secrets Officer`, so they can populate secret values. Whoever runs `terraform apply` gets this automatically."
+  description = "Entra object IDs granted `Key Vault Secrets Officer`, so they can populate secret values. Listed explicitly rather than taken from whoever runs `terraform apply`, because cd-terraform applies as the pipeline identity."
   type        = list(string)
   default     = []
 }
