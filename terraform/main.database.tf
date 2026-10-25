@@ -77,8 +77,11 @@ resource "azurerm_postgresql_flexible_server_active_directory_administrator" "th
   resource_group_name = azurerm_resource_group.this.name
   tenant_id           = data.azurerm_client_config.current.tenant_id
   object_id           = "b168eef0-d213-406e-a7f9-7b9198d580da"
-  principal_name      = "jay.withers@appvia.io"
-  principal_type      = "User"
+  # The Entra user's real UPN, which ARM makes the PostgreSQL role name. It
+  # must match the account exactly or the login fails; change it only when
+  # the account's UPN itself changes.
+  principal_name = "jay.withers@appvia.io"
+  principal_type = "User"
 }
 
 resource "azurerm_postgresql_flexible_server_database" "this" {
