@@ -165,6 +165,16 @@ def test_the_prompt_still_renders_with_no_history_at_all():
     assert "Assess NVDA." in prompt
 
 
+def test_the_prompt_shows_the_exposure_ceiling_and_the_largest_permitted_buy():
+    """Without these the model cannot tell a BUY the engine will refuse from
+    one it will approve: the 2026-10-25 review found tech and energy BUYs
+    clamped and refused by a ceiling the prompt never mentioned."""
+    prompt = _rendered([])
+    assert "max total exposure: 80% of total value invested" in prompt
+    # $500 cash, nothing held: the $50 trade cap is the tightest.
+    assert "largest BUY of NVDA permitted now: USD 50.0000" in prompt
+
+
 def test_the_price_history_survived_the_decision_history_being_added():
     # The two nearly collided: the local holding the price bars was called
     # `history` before the parameter of that name existed.

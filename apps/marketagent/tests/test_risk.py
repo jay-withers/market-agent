@@ -494,3 +494,22 @@ def test_new_buy_headroom_agrees_with_evaluate_for_an_unheld_ticker(cash, held, 
         assert verdict.approved_amount_usd == headroom
     else:
         assert not verdict.approved
+
+
+@pytest.mark.parametrize("held", [D(10), D(80), D(95), D(100)])
+@pytest.mark.parametrize("exposure", [D(80), D(100)])
+def test_new_buy_headroom_agrees_with_evaluate_for_a_held_ticker(held, exposure):
+    """What the prompt shows the model as the largest BUY of a ticker it holds
+    is what evaluate() would then approve, so a BUY sized to it is neither
+    clamped nor refused."""
+    pot = state(cash=D(400), holdings={"NVDA": held})
+    lim = limits(max_total_exposure_pct=exposure)
+    headroom = new_buy_headroom(pot, lim, trades_today=0, held=held)
+
+    verdict = evaluate(rec(ticker="NVDA", amount=D(10_000)), pot, lim, trades_today=0)
+
+    if headroom >= lim.min_trade_usd:
+        assert verdict.approved
+        assert verdict.approved_amount_usd == headroom
+    else:
+        assert not verdict.approved

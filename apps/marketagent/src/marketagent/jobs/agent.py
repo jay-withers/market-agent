@@ -219,7 +219,19 @@ def run(
                 raise RuntimeError(f"holdings with no current price: {', '.join(unpriced)}")
 
             limits = risklimits.limits(watchlist)
-            result = llm.analyse(_prompt(ticker, relevant[ticker], bars, state, limits, history))
+            # Re-checked per ticker, not only up front in _analysable(): a BUY
+            # approved earlier in this run is an open order that risk_state()
+            # reserves against exposure, so the headroom can run out mid-run,
+            # and every later BUY of an unheld ticker would be refused after
+            # paying for its analysis. A holding is still analysed, for a SELL.
+            held = state.position_value(ticker) > 0
+            if not held and new_buy_headroom(state, limits, already) < limits.min_trade_usd:
+                logger.info("%s: not held and no buying headroom left; skipping analysis", ticker)
+                continue
+            buy_room = new_buy_headroom(state, limits, already, state.position_value(ticker))
+            result = llm.analyse(
+                _prompt(ticker, relevant[ticker], bars, state, limits, history, buy_room)
+            )
             usage += result.usage
             cost_usd += result.cost_usd
             _check_budget(cost_usd, cfg.max_run_cost_usd)
@@ -254,7 +266,11 @@ def run(
                     # The history is an input to the decision that
                     # `portfolio_state` does not carry, so it is stored beside
                     # it rather than left only in a prompt nobody kept.
-                    prompt_context={"recent_decisions": history},
+                    prompt_context={
+                        "recent_decisions": history,
+                        "buy_headroom_usd": str(buy_room),
+                        "trades_today": already,
+                    },
                 )
 
                 if verdict.approved and verdict.approved_amount_usd:
@@ -443,7 +459,7 @@ def _history_lines(history: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _prompt(ticker, articles, bars, state, limits, history=()) -> str:
+def _prompt(ticker, articles, bars, state, limits, history=(), buy_room=None) -> str:
     """Assemble what the analysis model sees.
 
     Everything here is also serialised onto the `ai_decisions` row — the
@@ -462,6 +478,8 @@ def _prompt(ticker, articles, bars, state, limits, history=()) -> str:
         for a in articles
     )
     held = state.position_value(ticker)
+    if buy_room is None:
+        buy_room = new_buy_headroom(state, limits, 0, held)
 
     return f"""Ticker: {ticker}
 Date: {datetime.now(UTC):%Y-%m-%d} (all times UTC)
@@ -488,12 +506,14 @@ Portfolio (mirrors the Alpaca paper account):
   total value: USD {state.total_value_usd}
   invested: USD {state.invested_usd}
   held in {ticker}: USD {held}
+  largest BUY of {ticker} permitted now: USD {buy_room}
 
 Risk limits that will be applied to your suggestion:
   max per position: USD {limits.max_position_usd}
   max per trade: USD {limits.max_trade_usd}
   min per trade: USD {limits.min_trade_usd}
   max concentration: {limits.max_concentration_pct}% of total value
+  max total exposure: {limits.max_total_exposure_pct}% of total value invested
   confidence floor: {limits.min_confidence}
 
 Assess {ticker}."""

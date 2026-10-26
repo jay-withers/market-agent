@@ -235,6 +235,15 @@ def test_a_decision_is_persisted_with_the_history_it_was_shown(agent_dsn):
     assert history[0]["action"] == "BUY"
     assert history[0]["binding_constraint"] == "recommended_amount"
 
+    # The buying headroom the prompt showed, and the trade count behind it, so
+    # the decision stays replayable against what the model was told.
+    with psycopg.connect(agent_dsn) as conn:
+        (context,) = conn.execute(
+            "SELECT prompt_context FROM ai_decisions ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    assert "buy_headroom_usd" in context
+    assert context["trades_today"] == 0
+
 
 # ---------------------------------------------------------------------------
 # HOLD: persisted, nothing traded
@@ -375,6 +384,25 @@ def test_a_pot_with_headroom_analyses_its_whole_watchlist(agent_dsn, monkeypatch
 
     # 012-narrow-tech-pot.sql cut tech from 50 names to these ten.
     assert len(asked[0]) == 10
+
+
+def test_an_unheld_ticker_is_not_analysed_once_headroom_runs_out_mid_run(agent_dsn, monkeypatch):
+    """The up-front check passed, but by this ticker an earlier BUY's open
+    order has used the headroom up: every BUY of an unheld ticker would now be
+    refused, so its analysis is skipped rather than paid for. Simulated by
+    letting the up-front check through on a pot already at the ceiling."""
+    monkeypatch.setenv("DRY_RUN", "true")
+    _hold(agent_dsn, "AAPL", value="390", cash="10")
+    _record_news(monkeypatch, TICKER)
+    monkeypatch.setattr(agent, "_analysable", lambda pid, tickers, closes, opening: tickers)
+    llm = _FakeLlm(TICKER)
+
+    run_id = agent.run(portfolio=PORTFOLIO, llm=llm, broker=DryRunBroker())
+
+    assert llm.analysed == []
+    with psycopg.connect(agent_dsn) as conn:
+        status = conn.execute("SELECT status FROM agent_runs WHERE id = %s", (run_id,)).fetchone()
+        assert status == ("succeeded",)
 
 
 def test_nothing_is_analysed_once_the_daily_trade_limit_is_spent(agent_dsn, monkeypatch):
