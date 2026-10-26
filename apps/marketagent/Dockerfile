@@ -15,7 +15,7 @@
 # image that produced had no site-packages on sys.path at all and died with a
 # bare "No module named 'marketagent'". One FROM line for the version means the
 # two cannot drift apart again.
-FROM python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83 AS base
+FROM python:3.14-slim-bookworm@sha256:945c2676dc2b18e0c1f16879244122c57c0ffede60006bf3df159c507a31bcae AS base
 
 
 FROM base AS builder
@@ -71,7 +71,17 @@ ENV PATH="/app/.venv/bin:$PATH" \
 # msgpack and setuptools' pkg_resources at whatever versions shipped with it;
 # Trivy reports them (a CRITICAL certifi among them). Nothing at runtime uses
 # pip: the app runs from the venv copied in below, which uv built without one.
-RUN python -m pip uninstall --yes --root-user-action=ignore pip \
+#
+# And it applies Debian's published security fixes: the base image is rebuilt
+# on its own schedule, and in between Trivy fails the build on a fixable
+# HIGH/CRITICAL package (libssl3, CVE-2026-84782, was the first). The CI build
+# caches layers by instruction, so this only re-runs when the line changes or
+# the base digest moves; Renovate's digest bumps are what keep it fresh.
+# hadolint ignore=DL3008
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip uninstall --yes --root-user-action=ignore pip \
     && useradd --system --uid 10001 --create-home --shell /usr/sbin/nologin marketagent
 
 WORKDIR /app
