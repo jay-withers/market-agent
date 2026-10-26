@@ -606,8 +606,18 @@ or dashboard tab iterates them.
   `min_trade_usd`, the run fetches news for and analyses only the pot's
   holdings, for a possible SELL; with the daily trade limit spent it analyses
   nothing. A test checks it agrees with `evaluate()` so the two cannot drift.
-  Checked once, up front: orders submitted before the open do not fill
-  mid-run, so the headroom cannot grow.
+  Checked up front (orders submitted before the open do not fill mid-run, so
+  the headroom cannot grow) **and again before each analysis**, because it can
+  shrink: a BUY approved earlier in the run is an open order `risk_state()`
+  reserves against exposure. Without the per-ticker check the 2026-10-25 week
+  paid for tech and energy BUYs refused below the $5 floor by the exposure
+  ceiling.
+- **The model is shown the ceiling and its buying room.** `_prompt()` lists
+  `max_total_exposure_pct` with the other limits and the largest BUY of that
+  ticker the engine could permit now (`new_buy_headroom` with the ticker's own
+  holding), and `ANALYSIS_SYSTEM`'s point 5 says to HOLD when that is under the
+  minimum and never to ask for more. Both are in `prompt_context`
+  (`buy_headroom_usd`, `trades_today`). `PROMPT_VERSION` went to `v7` for it.
 - **The pots run concurrently**, as separate jobs at the same cron time. A pot's
   run length is its analyses in series, so a 50-ticker pot is roughly 10-18
   minutes on a normal day. Expect about $0.10-0.19 a day per pot while it is

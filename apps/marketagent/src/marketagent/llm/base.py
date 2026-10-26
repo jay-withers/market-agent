@@ -19,7 +19,7 @@ from ..models import DailyNarrative, NewsRelevance, Recommendation, WeeklyReview
 # on every `news_analysis` and `ai_decisions` row and is part of the
 # `news_analysis` unique key, so a re-analysis after a prompt change adds rows
 # instead of destroying the record of what the old prompt concluded.
-PROMPT_VERSION = "v6"
+PROMPT_VERSION = "v7"
 
 # US dollars per million tokens, as published on DeepSeek's pricing page.
 # A snapshot, not a live lookup — it only feeds the cost figure recorded on

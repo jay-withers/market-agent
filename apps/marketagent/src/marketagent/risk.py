@@ -197,15 +197,18 @@ def evaluate(
     )
 
 
-def new_buy_headroom(state: PortfolioState, limits: RiskLimits, trades_today: int) -> Decimal:
-    """The largest BUY `evaluate()` could approve for a ticker not already held.
+def new_buy_headroom(
+    state: PortfolioState, limits: RiskLimits, trades_today: int, held: Decimal = ZERO
+) -> Decimal:
+    """The largest BUY `evaluate()` could approve for a ticker holding `held`.
 
-    The agent asks this before paying the model to analyse a ticker it does not
-    hold: below `min_trade_usd` every such BUY is refused whatever the model
-    says, so the analysis cannot change anything. These are the BUY caps above
-    with `held` at zero, which is exactly the case for an unheld ticker — the
-    recommendation's own amount is the only cap left out, since it is not known
-    yet. `test_risk.py` checks the two stay in step.
+    These are the BUY caps above, with the recommendation's own amount left out
+    since it is not known yet; `test_risk.py` checks the two stay in step. The
+    agent asks it twice. With `held` at zero (a ticker not held) it decides
+    whether an analysis is worth paying for at all: below `min_trade_usd` every
+    BUY is refused whatever the model says. With the ticker's own holding it is
+    the figure the prompt shows the model, so a BUY can be sized to what the
+    engine will permit instead of being clamped or refused after the fact.
     """
     if trades_today >= limits.max_daily_trades:
         return ZERO
@@ -213,8 +216,8 @@ def new_buy_headroom(state: PortfolioState, limits: RiskLimits, trades_today: in
     return min(
         money(limits.max_trade_usd),
         _headroom(state.cash_usd),
-        _headroom(money(limits.max_position_usd)),
-        _headroom(_pct(total, limits.max_concentration_pct)),
+        _headroom(money(limits.max_position_usd) - held),
+        _headroom(_pct(total, limits.max_concentration_pct) - held),
         _headroom(_pct(total, limits.max_total_exposure_pct) - state.invested_usd),
     )
 
