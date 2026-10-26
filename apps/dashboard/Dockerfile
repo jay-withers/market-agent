@@ -39,11 +39,15 @@ LABEL org.opencontainers.image.source="https://github.com/jay-withers/market-age
 USER 0
 # `apk upgrade` first: the upstream image is rebuilt on its own schedule, and
 # in between it can ship Alpine packages with fixes already published (Trivy
-# fails the build on fixable HIGH/CRITICAL ones; brotli-libs was the first).
-# Same layer, so the upgrade costs nothing extra.
+# fails the build on fixable HIGH/CRITICAL ones; brotli-libs was the first,
+# curl's CVE-2026-92392 the second). Same layer, so the upgrade costs nothing
+# extra. `--upgrade` on the add too, so curl and jq are the newest even when
+# the base image already carries an older copy. Note the CI build caches this
+# layer by instruction: it re-runs only when this line or the base digest
+# changes, so a fix published since then needs one of the two to move.
 # hadolint ignore=DL3018
 RUN apk upgrade --no-cache \
-    && apk add --no-cache curl jq
+    && apk add --no-cache --upgrade curl jq
 
 # The unprivileged image already runs as uid 101 and listens above 1024, which
 # is what Container Apps wants; rolling our own non-root nginx means fighting
