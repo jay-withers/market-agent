@@ -75,8 +75,10 @@ ENV PATH="/app/.venv/bin:$PATH" \
 # And it applies Debian's published security fixes: the base image is rebuilt
 # on its own schedule, and in between Trivy fails the build on a fixable
 # HIGH/CRITICAL package (libssl3, CVE-2026-84782, was the first). The CI build
-# caches layers by instruction, so this only re-runs when the line changes or
-# the base digest moves; Renovate's digest bumps are what keep it fresh.
+# caches layers by instruction, so OS_PATCH_DATE (today's date, passed by
+# jay-withers/workflows' docker.yml) is declared just above it: this layer
+# re-runs once a day and everything before it stays cached.
+ARG OS_PATCH_DATE
 # hadolint ignore=DL3008
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \

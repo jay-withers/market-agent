@@ -58,7 +58,7 @@ jobs:
       contents: read
       packages: write
       security-events: write # Trivy findings to code scanning
-    uses: jay-withers/workflows/.github/workflows/docker.yml@d6a29096bfcd0f36ba671c700faa18f8c2fc5d63 # v1.14.4
+    uses: jay-withers/workflows/.github/workflows/docker.yml@70dc4d6baa4b14ef52e97ce8e4da83a0e8b07773 # v1.15.0
     with:
       images: |
         [{"name": "marketagent", "context": "apps/marketagent"},
@@ -85,6 +85,6 @@ jobs:
       id-token: write
       contents: read
       issues: write # the deploy-failed issue
-    uses: jay-withers/workflows/.github/workflows/container-apps-deploy.yml@d6a29096bfcd0f36ba671c700faa18f8c2fc5d63 # v1.14.4
+    uses: jay-withers/workflows/.github/workflows/container-apps-deploy.yml@70dc4d6baa4b14ef52e97ce8e4da83a0e8b07773 # v1.15.0
     with:
       version: ${{ inputs.version }}
