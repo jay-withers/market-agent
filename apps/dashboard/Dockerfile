@@ -42,9 +42,10 @@ USER 0
 # fails the build on fixable HIGH/CRITICAL ones; brotli-libs was the first,
 # curl's CVE-2026-92392 the second). Same layer, so the upgrade costs nothing
 # extra. `--upgrade` on the add too, so curl and jq are the newest even when
-# the base image already carries an older copy. Note the CI build caches this
-# layer by instruction: it re-runs only when this line or the base digest
-# changes, so a fix published since then needs one of the two to move.
+# the base image already carries an older copy. The CI build caches layers by
+# instruction, so OS_PATCH_DATE (today's date, passed by jay-withers/workflows'
+# docker.yml) is declared just above: this layer re-runs once a day.
+ARG OS_PATCH_DATE
 # hadolint ignore=DL3018
 RUN apk upgrade --no-cache \
     && apk add --no-cache --upgrade curl jq
