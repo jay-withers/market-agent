@@ -6,29 +6,18 @@
 # must pass --platform linux/amd64. The Makefile's `build` target does it rather
 # than leaving it to memory.
 
-# Builder and runtime both derive from `base`, and that is load-bearing rather
-# than tidy. The runtime stage copies the whole virtualenv, and a venv is bound
-# to the exact minor version that created it — its packages live in
-# lib/python3.X/site-packages and no other interpreter will look there. While
-# the stages named their Python separately, a Renovate "non-major" bump moved
-# the runtime from 3.12 to 3.14 and left the builder's uv image on 3.12; the
-# image that produced had no site-packages on sys.path at all and died with a
-# bare "No module named 'marketagent'". One FROM line for the version means the
-# two cannot drift apart again.
-FROM python:3.14-slim-bookworm@sha256:945c2676dc2b18e0c1f16879244122c57c0ffede60006bf3df159c507a31bcae AS base
+# Both stages come from jay-withers/dev-containers, which holds what every
+# Python app here used to repeat: the Python digest, Debian security updates,
+# pip's removal, the uid 10001 user, and uv for the builder. Keep the two at the
+# same version — Renovate raises them together. python-app-builder is built FROM
+# python-app, and that is load-bearing rather than tidy: the runtime stage
+# copies the whole virtualenv, and a venv is bound to the exact minor version
+# that created it. See jay-withers/gym-log's Dockerfile for the outage that
+# taught this.
+FROM ghcr.io/jay-withers/dev-containers/python-app-builder:v0.18.0@sha256:515220599b90696ee950a19f115b2b5be9fb27e847103b416e5661ec21d9b23e AS builder
 
-
-FROM base AS builder
-
-# uv is copied in rather than supplying the base image, which is exactly what
-# lets the builder share the runtime's interpreter. UV_PYTHON_DOWNLOADS=never
-# then stops uv fetching a different one of its own.
-COPY --from=ghcr.io/astral-sh/uv:0.13.3@sha256:bee0a2a458fd956c5df7b8b4c5fed2257b0af34866e3da7b51db0be3acb375d1 /uv /uvx /bin/
-
-ENV UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy \
-    UV_PYTHON_DOWNLOADS=never
-
+# python-app already sets this; restated because the relative COPYs below
+# depend on it, and hadolint cannot see a WORKDIR set by the parent image.
 WORKDIR /app
 
 # Dependencies before source, so editing a module does not re-resolve the
@@ -47,46 +36,24 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable
 
 
-FROM base AS runtime
+# Brings /app/.venv/bin on PATH and WORKDIR /app.
+FROM ghcr.io/jay-withers/dev-containers/python-app:v0.18.0@sha256:6218e3ffc531d9c411a5be2ef3b3a5988e1c279c557d257a8594394810db054c
 
 # This label is what connects the pushed package to this repository, and the
 # connection is what gives a workflow's GITHUB_TOKEN write access to it. Both
 # packages were first pushed by hand without it, so they were user-scoped and
 # unlinked, and cd-publish failed with `denied: permission_denied:
 # write_package` however its `packages: write` permission was declared.
+# It also replaces the label python-app inherits, which would otherwise link
+# this image to dev-containers.
 LABEL org.opencontainers.image.source="https://github.com/jay-withers/market-agent"
 
-# psycopg is installed as the binary wheel, so no libpq or build toolchain is
-# needed at runtime — which is most of why this image stays small.
-ENV PATH="/app/.venv/bin:$PATH" \
-    PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
-
-# Non-root, and no shell: nothing in here needs to log in, and the API is
-# publicly reachable. The uid is numeric and USER names the number, not the
-# name — a runtime enforcing runAsNonRoot has to resolve the user before the
-# container starts, and it cannot read this image's /etc/passwd to do it.
-#
-# The same layer removes the base image's pip, which vendors certifi, urllib3,
-# msgpack and setuptools' pkg_resources at whatever versions shipped with it;
-# Trivy reports them (a CRITICAL certifi among them). Nothing at runtime uses
-# pip: the app runs from the venv copied in below, which uv built without one.
-#
-# And it applies Debian's published security fixes: the base image is rebuilt
-# on its own schedule, and in between Trivy fails the build on a fixable
-# HIGH/CRITICAL package (libssl3, CVE-2026-84782, was the first). The CI build
-# caches layers by instruction, so this only re-runs when the line changes or
-# the base digest moves; Renovate's digest bumps are what keep it fresh.
-# hadolint ignore=DL3008
-RUN apt-get update \
-    && apt-get upgrade -y --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/* \
-    && python -m pip uninstall --yes --root-user-action=ignore pip \
-    && useradd --system --uid 10001 --create-home --shell /usr/sbin/nologin marketagent
-
-WORKDIR /app
 COPY --from=builder --chown=10001:10001 /app/.venv /app/.venv
 
+# python-app already runs as this user; restated so this file alone says the
+# image is non-root (repo-agent's container.runs_as_root reads only this file)
+# and stays so if the base ever changes. Numeric, because a runtime enforcing
+# runAsNonRoot has to resolve the user without reading /etc/passwd.
 USER 10001
 
 EXPOSE 8000
