@@ -23,8 +23,8 @@ resource "azurerm_postgresql_flexible_server" "this" {
   #   VNet to attach it to — the Container Apps environment is Consumption-only. Access is
   #   controlled by Entra-only auth plus the firewall rule below.
   name                = module.naming.postgresql_server.name
-  resource_group_name = azurerm_resource_group.this.name
-  location            = azurerm_resource_group.this.location
+  resource_group_name = data.azurerm_resource_group.this.name
+  location            = data.azurerm_resource_group.this.location
   version             = var.postgres_version
 
   sku_name = var.postgres_sku_name
@@ -74,7 +74,7 @@ resource "azurerm_postgresql_flexible_server" "this" {
 # administrator and lock every human out.
 resource "azurerm_postgresql_flexible_server_active_directory_administrator" "this" {
   server_name         = azurerm_postgresql_flexible_server.this.name
-  resource_group_name = azurerm_resource_group.this.name
+  resource_group_name = data.azurerm_resource_group.this.name
   tenant_id           = data.azurerm_client_config.current.tenant_id
   object_id           = "b168eef0-d213-406e-a7f9-7b9198d580da"
   # The Entra user's real UPN, which ARM makes the PostgreSQL role name. It

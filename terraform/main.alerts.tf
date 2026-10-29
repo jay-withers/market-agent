@@ -24,7 +24,7 @@
 # stg and prd plans in CI, which plan against resource groups that do not exist.
 resource "azurerm_monitor_action_group" "this" {
   name                = module.naming.monitor_action_group.name
-  resource_group_name = azurerm_resource_group.this.name
+  resource_group_name = data.azurerm_resource_group.this.name
 
   # Max 12 characters, and it is what appears in the SMS and email subject.
   short_name = substr(var.project_name, 0, 12)
@@ -67,7 +67,7 @@ resource "azurerm_monitor_metric_alert" "this" {
   for_each = local.metric_alerts
 
   name                = "alert-${local.alert_name_prefix}-${each.key}"
-  resource_group_name = azurerm_resource_group.this.name
+  resource_group_name = data.azurerm_resource_group.this.name
   scopes              = [each.value.scope]
   description         = each.value.description
   severity            = each.value.severity
@@ -116,8 +116,8 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "log_quota" {
   count = var.shared_platform == null ? 1 : 0
 
   name                = module.naming.monitor_scheduled_query_rules_alert.name
-  resource_group_name = azurerm_resource_group.this.name
-  location            = azurerm_resource_group.this.location
+  resource_group_name = data.azurerm_resource_group.this.name
+  location            = data.azurerm_resource_group.this.location
   description         = "Log ingestion is approaching the workspace daily cap, past which logging stops."
   severity            = 2
 
@@ -171,7 +171,7 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "log_quota" {
 # will overrun while there is still a month left to act is the useful warning.
 resource "azurerm_consumption_budget_resource_group" "this" {
   name              = "budget-${local.alert_name_prefix}"
-  resource_group_id = azurerm_resource_group.this.id
+  resource_group_id = data.azurerm_resource_group.this.id
 
   amount     = var.monthly_budget_amount
   time_grain = "Monthly"

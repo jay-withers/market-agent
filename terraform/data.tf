@@ -29,3 +29,18 @@ data "azurerm_container_app_environment" "platform" {
   name                = var.shared_platform.container_app_environment_name
   resource_group_name = var.shared_platform.resource_group_name
 }
+
+# This project's resource group, created by github-repos along with the
+# pipeline identity's grants on it. Same name the naming module always gave
+# it. Everything here takes the group's region, so check it is the one
+# var.location pins (github-repos' deploy_location decides it).
+data "azurerm_resource_group" "this" {
+  name = module.naming.resource_group.name
+
+  lifecycle {
+    postcondition {
+      condition     = self.location == var.location
+      error_message = "The resource group must be in var.location; see that variable for why only northeurope works."
+    }
+  }
+}

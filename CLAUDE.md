@@ -87,7 +87,7 @@ Dev uses the existing `log-platform-dev`, `appi-platform-dev` and
 and retention belong to the platform. Stg/prd still create dedicated resources.
 See `docs/shared-platform-migration.md` before applying to an existing dev stack.
 
-Resource group, user-assigned managed identity, Log Analytics workspace,
+Resource group (read by data source: github-repos creates it), user-assigned managed identity, Log Analytics workspace,
 Application Insights (workspace-based), Key Vault (RBAC), Container Apps
 environment (Consumption-only), two container apps (`api`, `dashboard`),
 scheduled container app jobs — an `agent-<pot>` and a `sync-<pot>` per pot in
@@ -1482,10 +1482,13 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
 - **cd-terraform**: plans dev on every merge touching Terraform and **applies
   only when run by hand** (Actions → Run workflow), applying exactly the plan
   it prints. A plan with changes opens a `terraform-pending` issue; a failed
-  apply opens `deploy-failed`. The identity can't create role assignments or
-  write to `cae-platform-dev` beyond joining it, so an apply that adds a role
-  assignment or (re)creates the dashboard's managed certificate still runs
-  locally (`make apply ENV=dev`). Images deploy through cd-publish, not here.
+  apply opens `deploy-failed`. The identity has Contributor and conditioned
+  RBAC Administrator on `rg-marketagent-dev` (github-repos creates the group;
+  `data.azurerm_resource_group.this` reads it), so role assignments inside the
+  group apply here too. It can't write to `cae-platform-dev` beyond joining
+  it, so an apply that (re)creates the dashboard's managed certificate still
+  runs locally (`make apply ENV=dev`). Images deploy through cd-publish, not
+  here.
 - **ci-python**: runs `pytest` on every PR, by calling the reusable
   `jay-withers/workflows/.github/workflows/python.yml` (pinned by commit SHA
   with the tag as a comment, like `ci-pre-commit`). Nothing in CI ran the suite

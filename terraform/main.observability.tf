@@ -2,8 +2,8 @@ resource "azurerm_log_analytics_workspace" "this" {
   count = var.shared_platform == null ? 1 : 0
 
   name                = module.naming.log_analytics_workspace.name
-  resource_group_name = azurerm_resource_group.this.name
-  location            = azurerm_resource_group.this.location
+  resource_group_name = data.azurerm_resource_group.this.name
+  location            = data.azurerm_resource_group.this.location
   sku                 = "PerGB2018"
 
   # 30 days is both the provider minimum and free (31 are included).
@@ -22,8 +22,8 @@ resource "azurerm_application_insights" "this" {
   count = var.shared_platform == null ? 1 : 0
 
   name                = module.naming.application_insights.name
-  resource_group_name = azurerm_resource_group.this.name
-  location            = azurerm_resource_group.this.location
+  resource_group_name = data.azurerm_resource_group.this.name
+  location            = data.azurerm_resource_group.this.location
   application_type    = "web"
   workspace_id        = local.log_analytics_workspace_id
 
