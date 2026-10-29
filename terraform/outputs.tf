@@ -15,7 +15,7 @@ output "container_app_log_environment_name" {
 
 output "resource_group_name" {
   description = "Name of the created resource group."
-  value       = azurerm_resource_group.this.name
+  value       = data.azurerm_resource_group.this.name
 }
 
 output "key_vault_name" {

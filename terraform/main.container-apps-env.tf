@@ -2,8 +2,8 @@ resource "azurerm_container_app_environment" "this" {
   count = var.shared_platform == null ? 1 : 0
 
   name                       = module.naming.container_app_environment.name
-  resource_group_name        = azurerm_resource_group.this.name
-  location                   = azurerm_resource_group.this.location
+  resource_group_name        = data.azurerm_resource_group.this.name
+  location                   = data.azurerm_resource_group.this.location
   log_analytics_workspace_id = local.log_analytics_workspace_id
 
   # Inferred from the workspace in azurerm 4.x, but reverts to an "" default in

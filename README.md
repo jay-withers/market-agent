@@ -574,10 +574,13 @@ or applied in CI.
 The identity, `uai-market-agent-deploy-dev`, and the `dev` GitHub environment
 holding `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID` come
 from [jay-withers/github-repos](https://github.com/jay-withers/github-repos)'s
-`state_consumers`. It has Contributor on `rg-marketagent-dev`, Reader on the
-subscription and join on `cae-platform-dev`, but cannot create role
-assignments. Run `make apply ENV=dev` locally for a change that adds one, or
-that (re)creates the dashboard's managed certificate on the shared environment.
+`state_consumers`, which also creates `rg-marketagent-dev` itself; this
+config reads the group by data source. The identity has Contributor and
+conditioned RBAC Administrator (any role except Owner, User Access
+Administrator and RBAC Administrator) on the group, Reader on the subscription
+and join on `cae-platform-dev`, so role assignments inside the group apply
+from the pipeline. Run `make apply ENV=dev` locally for a change that
+(re)creates the dashboard's managed certificate on the shared environment.
 
 ## Repository settings
 

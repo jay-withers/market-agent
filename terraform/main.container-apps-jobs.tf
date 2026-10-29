@@ -41,8 +41,8 @@ resource "azurerm_container_app_job" "agent" {
   name                         = module.naming_agent[each.key].container_app_job.name
   container_app_environment_id = local.container_app_environment_id
   workload_profile_name        = local.container_app_workload_profile_name
-  resource_group_name          = azurerm_resource_group.this.name
-  location                     = azurerm_resource_group.this.location
+  resource_group_name          = data.azurerm_resource_group.this.name
+  location                     = data.azurerm_resource_group.this.location
 
   replica_timeout_in_seconds = 3600
   replica_retry_limit        = 1
@@ -131,8 +131,8 @@ resource "azurerm_container_app_job" "daily_summary" {
   name                         = module.naming_daily_summary.container_app_job.name
   container_app_environment_id = local.container_app_environment_id
   workload_profile_name        = local.container_app_workload_profile_name
-  resource_group_name          = azurerm_resource_group.this.name
-  location                     = azurerm_resource_group.this.location
+  resource_group_name          = data.azurerm_resource_group.this.name
+  location                     = data.azurerm_resource_group.this.location
 
   replica_timeout_in_seconds = 1800
   replica_retry_limit        = 1
@@ -193,8 +193,8 @@ resource "azurerm_container_app_job" "weekly_review" {
   name                         = module.naming_weekly_review.container_app_job.name
   container_app_environment_id = local.container_app_environment_id
   workload_profile_name        = local.container_app_workload_profile_name
-  resource_group_name          = azurerm_resource_group.this.name
-  location                     = azurerm_resource_group.this.location
+  resource_group_name          = data.azurerm_resource_group.this.name
+  location                     = data.azurerm_resource_group.this.location
 
   replica_timeout_in_seconds = 1800
   replica_retry_limit        = 1
@@ -251,8 +251,8 @@ resource "azurerm_container_app_job" "sync" {
   name                         = module.naming_sync[each.key].container_app_job.name
   container_app_environment_id = local.container_app_environment_id
   workload_profile_name        = local.container_app_workload_profile_name
-  resource_group_name          = azurerm_resource_group.this.name
-  location                     = azurerm_resource_group.this.location
+  resource_group_name          = data.azurerm_resource_group.this.name
+  location                     = data.azurerm_resource_group.this.location
 
   replica_timeout_in_seconds = 120
   replica_retry_limit        = 1

@@ -30,7 +30,7 @@ resource "azurerm_container_app" "api" {
   name                         = module.naming_api.container_app.name
   container_app_environment_id = local.container_app_environment_id
   workload_profile_name        = local.container_app_workload_profile_name
-  resource_group_name          = azurerm_resource_group.this.name
+  resource_group_name          = data.azurerm_resource_group.this.name
   revision_mode                = "Single"
 
   identity {
@@ -169,7 +169,7 @@ resource "azurerm_container_app" "dashboard" {
   name                         = module.naming_dashboard.container_app.name
   container_app_environment_id = local.container_app_environment_id
   workload_profile_name        = local.container_app_workload_profile_name
-  resource_group_name          = azurerm_resource_group.this.name
+  resource_group_name          = data.azurerm_resource_group.this.name
   revision_mode                = "Single"
 
   identity {
