@@ -10,7 +10,7 @@ data "azurerm_log_analytics_workspace" "platform" {
 
   lifecycle {
     precondition {
-      condition     = data.azurerm_client_config.current.subscription_id == var.shared_platform.subscription_id
+      condition     = var.shared_platform.subscription_id == null || data.azurerm_client_config.current.subscription_id == var.shared_platform.subscription_id
       error_message = "The Azure provider must target shared_platform.subscription_id."
     }
   }
