@@ -224,8 +224,8 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
 
   - **The plan runs in the `dev` GitHub environment**, as
     `uai-market-agent-deploy-dev` (github-repos' `state_consumers`), which holds
-    Contributor on `rg-marketagent-dev`, Reader on the subscription and join on
-    `cae-platform-dev`. The environment's `AZURE_*` variables are invisible to
+    Contributor and conditioned RBAC Administrator on `rg-marketagent-dev`,
+    Reader on the subscription and join on `cae-platform-dev`. The environment's `AZURE_*` variables are invisible to
     the calling job, so nothing here gates on them.
   - **Only dev is planned.** Stg and prd remain in the configuration (and keep
     their tfvars and backends) but have no identity and are never applied.
@@ -339,9 +339,9 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
     fetches the browser matching the installed package, so a Renovate bump of
     `@playwright/test` cannot drift away from a hard-coded image tag. The
     browser cache is keyed on `package-lock.json` for the same reason.
-  - The status check reports as plain **`layout`**, not `<job> / <name>` —
-    that namespacing only applies to reusable-workflow calls. It is not in
-    `github-repos`' required list yet; add it there if it should block a merge.
+  - The status check reports as plain **`Layout`** (the job's `name:`), not
+    `<job> / <name>` — that namespacing only applies to reusable-workflow
+    calls. It is a required check in `github-repos`.
 - **ci-container-build**: builds `apps/marketagent` and `apps/dashboard` on PRs
   touching `apps/**` (decided by a `changes` job, so the required
   `container-build` gate reports on every PR), without pushing, by calling the shared `docker.yml` with
@@ -431,15 +431,15 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
 ## Renovate
 
 `renovate.json` extends the shared presets from
-[`jay-withers/template-renovate`](https://github.com/jay-withers/template-renovate)
-(`github>jay-withers/template-renovate`) rather than configuring Renovate inline —
+[`jay-withers/renovate`](https://github.com/jay-withers/renovate)
+(`github>jay-withers/renovate`) rather than configuring Renovate inline —
 that one line pulls in `config:recommended`, semantic commits, automerge/schedule
 policy, and per-ecosystem grouping. Only what's genuinely specific to this repo
 stays local: `autoApprove` (so Renovate's own PRs clear the branch-protection
 review requirement) and two `regexManagers` (`.terraform-version`, and
 `.tflint.hcl`'s azurerm plugin version pin) — neither is a GitHub Action, npm/pip
 package or Docker image that a shared preset's manager already covers. Change
-ecosystem-wide policy in `template-renovate` itself so every consuming repo picks
+ecosystem-wide policy in `jay-withers/renovate` itself so every consuming repo picks
 it up; only touch this file for something unique here.
 
 ## GitHub repo settings
@@ -451,7 +451,8 @@ Terraform root module, which is the single source of truth for every jay-withers
 repo.
 
 The required status checks are **`pre-commit / Pre-commit`**, **`test / Test`**,
-**`terraform / Terraform`** and **`terraform-plan`** — set in that repo's
+**`terraform / Terraform`**, **`terraform-plan`**, **`Layout`** and
+**`container-build`** — set in that repo's
 `terraform/terraform.tfvars`, where this entry sat at
 `required_status_checks = []` for as long as the CI existed, so nothing could
 actually block a merge. Two rules decide what belongs on that list:
@@ -460,13 +461,14 @@ actually block a merge. Two rules decide what belongs on that list:
   name>`**, not the bare job id. Hence `test / Test` rather than `test`, and
   `terraform / Terraform` rather than `terraform`. Read the context off
   `gh pr checks` rather than inferring it from the workflow.
-- **Only require a check that always reports.** `ci-container-build` is
-  filtered on its *trigger* (`paths: apps/**`), so a Terraform-only PR never
-  runs it — requiring `build (marketagent)` would leave every such PR pending
-  for ever rather than failing it. The two Terraform checks are safe for the
-  opposite reason: the shared workflow filters at the job level so its gate
-  always reports, and `terraform-plan` is `if: always()` and treats skipped as
-  success.
+- **Only require a check that always reports.** `ci-container-build` runs on
+  every PR and decides in a `changes` job whether to build, so a
+  Terraform-only PR skips the build — requiring `build (marketagent)` would
+  leave every such PR pending for ever rather than failing it. The
+  always-reporting `container-build` gate is what's required instead. The two
+  Terraform checks are safe for the same reason: the shared workflow filters
+  at the job level so its gate always reports, and `terraform-plan` is
+  `if: always()` and treats skipped as success.
 
 **Why Terraform takes two contexts rather than one.** `terraform / Terraform`
 is the shared workflow's gate and can only see the jobs inside it; `plan` lives
@@ -474,9 +476,8 @@ in this repo (see the ci-terraform entry for why), so it needs a gate of its
 own or a failed plan could not block a merge. Dropping either one silently
 stops guarding half of the Terraform CI.
 
-**This is now enforced — confirmed live on 2026-09-17.** All four contexts
-above are present on this repo's ruleset, so `github-repos`' `make apply` has
-since been run against it. Read the live state with:
+**This is enforced.** The contexts above are on this repo's ruleset. Read the
+live state with:
 
 ```bash
 gh api repos/jay-withers/market-agent/rulesets --jq '.[].id' \
@@ -492,11 +493,11 @@ reported `terraform / Terraform`, blocking its own pull requests until its
 tfvars (already correct) was actually applied. So check the contexts in tfvars
 against `gh pr checks` output *before* applying, not after.
 
-Because `make apply` there reads local tfvars against remote state, it can be
-run from a checkout of the branch rather than after a merge — which is how a
-stale required check gets unstuck without an admin bypass.
+A local `make apply` there, from a checkout of the branch, is still the
+break-glass way to unstick a stale required check without an admin bypass.
 
 Note that the ruleset sets `strict_required_status_checks_policy = true`, so a
-PR must be up to date with `main` before it can merge. And `github-repos` plans
-in CI but does not apply — a change there takes effect when someone runs
-`make apply` against remote state.
+PR must be up to date with `main` before it can merge. `github-repos` applies
+through its own `cd-terraform`: a merge plans and opens a `terraform-pending`
+issue, and a change there takes effect when someone runs that workflow by
+hand.

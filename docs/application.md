@@ -14,9 +14,8 @@ would mean four builds of near-identical layers. Deviates from the brief's sugge
 `apps/{api,agent,dashboard}` deliberately; the dashboard is genuinely separate
 and gets its own image.
 
-Written so far: `settings.py`, `db.py`, `models.py`, `risk.py`, and tests for
-the last two. Dependencies in `pyproject.toml` are added as the modules needing
-them land rather than declared up front.
+Dependencies in `pyproject.toml` were added as the modules needing them
+landed rather than declared up front, and new ones still are.
 
 - **Money is `Decimal`, never `float`**, matching the `NUMERIC(18,4)` columns.
   `models.money()` quantizes to four places and always rounds **towards zero**,
@@ -636,20 +635,22 @@ jobs,
 so this process cannot place a trade or alter a decision however it is called —
 which is most of why it is comfortable being publicly reachable. `/api/*` is
 guarded by a shared bearer (`API_REQUIRE_TOKEN`, off by default in application
-code but on in Terraform for this deployment — see below); the real fix is
-Container Apps EasyAuth with Entra, which `azurerm` does not expose.
+code but on in Terraform for this deployment — see below). Entra sign-in
+(Container Apps EasyAuth) is ruled out estate-wide: it was tried on gym-log and
+reverted on 2026-10-31, because the apps must work for people with no
+Microsoft account. Don't propose it again.
 
 - **`API_REQUIRE_TOKEN` is set in Terraform, not left at its off-by-default.**
-  This closes the gap the dashboard's own Basic Auth cannot: the dashboard is
+  This closes the gap the dashboard's own passcode cannot: the dashboard is
   just a browser-side client of this app's public FQDN, so gating the
   dashboard alone would still leave every `/api/*` route reachable directly by
   anyone who finds that FQDN. The token itself, `API-BEARER-TOKEN`, is one
   secret shared with the dashboard — read lazily via `secret()` here, the same
-  as every other application secret, but also wired into the dashboard
-  container as a Key Vault secret reference and rendered into its
-  `config.json` (`apiToken`) so the browser can forward it as
-  `Authorization: Bearer <token>`. Anyone who has already cleared the
-  dashboard's Basic Auth can read that token out of `config.json` and call the
+  as every other application secret, and fetched from Key Vault by the
+  dashboard's entrypoint at start-up (as `DASHBOARD-PASSCODE` is), then
+  rendered into its `config.json` (`apiToken`) so the browser can forward it
+  as `Authorization: Bearer <token>`. Anyone who has already cleared the
+  dashboard's passcode can read that token out of `config.json` and call the
   API directly forever afterwards — an accepted boundary given the data is
   non-sensitive, not a gap. On an already-existing API app this needs pushing
   by hand once with `az containerapp update --set-env-vars

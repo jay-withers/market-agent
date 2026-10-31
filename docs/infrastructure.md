@@ -253,8 +253,8 @@ Terraform owns the Key Vault and its RBAC but creates **no**
 `azurerm_key_vault_secret`: values are set out of band with
 `az keyvault secret set` by whoever holds `Key Vault Secrets Officer` (exactly
 `key_vault_administrator_object_ids` in the environment's tfvars, never the
-deploying principal: cd-terraform applies as a pipeline identity that cannot
-create role assignments).
+deploying principal: cd-terraform applies as the pipeline identity, which
+would move the grant to itself on every run).
 The workload identity gets read-only `Key Vault Secrets User`. Never add secret
 values to Terraform or tfvars.
 

@@ -36,17 +36,21 @@ Verified live on 2026-09-03, image tag `8d2788f`:
 and the first call can take long enough to look like a failure — that is the
 cost design working, not a fault. Retry before investigating.
 
-**Both apps are publicly reachable and unauthenticated.** Deliberate: the API
-is read-only, so it cannot place a trade or alter a decision however it is
-called, and no response carries a secret, PII or real money.
+**Both apps are publicly reachable, behind light gates only.** The dashboard
+asks for a passcode and the API wants a shared bearer token, enough to keep
+bots and scanners off. Deliberately no more: the API is read-only, so it
+cannot place a trade or alter a decision however it is called, and no response
+carries a secret, PII or real money.
 
 This repo began as a generic Azure Terraform module template and was converted;
 if something looks like leftover template scaffolding, it probably is.
 
 This file is the rules, one line each. The reasoning behind them, and the
-incidents that made them, are in [docs/infrastructure.md](docs/infrastructure.md), [docs/application.md](docs/application.md) and
-[docs/operations.md](docs/operations.md): read the linked section before changing the thing a rule
-protects.
+incidents that made them, are in
+[docs/infrastructure.md](docs/infrastructure.md),
+[docs/application.md](docs/application.md) and
+[docs/operations.md](docs/operations.md): read the linked section before
+changing the thing a rule protects.
 
 ## Commands
 
@@ -171,9 +175,8 @@ Thin callers of `jay-withers/workflows`, pinned by SHA. The required checks
 (set in github-repos) are `pre-commit / Pre-commit`, `test / Test`,
 `terraform / Terraform`, `terraform-plan`, `Layout` (ci-dashboard's
 Playwright layout suite) and `container-build`. ci-python needs
-`extras: dev`. Renovate
-extends `github>jay-withers/renovate`. `cd-terraform` plans on merge and
-applies only when run by hand.
+`extras: dev`. Renovate extends `github>jay-withers/renovate`. `cd-terraform`
+plans on merge and applies only when run by hand.
 
 ## Commit messages
 
