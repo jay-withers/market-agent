@@ -228,7 +228,7 @@ class StaticTokenCredential:
 
         Matters because `credential()` also serves Postgres token
         authentication. Handing a Key Vault token to Postgres would fail as
-        "password authentication failed", which CLAUDE.md records as one of the
+        "password authentication failed", which docs/infrastructure.md records as one of the
         hardest errors in this project to read correctly.
         """
         if scopes and self._scope not in scopes:

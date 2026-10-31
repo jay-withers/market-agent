@@ -112,7 +112,7 @@ def _sql_only(text: str) -> str:
     Each migration ends with `\echo` lines and a verification query, for the
     benefit of whoever runs it by hand. Stripping them is what lets psycopg
     apply the files directly, so these fixtures need no `psql` on PATH — worth
-    having, since CLAUDE.md records psql going missing across a dev container
+    having, since docs/operations.md records psql going missing across a dev container
     rebuild. Nothing schema-bearing starts with a backslash.
     """
     return "\n".join(line for line in text.splitlines() if not line.startswith("\\"))
