@@ -193,12 +193,12 @@ subscription fails the container apps environment with
 - The Entra administrator is a **separate resource**
   (`azurerm_postgresql_flexible_server_active_directory_administrator`), not an
   inline block as it was on Azure SQL, and it requires the principal's *type*
-  explicitly — `data.azurerm_client_config` cannot report it. `object_id`,
-  `principal_name` and `principal_type` are **hardcoded to a named human** in
-  `main.database.tf`, not variables: the administrator is then the same principal
-  whoever or whatever applies. Changing it is a code edit, not a tfvars change.
-  An object ID is an identifier rather than a credential, so it is safe in this
-  public repo.
+  explicitly — `data.azurerm_client_config` cannot report it. `object_id` and
+  `principal_name` come from `var.postgres_entra_administrator`, a **named
+  human**, and `principal_type` is fixed to `User`: the administrator is then
+  the same principal whoever or whatever applies. The value isn't committed:
+  CI reads `TF_VAR_POSTGRES_ENTRA_ADMINISTRATOR` from the `dev` environment,
+  where github-repos sets it from its `var.operator`.
 - **`principal_name` must be the UPN, not the display name** — ARM makes it the
   PostgreSQL role name verbatim. Registered as `Jay Withers`, the role really is
   called `Jay Withers`, and connecting as the UPN fails with
@@ -288,7 +288,7 @@ Passwordless throughout. The PostgreSQL server sets
 `authentication { active_directory_auth_enabled = true, password_auth_enabled = false }`,
 which lets `administrator_login`/`administrator_password` stay unset — no database
 password exists in source, state or Key Vault. The administrator is a named human
-hardcoded in `main.database.tf` (object ID, principal name and type), so a CI
+set by `var.postgres_entra_administrator` (object ID and principal name), so a CI
 apply no longer silently makes the OIDC service principal the only way in — the
 trap that an earlier "default to whoever applies" version carried. An Entra group
 would survive personnel change, at the cost of `principal_type = "Group"` and a
@@ -898,7 +898,7 @@ regression.
   anything else with a 422 (`The email address contains non-ASCII characters`),
   and the 2026-09-03 summary was lost to exactly that: the value in Key Vault
   had been pasted from somewhere that autocorrects quotes and was stored as
-  `‘withersj888@outlook.com’`. Curly quotes are invisible in `az keyvault secret
+  `‘you@example.com’`. Curly quotes are invisible in `az keyvault secret
   show` output, so read the codepoints (`| cat -A`) rather than the string when
   a send fails on the address. `Set-KeyVaultSecrets.ps1` now warns on it — its
   advisory pattern is printable-ASCII either side of the `@`, because the
@@ -1235,6 +1235,13 @@ make validate          # terraform init + validate (no Azure credentials)
 make plan              # terraform init + plan (set ENV=dev|stg|prd, default dev)
 make apply             # terraform init + apply (set ENV=dev|stg|prd, default dev)
 ```
+
+**A local `make plan`/`make apply` needs the operator's values exported.**
+`key_vault_administrator_object_ids`, `alert_email_address` and
+`postgres_entra_administrator` aren't committed: CI reads them from the
+`TF_VAR_*` variables github-repos sets on the `dev` environment. Copy them from
+`gh variable list --env dev`, lower-casing the name after `TF_VAR_`
+(`export TF_VAR_alert_email_address=…`).
 
 **`make sql` is not part of `make deploy`, and the schema is not versioned with
 the image.** A migration the code depends on has to be applied first, or the

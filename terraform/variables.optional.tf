@@ -1,7 +1,7 @@
 variable "shared_platform" {
-  description = "Existing platform resources in the deployment subscription. Null creates dedicated resources. Platform retention, ingestion caps and workspace-wide alerts remain platform-owned."
+  description = "Existing platform resources in the deployment subscription. Null creates dedicated resources. `subscription_id`, when set, must be the subscription the provider targets; CI leaves it unset, since the provider already logs in to the platform subscription. Platform retention, ingestion caps and workspace-wide alerts remain platform-owned."
   type = object({
-    subscription_id                = string
+    subscription_id                = optional(string)
     resource_group_name            = string
     log_analytics_workspace_name   = string
     application_insights_name      = string
@@ -39,12 +39,6 @@ variable "tags" {
   default     = {}
 }
 
-variable "key_vault_administrator_object_ids" {
-  description = "Entra object IDs granted `Key Vault Secrets Officer`, so they can populate secret values. Listed explicitly rather than taken from whoever runs `terraform apply`, because cd-terraform applies as the pipeline identity."
-  type        = list(string)
-  default     = []
-}
-
 variable "postgres_sku_name" {
   description = "Compute SKU. Burstable B1ms is the smallest Flexible Server offers; there is no serverless or auto-pause tier, so this bills per hour for as long as the server exists."
   type        = string
@@ -74,7 +68,6 @@ variable "postgres_zone" {
   type        = string
   default     = "1"
 }
-
 
 variable "image_registry" {
   description = "Registry and repository prefix the workload images are pulled from. Public packages on ghcr.io deliberately: a private one would need a `registry` block and a Key Vault-backed pull secret on every workload, and there is no Azure Container Registry because ACR Basic is a flat monthly charge with no consumption tier."
@@ -150,21 +143,6 @@ variable "weekly_review_cron_expression" {
   description = "Schedule for the weekly review job, as a 5-field cron expression evaluated in UTC. Must fall after that day's daily summary, whose valuation it reports as the week's close."
   type        = string
   default     = "0 22 * * 0"
-}
-
-variable "alert_email_address" {
-  description = "Address added to the alert action group as an email receiver, alongside the ARM role receiver that reaches whoever holds `Owner` on the subscription. Committed deliberately: this repository is public, so the default is permanent in its history — an address is an identifier rather than a credential, the same reasoning that puts a named human's object ID and UPN in `main.database.tf`. Set it empty to send to the Owner role alone, or override with `TF_VAR_alert_email_address` to keep a different address out of git. Unlike this, the *summary* recipient stays in Key Vault: it is changed without a redeploy and is read at runtime."
-  type        = string
-  default     = "withersj888@outlook.com"
-
-  validation {
-    # Printable ASCII either side of the `@`, matching the check
-    # `Set-KeyVaultSecrets.ps1` applies to the summary recipient. A curly quote
-    # pasted from somewhere that autocorrects is invisible in most output and
-    # has already cost this project one day's summary.
-    condition     = var.alert_email_address == "" || can(regex("^[!-?A-~]+@[!-?A-~]+\\.[!-?A-~]+$", var.alert_email_address))
-    error_message = "alert_email_address must be empty or a plain-ASCII email address."
-  }
 }
 
 variable "monthly_budget_amount" {

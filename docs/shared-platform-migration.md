@@ -1,7 +1,7 @@
 # Move dev onto the shared platform
 
-Dev reads these existing resources in subscription
-`02d69b18-478e-4355-ba6e-3cac5585d1e9`, resource group `rg-platform-dev`:
+Dev reads these existing resources in the platform subscription, resource
+group `rg-platform-dev`:
 
 - `log-platform-dev`
 - `appi-platform-dev`

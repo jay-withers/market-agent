@@ -425,7 +425,7 @@ third copy would triple the only bill this project has, for nothing. The plumbin
 rebuild.
 
 Dev sets `shared_platform` to the three existing resources in `rg-platform-dev`
-(subscription `02d69b18-478e-4355-ba6e-3cac5585d1e9`). Terraform reads them as data
+(the platform subscription). Terraform reads them as data
 sources; their lifecycle, retention, ingestion caps and workspace-wide quota alerts
 belong to the platform. PostgreSQL and Key Vault diagnostics go to the shared
 workspace, and the workloads receive the shared Application Insights connection
@@ -462,11 +462,15 @@ The workload identity holds only `Key Vault Secrets User` — read, not write.
 ## Database access
 
 The PostgreSQL server has **no password**: `password_auth_enabled` is off and
-Entra is the only way in. The administrator is a named user hardcoded in
-`terraform/main.database.tf` — object ID, principal name and type — so it stays
-the same principal no matter who or what applies, including from CI.
+Entra is the only way in. The administrator is a named user set by
+`postgres_entra_administrator` (object ID and principal name; the type is fixed
+to `User` in `terraform/main.database.tf`), so it stays the same principal no
+matter who or what applies, including from CI. The value isn't committed: CI
+reads it from `TF_VAR_POSTGRES_ENTRA_ADMINISTRATOR`, which github-repos sets on
+the `dev` environment.
 
-Changing the administrator is therefore a code edit rather than a tfvars change.
+Changing the administrator is therefore a change to that variable in
+github-repos (`var.operator`), not a code edit here.
 An Entra group is worth considering if more than one person needs access: it
 takes `principal_type = "Group"` and a group created out of band.
 
