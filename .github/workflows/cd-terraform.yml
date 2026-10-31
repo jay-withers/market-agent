@@ -14,10 +14,13 @@ name: cd-terraform
 # AZURE_TENANT_ID and AZURE_SUBSCRIPTION_ID and makes the token subject
 # `<repo prefix>:environment:dev` — the subject the identity's one federated
 # credential trusts, for ci-terraform's plans and this apply alike. The
-# identity holds Contributor on rg-marketagent-dev, Reader on the subscription
-# and join on cae-platform-dev, nothing more. So an apply that adds a role
-# assignment, or (re)creates the dashboard's managed certificate on the shared
-# environment, fails here: run those as `make apply ENV=dev` locally.
+# identity holds Contributor and Role Based Access Control Administrator on
+# rg-marketagent-dev (conditioned: it can't grant Owner, User Access
+# Administrator or RBAC Administrator), Reader on the subscription and join on
+# cae-platform-dev, nothing more. So role assignments inside
+# rg-marketagent-dev apply here. An apply that adds one anywhere else, or
+# (re)creates the dashboard's managed certificate on the shared environment,
+# fails here: run those as `make apply ENV=dev` locally.
 on:
   push:
     branches: [main]
