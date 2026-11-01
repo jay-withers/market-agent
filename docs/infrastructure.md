@@ -476,6 +476,17 @@ regardless, so **the recorded cost is now double the real bill every day** —
 reasoning all overstate by 2x. DeepSeek's balance, read live, is the true
 figure.
 
+**Broker sync runs only in US market hours.** `broker_sync_cron_expression`
+(default `*/5 13-21 * * 1-5`) covers the 13:30/14:30-20:00/21:00 UTC session
+either side of a clock change. It was `*/5 * * * *`: about 26,000 runs a
+month across three pots, which on its own used up the subscription's
+Container Apps free grant (180,000 vCPU-s) shared by every app. Nothing it
+mirrors changes while the market is shut, and the agent and summary jobs call
+`synchronize()` themselves before reading the account, so they never depend on
+a recent sync run. The weekly `broker_sync` integrity check (snapshot under a
+day old) still passes on Sunday, because the 21:00 summary syncs every pot an
+hour before the review reads it. Market hours alone cut about 80% of the runs.
+
 **The weekly review must fall after that day's summary.** It reports the
 summary's valuation as the week's close, so scheduling it earlier reviews a week
 that ends a day short — an ordering the cron expressions do not enforce.

@@ -168,7 +168,7 @@ variable "budget_start_date" {
 }
 
 variable "broker_sync_cron_expression" {
-  description = "Refresh the Alpaca account mirror and order status without placing orders or calling the model. Shared by every pot's sync job."
+  description = "Refresh the Alpaca account mirror and order status without placing orders or calling the model. Shared by every pot's sync job. The default runs every five minutes from 13:00 to 21:55 UTC on weekdays, which covers the US session in both BST and GMT."
   type        = string
-  default     = "*/5 * * * *"
+  default     = "*/5 13-21 * * 1-5"
 }
