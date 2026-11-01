@@ -244,7 +244,9 @@ resource "azurerm_container_app_job" "weekly_review" {
 }
 
 # Read-only broker requests for one pot: cash, positions and order status,
-# every five minutes. No model calls, orders or email.
+# every five minutes while the US market is open. No model calls, orders or
+# email. Outside those hours nothing on the account moves, and the agent and
+# summary jobs sync for themselves before they read it.
 resource "azurerm_container_app_job" "sync" {
   for_each = local.pots
 
