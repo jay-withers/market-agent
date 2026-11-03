@@ -1,6 +1,6 @@
 /* The API, stubbed.
  *
- * These tests are about layout, not data, so they must not need Postgres, the
+ * These tests are about layout, not data, so they must not need a database, the
  * API image or a network — CI has none of them, and a layout test that only
  * runs when a database happens to be up is a layout test nobody runs.
  *

@@ -3,7 +3,7 @@
 The connection is overridden rather than mocked at the driver, so these cover
 what the API does with a request — status codes, parameter bounds, the bearer
 gate — without needing a database. The SQL itself is exercised by running the
-real thing against Postgres; there is no value in asserting query strings.
+real thing against the database (test_queries.py); there is no value in asserting query strings.
 """
 
 from __future__ import annotations

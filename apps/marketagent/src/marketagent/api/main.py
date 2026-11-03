@@ -22,7 +22,7 @@ from fastapi import Depends, FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 
-from ..db import close_pool
+from ..db import close_database, use_read_only
 from ..settings import settings
 from .deps import connection, require_token
 from .routers import activity, decisions, portfolio
@@ -32,14 +32,16 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """The pool is opened on first use, not here.
+    """The database is fetched on first use, not here.
 
     `min_replicas = 0` means every request may be a cold start, so startup does
-    as little as possible; and a database that is briefly unreachable should
-    fail a request rather than prevent the app from starting at all.
+    as little as possible; and a blob that is briefly unreachable should fail a
+    request rather than prevent the app from starting at all. The API only
+    reads, so it never takes the blob's lease and never waits on a job.
     """
+    use_read_only()
     yield
-    close_pool()
+    close_database()
 
 
 def create_app() -> FastAPI:

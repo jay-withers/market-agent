@@ -28,7 +28,7 @@ from ..accounts import deepseek_key
 from ..broker.alpaca import AlpacaBroker
 from ..broker.base import Broker
 from ..broker.dryrun import DryRunBroker
-from ..db import pool
+from ..db import database
 from ..llm.base import PROMPT_VERSION, Llm, Usage
 from ..llm.deepseek_provider import DeepseekLlm
 from ..marketdata import Bar, fetch_daily_bars, latest_close
@@ -110,7 +110,7 @@ def run(
     usage = Usage(0, 0)
     cost_usd = Decimal(0)
 
-    with pool().connection() as conn:
+    with database().connection() as conn:
         pid = repo.portfolio_id(conn, name=portfolio)
         if not repo.is_active(conn, pid):
             raise RuntimeError(f"portfolio {portfolio!r} is retired; its history is read-only")
@@ -125,7 +125,7 @@ def run(
         )
 
     try:
-        with pool().connection() as conn:
+        with database().connection() as conn:
             tickers = repo.active_tickers(conn, pid)
         counts["tickers_considered"] = len(tickers)
         if not tickers:
@@ -134,9 +134,9 @@ def run(
         paper = not isinstance(broker, DryRunBroker)
         opening = None
         if paper:
-            opening = synchronize(pid, broker, pool())
+            opening = synchronize(pid, broker, database())
         else:
-            with pool().connection() as conn:
+            with database().connection() as conn:
                 synced = conn.execute(
                     "SELECT broker_account_id FROM portfolio WHERE id=%s", (pid,)
                 ).fetchone()[0]
@@ -153,7 +153,7 @@ def run(
         articles = fetch_news(tickers, hours=NEWS_WINDOW_HOURS)
         counts["news_fetched"] = len(articles)
 
-        with pool().connection() as conn:
+        with database().connection() as conn:
             repo.save_prices(conn, bars)
             news_ids = repo.save_news(conn, articles)
             conn.commit()
@@ -185,7 +185,7 @@ def run(
                     relevant[ticker].append(article)
 
         counts["news_relevant"] = sum(len(v) for v in relevant.values())
-        with pool().connection() as conn:
+        with database().connection() as conn:
             repo.save_news_analysis(conn, analysis_rows)
             conn.commit()
 
@@ -201,15 +201,15 @@ def run(
                 logger.warning("%s: no price, skipping", ticker)
                 continue
 
-            snapshot = synchronize(pid, broker, pool()) if paper else None
+            snapshot = synchronize(pid, broker, database()) if paper else None
             if snapshot and any(o.ticker == ticker for o in snapshot.open_orders):
                 logger.info("%s: an order is already open; skipping", ticker)
                 continue
-            with pool().connection() as conn:
+            with database().connection() as conn:
                 state, unpriced = repo.build_state(conn, pid, closes)
             if snapshot:
                 state = risk_state(state, snapshot)
-            with pool().connection() as conn:
+            with database().connection() as conn:
                 already = repo.trades_today(conn, pid)
                 history = repo.recent_decisions(conn, pid, ticker, DECISION_HISTORY)
             if unpriced:
@@ -250,7 +250,7 @@ def run(
             )
 
             article_ids = [news_ids[a.external_id] for a in relevant[ticker]]
-            with pool().connection() as conn:
+            with database().connection() as conn:
                 decision_id = repo.save_decision(
                     conn,
                     pid,
@@ -289,8 +289,8 @@ def run(
                 conn.commit()
 
         if paper:
-            synchronize(pid, broker, pool())
-        with pool().connection() as conn:
+            synchronize(pid, broker, database())
+        with database().connection() as conn:
             repo.close_run(
                 conn,
                 run_id,
@@ -315,7 +315,7 @@ def run(
         # The run row is closed as failed with the message, so a failure is
         # visible in the dashboard rather than only in container logs that the
         # daily ingestion cap may have dropped.
-        with pool().connection() as conn:
+        with database().connection() as conn:
             repo.close_run(
                 conn,
                 run_id,
@@ -354,7 +354,7 @@ def _analysable(pid: int, tickers: list[str], closes: dict[str, Bar], opening) -
     refused, so nothing is. Checked once, up front: orders submitted before
     the open do not fill during the run, so the headroom cannot grow mid-run.
     """
-    with pool().connection() as conn:
+    with database().connection() as conn:
         state, _ = repo.build_state(conn, pid, closes)
         already = repo.trades_today(conn, pid)
     if opening:

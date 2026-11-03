@@ -76,8 +76,8 @@ def test_the_static_credential_reports_an_expiry_in_the_future():
 
 @pytest.mark.parametrize("method", ["get_token", "get_token_info"])
 def test_the_static_credential_refuses_a_scope_it_was_not_issued_for(method):
-    """A Key Vault token handed to Postgres fails as "password authentication
-    failed", which is one of the hardest errors in this project to read."""
+    """A Key Vault token handed to another resource fails as a 401 or 403 that
+    reads like a missing grant rather than the wrong token."""
     cred = StaticTokenCredential("a-token")
 
     with pytest.raises(ValueError, match="scoped to"):

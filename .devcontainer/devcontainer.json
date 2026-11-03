@@ -11,11 +11,11 @@
   // it notices first — which is how you end up looking at the API's bare
   // {"detail":"Not Found"} instead of the dashboard. The API has no route at
   // "/" by design: it serves /api/*, /healthz, /readyz and /docs only.
-  "forwardPorts": [8080, 8000, 5432],
+  "forwardPorts": [8080, 8000, 10000],
   "portsAttributes": {
     "8080": { "label": "MarketAgent dashboard", "onAutoForward": "openBrowser" },
     "8000": { "label": "MarketAgent API (no page at /, try /docs)", "onAutoForward": "silent" },
-    "5432": { "label": "Postgres", "onAutoForward": "silent" }
+    "10000": { "label": "Azurite (database blob)", "onAutoForward": "silent" }
   },
   "customizations": {
     "vscode": {

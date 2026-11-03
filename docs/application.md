@@ -56,11 +56,13 @@ landed rather than declared up front, and new ones still are.
   currently are. The Azure SDKs are imported *inside* the functions that need
   them so the models, the engine and the tests need neither the SDK nor a
   credential.
-- `db.py` authenticates with an Entra token as the password. A
-  `psycopg.Connection` subclass fetches one inside `connect()` so each new
-  connection gets a fresh token, and `max_lifetime=1800` retires connections
-  well inside a token's ~60 minutes. The pool is built lazily, so importing the
-  module doesn't demand a credential.
+- `db.py` keeps the database as a DuckDB file in blob storage: a writer leases
+  the blob for each `database().connection()` block, and the API reads an
+  ETag-checked copy. Its wrapper speaks enough of psycopg's interface (`%s`
+  placeholders, `cursor(row_factory=dict_row)`, commit and rollback, parsed
+  JSON) that `repository.py` and `queries.py` kept their shape when PostgreSQL
+  went. The database is opened lazily, so importing the module doesn't demand a
+  credential.
 
 ### The LLM cascade
 
@@ -184,7 +186,7 @@ Three fixed pots, `tech`, `health` and `energy`, each about 50 S&P 500 names
 from one sector (energy is Energy plus Utilities, since Energy alone has about
 22). Each has its own Alpaca paper account and its own DeepSeek key, so
 DeepSeek's usage page attributes cost to a pot. They replaced static-100 and
-dynamic-500 in `sql/011-sector-pots.sql`, which marks the old accounts inactive
+dynamic-500 in the old `sql/011-sector-pots.sql` (now `schema/002-seed.sql`), which marks the old accounts inactive
 rather than deleting them: their history stays readable, but no job, API route
 or dashboard tab iterates them.
 
@@ -304,10 +306,10 @@ Live API facts, all verified rather than assumed:
   listed ten. `news.py` narrows to the watchlist before storing, which is what
   keeps `news.tickers` meaningful.
 
-`db.py` picks its authentication from whether `POSTGRES_PASSWORD` is set: empty
-means an Entra token (Azure has no password at all), set means ordinary password
-auth for the local Postgres that `docker compose` runs. Without that split the
-local loop could not connect.
+`db.py` reaches the blob with the managed identity in Azure, and with
+Azurite's well-known connection string when `AZURE_STORAGE_CONNECTION_STRING`
+is set, which is how `docker compose` runs it. With no `DATABASE_BLOB_URL` at
+all, the file at `DATABASE_PATH` is the database, which is what the tests use.
 
 `repository.py` is a deviation from the plan's file layout, which lists no such
 module. The alternative is the same SQL in `jobs/agent.py` and again in the
@@ -681,22 +683,19 @@ in as `AZURE_KEYVAULT_TOKEN`, which `settings.credential()` wraps in
 `StaticTokenCredential`. It lasts about an hour and unlocks nothing but Key
 Vault — a far better thing to hand a container than four long-lived API keys in
 a file. That credential **refuses a scope it was not issued for**, because
-`credential()` also serves Postgres token auth and a Key Vault token used there
-fails as `password authentication failed`, which this file already records as
-one of the hardest errors here to read correctly. `.env` still works and
+`credential()` also serves the database blob, and a Key Vault token used there
+fails as a 403 that reads like a missing role assignment. `.env` still works and
 `.env.example` documents it, for anyone with no Azure access.
 
 **`docker compose` here has no bind mounts, on purpose.** The Docker daemon runs
 on the *host* (docker-outside-of-docker), so a relative bind mount resolves
-against the host filesystem — `./sql` fails from inside the dev container with
+against the host filesystem and fails from inside the dev container with
 "path is not shared from the host", because `/workspaces/market-agent` does not
-exist there. Build contexts are sent by the *client* and work from either side,
-so `docker/Dockerfile.db` bakes the schema in instead. Two consequences worth
-keeping: published ports land on the **host**, so from inside the dev container
-reach a service at its bridge IP or `host.docker.internal`; and the db image
-copies `sql/0*.sql` only, because `grant-uai-access.sql` calls
-`pgaadauth_create_principal` and `\connect`s to a database named after the
-Azure server — as an initdb script it would fail the whole initialisation.
+exist there. Build contexts are sent by the *client* and work from either side.
+Published ports land on the **host**, so from inside the dev container reach a
+service at its bridge IP or `host.docker.internal`. That is also why
+`make demo` pipes `demo/seed.sql` into `marketagent sql` on stdin rather than
+mounting it.
 
 **`uv sync` installs the project editable by default**, which produces a `.pth`
 pointing at `/app/src`. The runtime stage copies only the virtualenv, so the

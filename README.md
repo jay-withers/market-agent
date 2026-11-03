@@ -16,7 +16,7 @@ both deployed and running — see [The application](#the-application) and
 | Resource | Purpose |
 | --- | --- |
 | Resource group | Application resources; dev uses shared platform resources in `rg-platform-dev` |
-| User-assigned managed identity | Shared by all five workloads; reads Key Vault and authenticates to PostgreSQL |
+| User-assigned managed identity | Shared by all five workloads; reads Key Vault and the database blob |
 | Log Analytics workspace | Dev uses existing `log-platform-dev` |
 | Application Insights | Dev uses existing `appi-platform-dev` |
 | Key Vault | RBAC-authorised. Terraform owns the vault, **not** the secret values |
@@ -27,7 +27,8 @@ both deployed and running — see [The application](#the-application) and
 | Container app job `sync` | Every five minutes: mirror Alpaca cash, equity, positions and open orders |
 | Container app job `daily-summary` | Scheduled: performance, benchmarks, email |
 | Container app job `weekly-review` | Scheduled Sunday: reviews the week, proposes changes |
-| PostgreSQL Flexible Server + database | Burstable B1ms, Entra-only authentication. The one resource that bills while idle |
+| Storage account `stmarketagentdev` | The database: one DuckDB file in the `database` container. Versioned, soft-deleted, delete-locked |
+| PostgreSQL Flexible Server + database | **Retired**: the database before the blob, kept a few days for checking, then removed |
 | Action group | Where alerts go — subscription Owners, by role rather than by address |
 | Metric alerts (2) | The database is down or near full |
 | Log alerts | Dedicated workspaces get an ingestion-quota alert; the shared platform monitors job failures |
@@ -40,12 +41,11 @@ Two departures from the original design:
   meaningfully while idle. ACR Basic is a flat monthly charge with no consumption
   tier. The images live in public ghcr.io packages instead, which also means no
   workload needs a `registry` block or a pull secret.
-- **PostgreSQL, not Azure SQL** — and this one was forced rather than chosen.
-  Azure SQL serverless auto-pauses to near zero and would have been the cheaper
-  design, but this subscription cannot provision Azure SQL in any region policy
-  allows. See [Cost model](#cost-model) below. The consequence for application code
-  is `psycopg` rather than an ODBC driver (`pyodbc`/`aioodbc`); the relational
-  schema is unaffected.
+- **No database server.** The database is a DuckDB file in blob storage, which
+  the jobs lease while they write and the API reads a copy of. It replaced a
+  PostgreSQL Flexible Server (Azure SQL couldn't be provisioned here at all),
+  which billed every hour for a database touched for minutes a day. See
+  [Cost model](#cost-model) below.
 
 ## The application
 
@@ -58,7 +58,7 @@ its own.
 | Module | What it does |
 | --- | --- |
 | `settings.py` | Configuration, and secrets from an env var first then Key Vault |
-| `db.py` | `psycopg` pool authenticated with an Entra token instead of a password |
+| `db.py` | The DuckDB file in blob storage: a lease per write, an ETag-checked copy for reads |
 | `models.py` | Domain models, risk configuration, and the LLM's output types |
 | `risk.py` | The deterministic risk engine — a pure function |
 
@@ -67,7 +67,7 @@ make install   # pre-commit hooks and Python dependencies (needs re-running afte
 make test      # pytest
 ```
 
-Money is `Decimal` throughout, matching the `NUMERIC(18,4)` columns in `sql/`,
+Money is `Decimal` throughout, matching the `DECIMAL(18,4)` columns in `schema/`,
 and quantized **towards zero** so a rounding step can never approve a trade over
 a limit.
 
@@ -83,7 +83,7 @@ the single constraint that decided the outcome, which is what gets written to
 ## Running it locally
 
 ```bash
-make up          # Postgres with the schema baked in, the API, and the dashboard
+make up          # Azurite (holding the database blob), the API, and the dashboard
 make demo        # same stack, loaded with dummy $100,000 account data
 make run-agent   # one agent run: real market data, LLM calls, Alpaca paper orders
 make down        # stop, and delete the data volume
@@ -143,12 +143,12 @@ configured with the new tag, its `/healthz` on the default FQDN reports it as
 `version` (allowing five minutes for a cold start), and `/readyz` answers 200.
 It then starts one run of every job (each pot's agent and sync, the summary and
 the weekly review) with its args swapped for `marketagent selfcheck`, which
-checks the settings, PostgreSQL and every secret a run reads, and places no
+checks the settings, reading the database blob and every secret a run reads, and places no
 order, calls no LLM and sends nothing; and waits for each to succeed. If the
 deploy or the smoke test fails, the workflow redeploys the recorded tag and
 fails the run, so a `deploy-failed` issue says whether dev is back on the old
-version. Rolling back moves the images only: `make sql` is not part of a
-deploy, so a release must not need a schema the previous version can't read.
+version. Rolling back moves the images only, and a newer schema file stays
+applied, so a release must not add a schema the previous version can't read.
 
 ```bash
 make deploy IMAGE_TAG=v1.2.3   # what cd-publish runs: update every app and job to a published tag
@@ -178,24 +178,14 @@ The two images carry their own tag so one can be rolled back without the other
 — `make deploy DASHBOARD_IMAGE_TAG=v0.3.3` — but `make deploy` on its own sets
 both from the same `IMAGE_TAG`, which is the normal case.
 
-**Apply the SQL before deploying a change that needs it.** `make sql` is not run
-by the deploy, and the schema is not versioned with the image — a migration the
-code depends on has to land first. The agent job queries `companies.is_benchmark`,
-for instance, and would fail outright against a database without
-`004-benchmark-companies.sql`.
+**The schema ships with the code.** Schema files live in
+`apps/marketagent/src/marketagent/schema/`, and the first job to write applies
+any the database lacks, so there is no separate SQL step before a deploy.
 
-When a release adds a Terraform resource or output, bootstrap it before
-`make deploy`. For this USD migration, after the release image is published:
-
-```bash
-make sql
-TF_VAR_marketagent_image_tag=v1.2.3 TF_VAR_dashboard_image_tag=v1.2.3 make apply ENV=dev
-make deploy IMAGE_TAG=v1.2.3 ENV=dev
-```
-
-The apply creates the broker-sync job and records its output in state. Until
-then, `make deploy` stops before changing any running workload and explains
-that the infrastructure apply is required.
+When a release adds a Terraform resource or output, apply it before the
+release deploys: `make deploy` reads outputs (the jobs' names,
+`database_blob_url`) and stops before changing any running workload if one is
+missing.
 
 **Expect the first request after idle to be slow.** `min_replicas = 0` means a
 cold start, and the first call can take long enough to look like a failure. That
@@ -296,7 +286,7 @@ make install           # pre-commit hooks and Python dependencies
 make test              # the Python test suite
 make lint              # all pre-commit hooks against every file
 make secrets           # prompt for the application secrets, store them in Key Vault
-make sql               # run every file in sql/ against the database
+make sql < file.sql    # SQL against the Azure database blob, as one leased transaction
 make up / down / logs  # the local stack
 make run-agent         # one agent run against the local stack
 make build / push      # the linux/amd64 images, and ghcr.io
@@ -337,8 +327,8 @@ for you).
 
 ## Cost model
 
-Everything except the database costs nothing while idle. The database does not,
-and that is not a configuration mistake — see below.
+Nothing costs meaningfully while idle. The database was the exception until it
+moved from a PostgreSQL server into a blob — see below.
 
 | | Idle cost |
 | --- | --- |
@@ -348,18 +338,16 @@ and that is not a configuration mistake — see below.
 | Log Analytics / App Insights | Dev shares platform ingestion and caps; costs accrue in `rg-platform-dev`, outside the app resource-group budget |
 | Managed identity, resource group | Free |
 | Alert rules | A few pence a month each; they read the platform metric store and need no agent or synthetic traffic |
-| PostgreSQL Flexible Server | **~£13/month, always** — ~£9.71 B1ms compute plus ~£3 storage |
+| Database (storage account) | Pennies: a few MB, its versions, and a few hundred operations a day |
+| PostgreSQL Flexible Server (retired) | ~£13/month while it still exists — removed once the blob is proven |
 
-### Why the database bills while idle
+### Why the database moved into a blob
 
-PostgreSQL Flexible Server has **no serverless or auto-pause tier**. It bills its
-SKU per hour for as long as it exists. That is a property of the service, not
-something the configuration can tune away — the only lever is stopping the server,
-and a stopped server auto-restarts after seven days.
-
-Azure SQL serverless *does* auto-pause, and would have cost roughly £0. It was the
-original design. It is not used because **this subscription cannot provision Azure
-SQL in any region it is allowed to deploy to**:
+PostgreSQL Flexible Server has **no serverless or auto-pause tier**: it billed its
+B1ms every hour, about £13 a month, for a database the jobs touch for minutes a
+day. Azure SQL serverless *does* auto-pause, and was the original design, but
+**this subscription cannot provision Azure SQL in any region it is allowed to
+deploy to**:
 
 - The Azure Policy assignment `allowed-locations-dev` has effect **Deny** and
   permits only `westeurope` and `northeurope`.
@@ -367,22 +355,16 @@ SQL in any region it is allowed to deploy to**:
 
 That restriction is regional, not per-SKU: in both regions all 208 Azure SQL
 service objectives across all ten editions report `Visible` rather than
-`Available`, `Free` and `Basic` included. No smaller SKU gets around it.
+`Available`, `Free` and `Basic` included. PostgreSQL was restricted in
+`westeurope` but open in `northeurope`, which is why `var.location` defaults
+there.
 
-PostgreSQL is restricted in `westeurope` but open in `northeurope`, which is why
-`var.location` defaults there and why PostgreSQL is the engine.
-
-**To get back to a near-free database**, amend `allowed-locations-dev` to admit a
-SQL-capable region (`francecentral`, `swedencentral`, `germanywestcentral`,
-`switzerlandnorth`, `italynorth` and `spaincentral` are all verified available),
-then switch back to Azure SQL — ideally on its free offer, which grants 100,000
-vCore-seconds and 32 GB monthly, permanently. That needs `azapi_resource`, since
-`azurerm` exposes no `useFreeLimit`.
-
-One thing that did get simpler: the Azure SQL design carried a **£150/month**
-trap, where a long-lived connection pool prevented auto-pause and left the
-database billing around the clock. With an always-on server that risk does not
-exist. Connection pooling is now free to use.
+So the database became a file: DuckDB, kept as one blob, leased by whichever
+job is writing and read from a cached copy by the API. DuckDB rather than
+SQLite because the SQL was written for Postgres, and DuckDB keeps money exact
+through `sum()` and speaks most of that dialect. The data is a few MB, the jobs
+run a few times a day, and the API is read-only, which is the shape a single
+file suits.
 
 ### Checking region availability
 
@@ -419,15 +401,15 @@ make plan ENV=prd
 ```
 
 All three are planned in CI, but **only `dev` is actually applied.** Unlike
-scale-to-zero compute, each PostgreSQL server that exists costs ~£13/month whether
-used or not, and "production" here still means paper trading — so a second and
-third copy would triple the only bill this project has, for nothing. The plumbing is kept so that changing this later is a decision, not a
+scale-to-zero compute, "production" here still means paper trading, so a second
+and third copy would be three sets of alerts and Key Vaults for nothing. The plumbing is kept so that changing this later is a decision, not a
 rebuild.
 
 Dev sets `shared_platform` to the three existing resources in `rg-platform-dev`
 (the platform subscription). Terraform reads them as data
 sources; their lifecycle, retention, ingestion caps and workspace-wide quota alerts
-belong to the platform. PostgreSQL and Key Vault diagnostics go to the shared
+belong to the platform. Key Vault diagnostics (and the retired PostgreSQL
+server's) go to the shared
 workspace, and the workloads receive the shared Application Insights connection
 string. Job alerts and historical log queries filter by environment and job.
 The deployment identity needs read access to those resources and permission to
@@ -461,67 +443,35 @@ The workload identity holds only `Key Vault Secrets User` — read, not write.
 
 ## Database access
 
-The PostgreSQL server has **no password**: `password_auth_enabled` is off and
-Entra is the only way in. The administrator is a named user set by
-`postgres_entra_administrator` (object ID and principal name; the type is fixed
-to `User` in `terraform/main.database.tf`), so it stays the same principal no
-matter who or what applies, including from CI. The value isn't committed: CI
-reads it from `TF_VAR_POSTGRES_ENTRA_ADMINISTRATOR`, which github-repos sets on
-the `dev` environment.
+The database is `marketagent.duckdb` in the `database` container of
+`stmarketagentdev`. The storage account takes **Entra tokens only**
+(`shared_access_key_enabled = false`): the managed identity, and the operators
+in `key_vault_administrator_object_ids`, have Storage Blob Data Contributor on
+the container.
 
-Changing the administrator is therefore a change to that variable in
-github-repos (`var.operator`), not a code edit here.
-An Entra group is worth considering if more than one person needs access: it
-takes `principal_type = "Group"` and a group created out of band.
-
-Granting the managed identity access needs SQL that Terraform cannot execute, and
-so does the schema. That SQL lives in `sql/`, one self-contained file per task,
-run by `scripts/Invoke-DbSql.ps1`:
-
-```powershell
-./scripts/Invoke-DbSql.ps1                             # all of sql/, in filename order
-./scripts/Invoke-DbSql.ps1 -Path ./sql/001-schema.sql  # one file
-./scripts/Invoke-DbSql.ps1 -Path ./sql/001-schema.sql,./sql/003-seed-watchlist.sql
+```bash
+echo "SELECT name, cash_usd, equity_usd FROM portfolio WHERE is_active" | make sql
+make sql < fix.sql   # one transaction; uploads only if every statement succeeds
 ```
 
-The script adds a temporary firewall rule for your public IP (the "allow Azure
-services" rule doesn't cover your machine), connects as the signed-in user with
-an Entra access token in place of the password, runs each file in turn, then
-offers to remove the rule again — answer `n` to keep it while iterating, since
-firewall changes are slow and serialise on the server. It needs `psql` and `az`
-on PATH, and takes the dev resource names as parameter defaults.
+`make sql` runs as you (`az login`) and takes the blob's lease like a job, so it
+waits for a running job rather than racing it.
 
-It carries a `pwsh` shebang and is executable, so those commands work unchanged
-from bash — a comma-separated `-Path` is the one thing that needs a `pwsh` prompt,
-since `pwsh -File` passes arguments as plain strings and won't parse it as an
-array.
+**Schema changes** are numbered, idempotent files in
+`apps/marketagent/src/marketagent/schema/`, each recording itself in
+`schema_migrations`. The first writer to open a database applies any it lacks.
+There are no down-migrations; reversing something is a new numbered file.
+`001-schema.sql` is the end state of the old PostgreSQL migrations, and
+`002-seed.sql` the companies, pots and watchlists they seeded.
 
-Everything in one invocation shares that one firewall rule and one access token,
-which is the whole reason it takes more than one file: a rule per migration would
-spend most of the run waiting on the server.
+**Restoring a bad write**: the blob is versioned, with 30-day soft delete.
+Promote the previous version in the portal, or copy it over the current blob by
+version ID.
 
-Migrations are numbered (`001-schema.sql`), written so re-running them is a no-op,
-and record themselves in a `schema_migrations` table. There are no
-down-migrations — reversing something is a new numbered file.
-
-**`sql/grant-uai-access.sql` has already been run** — the identity has `CONNECT`,
-`USAGE, CREATE ON SCHEMA public`, privileges on the tables that exist, and default
-privileges covering any created later. It's safe to re-run, in any order relative
-to the migrations.
-
-Two traps worth knowing if you write another file:
-
-- **`pgaadauth` is installed only in the `postgres` maintenance database**, not in
-  the application database, so `pgaadauth_create_principal` has to run there or it
-  fails with `function ... does not exist`. Roles are cluster-wide, so the file
-  does the create after `\connect postgres` and then switches back for the GRANTs.
-- **The Entra administrator's registered `principal_name` is the role name**, so it
-  has to be the UPN. A display name there means `psql user=<UPN>` fails with
-  `password authentication failed`, which looks like a token problem and isn't.
-
-Application code connects with `psycopg`, using the managed identity's access
-token as the password and the `AZURE_CLIENT_ID` already passed into every
-container.
+**Moving off PostgreSQL** was `make import-pg`, run once with the jobs idle. It
+attaches the server read-only through DuckDB's postgres extension, copies every
+table, and uploads only if every row count matches. The server
+(`main.database.tf`) stays for a few days after, then a follow-up removes it.
 
 ## Scheduling
 
@@ -600,7 +550,9 @@ apps/
   marketagent/                  # one Python package, five entrypoints, one image
     src/marketagent/
       settings.py               # config; secrets from env, then Key Vault
-      db.py                     # psycopg pool, Entra token or password auth
+      db.py                     # DuckDB file in blob: lease per write, cached reads
+      importpg.py               # one-off copy off the retired PostgreSQL server
+      schema/                   # numbered, idempotent; applied by the first writer
       models.py                 # domain, risk config, the LLM's output types
       risk.py                   # the deterministic risk engine (pure)
       risklimits.py             # the engine's bounds, from RISK_* variables
@@ -613,7 +565,7 @@ apps/
       repository.py             # the writes, sharing a caller's transaction
       telemetry.py              # App Insights; off without a connection string
       queries.py                # the API's reads
-      cli.py                    # marketagent api|agent|sync|summary|weekly
+      cli.py                    # marketagent api|agent|sync|summary|weekly|sql|import-pg
       llm/base.py  llm/deepseek_provider.py
       broker/base.py  broker/alpaca.py  broker/dryrun.py
       jobs/agent.py  jobs/summary.py
@@ -624,17 +576,6 @@ apps/
     src/  nginx/  public/config.json.template
     docker-entrypoint.sh        # renders config.json from $API_ORIGIN at start
     Dockerfile
-sql/                            # numbered, idempotent, applied by the runner
-  001-schema.sql
-  002-trade-submission-fields.sql
-  003-seed-watchlist.sql
-  004-benchmark-companies.sql
-  005-weekly-reviews.sql
-  006-decision-context.sql
-  007-job-costs.sql
-  008-usd-broker-account.sql    # USD ledger and Alpaca account mirror
-  grant-uai-access.sql          # Azure-only: pgaadauth lives in `postgres`
-docker/Dockerfile.db            # local Postgres with the schema baked in
 docker-compose.yml
 .env.example
 terraform/
@@ -644,7 +585,8 @@ terraform/
   main.alerts.tf                # action group, alert rules, budget
                                 #   (what each rule watches: locals.alerts.tf)
   main.key-vault.tf             # vault and RBAC (never the secret values)
-  main.database.tf              # PostgreSQL Flexible Server + database
+  main.database.tf              # the retired PostgreSQL server, until it is removed
+  main.storage.tf               # the database's storage account, container and grants
   main.container-apps-env.tf    # Container Apps environment
   main.container-apps.tf        # api and dashboard
   main.container-apps-jobs.tf   # agent, daily-summary and weekly-review jobs
@@ -654,7 +596,6 @@ terraform/
   backends/{dev,stg,prd}.hcl    # partial backend config per environment
   environments/{dev,stg,prd}.tfvars
 scripts/
-  Invoke-DbSql.ps1              # runs sql/ against the database
   Set-KeyVaultSecrets.ps1       # prompts for the Key Vault values
   check-tf-standards.sh         # enforces the file-layout convention
   tflint-per-env.sh  checkov-per-env.sh

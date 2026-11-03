@@ -1,4 +1,4 @@
-"""queries.py against a real Postgres.
+"""queries.py against a real database.
 
 The API's read layer, and the other half of the SQL that nothing executed until
 these tests existed. `tests/test_api.py` covers what the HTTP layer does with a
@@ -10,7 +10,7 @@ Two properties here are worth more than the coverage: the FX rate the overview
 values positions with, which was wrong in a way that worsened over time, and
 `latest_review` withholding `body_html`.
 
-Skipped when POSTGRES_TEST_DSN is unset; `make test-db` sets it.
+Runs against a scratch DuckDB file (see conftest).
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ OTHER = "MSFT"
 TODAY = date.today()
 
 # `queries.py` takes an account *name*, not a pid, and resolves the pid itself.
-# The tech pot is seeded with real watchlist data by 011-sector-pots.sql;
+# The tech pot is seeded with real watchlist data by schema/002-seed.sql;
 # nothing here depends on which pot is used, so one constant keeps every call
 # site consistent.
 PORTFOLIO = "tech"

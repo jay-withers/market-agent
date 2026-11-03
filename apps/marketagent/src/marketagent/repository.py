@@ -5,7 +5,7 @@ alternative is SQL inside `jobs/agent.py` and again inside the API's routers,
 reading the same tables two different ways — so this keeps the statements
 together and lets both callers share them.
 
-Each function takes a connection rather than reaching for the pool, so a caller
+Each function takes a connection rather than reaching for the database, so a caller
 can put several writes in one transaction. The agent job relies on that: a
 decision and the trade implementing it must both land or neither.
 """
@@ -16,9 +16,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from psycopg.rows import dict_row
-from psycopg.types.json import Jsonb
-
+from .db import Json, dict_row
 from .marketdata import Bar
 from .models import PortfolioState, Position, Recommendation, RiskVerdict, money
 from .news import Article
@@ -57,7 +55,7 @@ def portfolio_id(conn: Any, name: str) -> int:
     """
     row = conn.execute("SELECT id FROM portfolio WHERE name = %s", (name,)).fetchone()
     if row is None:
-        raise LookupError(f"portfolio '{name}' does not exist — run sql/011-sector-pots.sql")
+        raise LookupError(f"portfolio '{name}' does not exist — see schema/002-seed.sql")
     return int(row[0])
 
 
@@ -338,7 +336,7 @@ def open_run(
     row = conn.execute(
         "INSERT INTO agent_runs (portfolio_id, trigger, dry_run, image_tag, config)"
         " VALUES (%s, %s, %s, %s, %s) RETURNING id",
-        (pid, trigger, dry_run, image_tag, Jsonb(config) if config is not None else None),
+        (pid, trigger, dry_run, image_tag, Json(config) if config is not None else None),
     ).fetchone()
     return int(row[0])
 
@@ -417,11 +415,11 @@ def save_decision(
             money(rec.suggested_amount_usd) if rec.suggested_amount_usd else None,
             verdict.approved_amount_usd,
             # mode="json" so Decimals serialise as strings rather than failing:
-            # jsonb has no decimal type, and float would defeat the point of
+            # JSON has no decimal type, and float would defeat the point of
             # storing exactly what the model was shown.
-            Jsonb(state.model_dump(mode="json")),
-            Jsonb(verdict.model_dump(mode="json")),
-            Jsonb(_jsonable(prompt_context)) if prompt_context else None,
+            Json(state.model_dump(mode="json")),
+            Json(verdict.model_dump(mode="json")),
+            Json(_jsonable(prompt_context)) if prompt_context else None,
             input_tokens,
             output_tokens,
         ),
@@ -490,8 +488,12 @@ def apply_fill(
     conn.execute(
         "INSERT INTO positions (portfolio_id,ticker,quantity,avg_cost_usd) VALUES (%s,%s,%s,%s)"
         " ON CONFLICT (portfolio_id,ticker) DO UPDATE SET"
+        # DuckDB divides DECIMALs as DOUBLE. Its ~16 significant digits cover
+        # the column's 9 decimal places at any share price, and the cast puts
+        # the result back in DECIMAL before it is stored.
         " avg_cost_usd=CASE WHEN %s>0 THEN"
-        " (positions.avg_cost_usd*positions.quantity+%s)/NULLIF(positions.quantity+%s,0)"
+        " ((positions.avg_cost_usd*positions.quantity+%s)"
+        "/NULLIF(positions.quantity+%s,0))::DECIMAL(24, 9)"
         " ELSE positions.avg_cost_usd END, quantity=positions.quantity+%s,"
         " market_value_usd=NULL, updated_at=now()",
         (pid, ticker, signed, price_usd, signed, notional_usd, signed, signed),
@@ -605,7 +607,7 @@ def day_activity(conn: Any, pid: int, as_of: date) -> dict[str, Any]:
     runs = conn.execute(
         "SELECT started_at, finished_at, status, trigger, dry_run, error,"
         "       (status = 'running'"
-        "        AND started_at < now() - make_interval(secs => %s)) AS stale"
+        "        AND started_at < now() - to_seconds(%s)) AS stale"
         " FROM agent_runs WHERE portfolio_id = %s AND started_at::date = %s ORDER BY started_at",
         (JOB_TIMEOUT_SECONDS, pid, as_of),
     ).fetchall()
@@ -684,7 +686,7 @@ def save_summary(
 
 
 def _jsonable(value: Any) -> Any:
-    """Make a metrics structure safe for `jsonb`.
+    """Make a metrics structure safe for a JSON column.
 
     The same conversion `model_dump(mode="json")` does for the Pydantic objects
     in `ai_decisions`, but these rows come straight from SQL and are plain
@@ -778,14 +780,16 @@ def week_metrics(conn: Any, pid: int, start: date, end: date) -> dict[str, Any]:
         " FROM ai_decisions d"
         " CROSS JOIN LATERAL ("
         "   SELECT r.value->>'constraint' AS constraint_name"
-        "   FROM jsonb_array_elements(d.risk_verdict->'reasons') WITH ORDINALITY AS r(value, ord)"
+        # json_each's key is the array index, which keeps the tie-break on
+        # the earlier reason.
+        "   FROM json_each(d.risk_verdict->'reasons') AS r"
         "   WHERE r.value->>'cap_usd' IS NOT NULL"
-        "   ORDER BY (r.value->>'cap_usd')::numeric, r.ord LIMIT 1"
+        "   ORDER BY (r.value->>'cap_usd')::DECIMAL(18, 4), r.key::INTEGER LIMIT 1"
         " ) cause"
         " WHERE d.portfolio_id = %(pid)s"
         "   AND d.risk_verdict->>'binding_constraint' = 'below_min_trade_usd'"
         "   AND d.decided_at::date BETWEEN %(start)s AND %(end)s"
-        " GROUP BY cause ORDER BY decisions DESC, cause"
+        " GROUP BY cause.constraint_name ORDER BY decisions DESC, cause"
     )
 
     # The review is told what the limits are now but was never told the
@@ -1002,12 +1006,12 @@ def week_integrity(conn: Any, pid: int, start: date, end: date) -> list[dict[str
     bad_runs = listing(
         "SELECT started_at::date, status,"
         "       (status = 'running'"
-        "        AND started_at < now() - make_interval(secs => %(timeout)s)) AS stale"
+        "        AND started_at < now() - to_seconds(%(timeout)s)) AS stale"
         " FROM agent_runs"
         " WHERE started_at::date BETWEEN %(start)s AND %(end)s"
         "   AND (status = 'failed'"
         "        OR (status = 'running'"
-        "            AND started_at < now() - make_interval(secs => %(timeout)s)))"
+        "            AND started_at < now() - to_seconds(%(timeout)s)))"
         " ORDER BY started_at",
         {**window, "timeout": JOB_TIMEOUT_SECONDS},
     )
@@ -1132,8 +1136,8 @@ def save_weekly_review(
             assessment,
             body_markdown,
             body_html,
-            Jsonb(_jsonable(metrics)),
-            Jsonb(_jsonable(recommendations)),
+            Json(_jsonable(metrics)),
+            Json(_jsonable(recommendations)),
             model,
             prompt_version,
             email_status,
@@ -1163,8 +1167,10 @@ def last_recommendations(conn: Any, before: date) -> list[dict[str, Any]]:
 def save_broker_snapshot(conn: Any, pid: int, snapshot: Any) -> None:
     """Atomically replace the account mirror, retaining its original equity baseline."""
     account = snapshot.account
+    # No FOR UPDATE: the caller holds the database's blob lease, so no other
+    # writer can change the row between this read and the update.
     existing = conn.execute(
-        "SELECT broker_account_id FROM portfolio WHERE id=%s FOR UPDATE", (pid,)
+        "SELECT broker_account_id FROM portfolio WHERE id=%s", (pid,)
     ).fetchone()
     if existing is None:
         raise LookupError("Portfolio does not exist")

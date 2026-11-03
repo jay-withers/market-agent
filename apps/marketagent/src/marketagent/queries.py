@@ -25,8 +25,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from psycopg.rows import dict_row
-
+from .db import dict_row
 from .repository import JOB_TIMEOUT_SECONDS, active_portfolios, portfolio_id
 
 
@@ -277,7 +276,8 @@ def news(conn: Any, limit: int = 50, relevant_only: bool = False) -> list[dict[s
         "       avg(a.sentiment_score) AS avg_sentiment,"
         "       count(a.id) AS analysis_count"
         " FROM news n LEFT JOIN news_analysis a ON a.news_id = n.id"
-        " GROUP BY n.id"
+        # Every column named: DuckDB does not infer them from the key.
+        " GROUP BY n.id, n.headline, n.summary, n.url, n.source, n.published_at, n.tickers"
         f" {having}"
         " ORDER BY n.published_at DESC LIMIT %s",
         (limit,),
@@ -313,7 +313,7 @@ def runs(conn: Any, portfolio: str, limit: int = 30) -> list[dict[str, Any]]:
         "       tickers_considered, news_fetched, news_relevant, decisions_made,"
         "       trades_executed, input_tokens, output_tokens, cost_usd, error,"
         "       (status = 'running'"
-        "        AND started_at < now() - make_interval(secs => %s)) AS stale"
+        "        AND started_at < now() - to_seconds(%s)) AS stale"
         " FROM agent_runs WHERE portfolio_id = %s ORDER BY started_at DESC LIMIT %s",
         (JOB_TIMEOUT_SECONDS, pid, limit),
     )

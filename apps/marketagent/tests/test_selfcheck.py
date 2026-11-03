@@ -40,7 +40,7 @@ def test_fails_on_a_missing_pot_secret_and_names_it(database_ok, monkeypatch, ca
 
 def test_fails_when_the_database_cannot_be_reached(monkeypatch, caplog):
     def broken():
-        raise ConnectionError("no route to postgres")
+        raise ConnectionError("no route to the database blob")
 
     monkeypatch.setattr(selfcheck, "active_pots", broken)
     with caplog.at_level(logging.INFO):

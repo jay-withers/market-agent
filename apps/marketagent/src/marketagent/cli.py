@@ -1,4 +1,5 @@
-"""One entrypoint, six commands — `marketagent api|agent|summary|weekly|sync|selfcheck`.
+"""One entrypoint — `marketagent api|agent|summary|weekly|sync|selfcheck`, plus
+the operator's `sql` and `import-pg`.
 
 The workloads share one image and differ only by the container's `args`, so
 this is what Terraform's `command = ["marketagent"]` reaches.
@@ -97,6 +98,20 @@ def main(argv: list[str] | None = None) -> int:
         help="check settings, database and secrets as a job would, doing nothing",
     )
 
+    # The operator's commands. Neither runs in a scheduled job.
+    sub.add_parser(
+        "sql",
+        help="run SQL from stdin against the database as one transaction, printing any rows",
+    )
+    import_pg = sub.add_parser(
+        "import-pg", help="copy every table from PostgreSQL into the database, once"
+    )
+    import_pg.add_argument(
+        "--dsn",
+        default=os.environ.get("IMPORT_PG_DSN", ""),
+        help="libpq connection string (default: $IMPORT_PG_DSN, which keeps a token off argv)",
+    )
+
     args = parser.parse_args(argv)
     _configure_logging()
     # Before any of the four branches, and in particular before uvicorn imports
@@ -187,6 +202,28 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         finally:
             telemetry.flush()
+        return 0
+
+    if args.command == "sql":
+        from .db import database
+
+        with database().connection() as conn:
+            for row in conn.execute(sys.stdin.read()).fetchall():
+                print(*row, sep="\t")
+        return 0
+
+    if args.command == "import-pg":
+        from . import importpg
+
+        if not args.dsn:
+            parser.error("import-pg needs --dsn or IMPORT_PG_DSN")
+        try:
+            counts = importpg.run(args.dsn)
+        except importpg.CountMismatch as exc:
+            logging.getLogger("marketagent").error("import abandoned, nothing written: %s", exc)
+            return 1
+        for table, source, copied in counts:
+            print(f"{table:20} {source:>8} {copied:>8}")
         return 0
 
     if args.command == "selfcheck":

@@ -21,15 +21,13 @@ locals {
   # by the workload identity, which is why Terraform owns no secret values and
   # no Key Vault reference.
   common_env = {
-    AZURE_CLIENT_ID   = azurerm_user_assigned_identity.this.client_id
-    KEY_VAULT_URI     = azurerm_key_vault.this.vault_uri
-    POSTGRES_HOST     = azurerm_postgresql_flexible_server.this.fqdn
-    POSTGRES_DATABASE = azurerm_postgresql_flexible_server_database.this.name
-    POSTGRES_PORT     = "5432"
-    # The database *role*, which is the managed identity's name — the server has
-    # no password, so the username is the identity and the password is a token
-    # minted per connection. Empty POSTGRES_PASSWORD is what selects that path.
-    POSTGRES_USER                         = azurerm_user_assigned_identity.this.name
+    AZURE_CLIENT_ID = azurerm_user_assigned_identity.this.client_id
+    KEY_VAULT_URI   = azurerm_key_vault.this.vault_uri
+    # The DuckDB file in blob storage, and where each replica keeps its working
+    # copy: /tmp, because the image runs as uid 10001. `make deploy` sets both
+    # on every workload too, since env is under ignore_changes.
+    DATABASE_BLOB_URL                     = local.database_blob_url
+    DATABASE_PATH                         = "/tmp/marketagent.duckdb"
     APPLICATIONINSIGHTS_CONNECTION_STRING = local.application_insights_connection_string
     ENVIRONMENT                           = var.environment
     # The marketagent tag specifically, not a shared one: this is what the agent
@@ -55,7 +53,7 @@ locals {
   })
 
   # One entry per pot, each with its own agent job, sync job, Alpaca paper
-  # account and DeepSeek key. The key must match a `portfolio` row (sql/011);
+  # account and DeepSeek key. The key must match a `portfolio` row (schema/002-seed.sql);
   # the app derives the pot's Key Vault secret names from it.
   #
   # `env` is where one pot differs from the others — ANALYSIS_EFFORT, a RISK_*

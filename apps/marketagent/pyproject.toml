@@ -14,7 +14,11 @@ requires-python = ">=3.12"
 dependencies = [
   "pydantic>=2.9",
   "pydantic-settings>=2.5",
-  "psycopg[binary,pool]>=3.2",
+  # The database is a DuckDB file in blob storage (see db.py). DuckDB needs
+  # pytz to return a TIMESTAMPTZ as a Python datetime.
+  "duckdb>=2.0.0",
+  "pytz>=2026.6",
+  "azure-storage-blob>=12.31.1",
   "azure-identity>=1.19",
   "azure-keyvault-secrets>=4.9",
   "httpx>=0.28",

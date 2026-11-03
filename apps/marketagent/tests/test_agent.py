@@ -1,6 +1,6 @@
 """Tests for the two parts of the agent loop that need no database.
 
-The loop itself reads and writes Postgres at every step, so it is not
+The loop itself reads and writes the database at every step, so it is not
 exercised here. What *is* exercised is the pair of things a wrong answer would
 be expensive: the decision history the model is shown, and the spend ceiling
 that stops a run that has started calling in a circle.
@@ -32,8 +32,8 @@ def _decision(**overrides) -> dict:
     """One row as `repository.recent_decisions` returns it.
 
     `confidence` is a `Decimal` because the column is NUMERIC(5,4) and that is
-    what comes back — not the float the model produced. Verified against a real
-    Postgres; a fixture using a float here would not exercise the formatting
+    what comes back — not the float the model produced. Verified against the
+    real database; a fixture using a float here would not exercise the formatting
     that actually runs.
     """
     defaults = dict(

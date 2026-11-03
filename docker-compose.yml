@@ -1,8 +1,8 @@
-# The local loop: Postgres with the schema baked in, plus the API, needing no
-# Azure at all.
+# The local loop: Azurite (Microsoft's Storage emulator) holding the database
+# blob, plus the API, needing no Azure at all.
 #
 # "Local" is not "offline", and the distinction matters for the agent service.
-# The API only reads Postgres, so it genuinely runs in isolation. The agent
+# The API only reads the database, so it genuinely runs in isolation. The agent
 # still calls Alpaca for prices and news, Frankfurter for the rate, and
 # DeepSeek for both model stages — real requests, and the DeepSeek ones are
 # billed. The agent submits Alpaca paper orders by default; set DRY_RUN=true
@@ -21,9 +21,9 @@
 # work from either side.
 #
 # Works because settings.secret() reads an environment variable before falling
-# back to Key Vault, and db.py uses password authentication when
-# POSTGRES_PASSWORD is set instead of an Entra token. Put the API keys in a
-# local .env — see .env.example.
+# back to Key Vault, and db.py reaches the blob with Azurite's well-known
+# connection string when AZURE_STORAGE_CONNECTION_STRING is set instead of an
+# Entra token. Put the API keys in a local .env — see .env.example.
 #
 # Built for the host's native architecture on purpose. The deployable image
 # must be linux/amd64 (see the Dockerfile), but forcing that here would run
@@ -31,31 +31,26 @@
 
 name: marketagent
 
+# The database settings every Python service shares. The key is Azurite's
+# published development key, the same in every install, not a secret (hence
+# the gitleaks:allow).
+x-database: &database
+  DATABASE_BLOB_URL: http://azurite:10000/devstoreaccount1/database/marketagent.duckdb
+  DATABASE_PATH: /tmp/marketagent.duckdb
+  AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;" # gitleaks:allow
+
 services:
-  db:
-    # Built rather than pulled so the migrations can be baked in. A bind mount
-    # of ./sql would be resolved by the daemon on the host, where the dev
-    # container's /workspaces path does not exist — see docker/Dockerfile.db.
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.db
-    environment:
-      POSTGRES_PASSWORD: local
-      POSTGRES_DB: marketagent
+  azurite:
+    # Leases, ETags and versions behave as Azure's do, which is what db.py
+    # relies on. The first writer creates the blob; the schema builds itself.
+    image: mcr.microsoft.com/azure-storage/azurite:3.35.0
+    command: ["azurite-blob", "--blobHost", "0.0.0.0", "--skipApiVersionCheck"]
     ports:
       # Published on the *host*. From inside the dev container reach it at the
-      # container's bridge IP, or at host.docker.internal:5432.
-      - "5432:5432"
+      # container's bridge IP, or at host.docker.internal:10000.
+      - "10000:10000"
     volumes:
-      # A single mount at the parent directory, not .../data: postgres 18's
-      # image refuses to start against the old data path, wanting a
-      # major-version-specific subdirectory of this one instead.
-      - db-data:/var/lib/postgresql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d marketagent"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
+      - azurite-data:/data
 
   api:
     build:
@@ -63,10 +58,7 @@ services:
     command: ["api"]
     environment:
       ENVIRONMENT: local
-      POSTGRES_HOST: db
-      POSTGRES_DATABASE: marketagent
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: local
+      <<: *database
       DRY_RUN: "${DRY_RUN:-false}"
       LOG_LEVEL: INFO
       # Empty unless the caller exports them; settings.secret() reads an
@@ -82,8 +74,7 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      db:
-        condition: service_healthy
+      - azurite
 
   dashboard:
     build:
@@ -121,10 +112,7 @@ services:
     profiles: ["jobs"]
     environment:
       ENVIRONMENT: local
-      POSTGRES_HOST: db
-      POSTGRES_DATABASE: marketagent
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: local
+      <<: *database
       DRY_RUN: "${DRY_RUN:-false}"
       KEY_VAULT_URI: "${KEY_VAULT_URI:-}"
       AZURE_KEYVAULT_TOKEN: "${AZURE_KEYVAULT_TOKEN:-}"
@@ -132,8 +120,7 @@ services:
       - path: .env
         required: false
     depends_on:
-      db:
-        condition: service_healthy
+      - azurite
 
   # Also on demand: `docker compose run --rm weekly`. Reads only — no market
   # data, no broker — so the one thing it costs is a single Sonnet call.
@@ -145,18 +132,14 @@ services:
     profiles: ["jobs"]
     environment:
       ENVIRONMENT: local
-      POSTGRES_HOST: db
-      POSTGRES_DATABASE: marketagent
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: local
+      <<: *database
       KEY_VAULT_URI: "${KEY_VAULT_URI:-}"
       AZURE_KEYVAULT_TOKEN: "${AZURE_KEYVAULT_TOKEN:-}"
     env_file:
       - path: .env
         required: false
     depends_on:
-      db:
-        condition: service_healthy
+      - azurite
 
   # `docker compose run --rm sync`. Read-only against Alpaca, same PORTFOLIO
   # convention as agent.
@@ -167,18 +150,14 @@ services:
     profiles: ["jobs"]
     environment:
       ENVIRONMENT: local
-      POSTGRES_HOST: db
-      POSTGRES_DATABASE: marketagent
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: local
+      <<: *database
       KEY_VAULT_URI: "${KEY_VAULT_URI:-}"
       AZURE_KEYVAULT_TOKEN: "${AZURE_KEYVAULT_TOKEN:-}"
     env_file:
       - path: .env
         required: false
     depends_on:
-      db:
-        condition: service_healthy
+      - azurite
 
 volumes:
-  db-data:
+  azurite-data:

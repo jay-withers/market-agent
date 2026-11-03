@@ -29,7 +29,7 @@ from ..benchmarks import CASH_SYMBOL, fetch_benchmark_bars
 from ..benchmarks import build as build_benchmarks
 from ..broker.alpaca import AlpacaBroker
 from ..broker.base import Broker
-from ..db import pool
+from ..db import database
 from ..fetch import FetchError
 from ..llm.base import PROMPT_VERSION, Llm
 from ..llm.deepseek_provider import DeepseekLlm, balance_usd
@@ -65,37 +65,37 @@ def run(
     # so switching pots is just calling `use_account` before each block.
     broker = broker or AlpacaBroker()
 
-    with pool().connection() as conn:
+    with database().connection() as conn:
         names = repo.active_portfolios(conn)
     if not names:
-        raise RuntimeError("no active portfolios — run sql/011-sector-pots.sql")
+        raise RuntimeError("no active portfolios — see schema/002-seed.sql")
 
     benchmark_symbols = [s.strip() for s in cfg.benchmark_symbols.split(",") if s.strip()]
     accounts: dict[str, dict] = {}
 
     for name in names:
         alpaca_api.use_account(name)
-        with pool().connection() as conn:
+        with database().connection() as conn:
             pid = repo.portfolio_id(conn, name=name)
-        synchronize(pid, broker, pool())
-        with pool().connection() as conn:
+        synchronize(pid, broker, database())
+        with database().connection() as conn:
             inception = repo.portfolio_inception(conn, pid)
             initial = repo.initial_cash(conn, pid)
 
         filled = _reconcile(pid, broker)
-        synchronize(pid, broker, pool())
+        synchronize(pid, broker, database())
 
-        with pool().connection() as conn:
+        with database().connection() as conn:
             holdings = [t for t, *_ in repo.load_positions(conn, pid)]
 
         bars = fetch_daily_bars(holdings, days=PRICE_HISTORY_DAYS) if holdings else []
         benchmark_bars = fetch_benchmark_bars(benchmark_symbols, days=PRICE_HISTORY_DAYS)
 
-        with pool().connection() as conn:
+        with database().connection() as conn:
             repo.save_prices(conn, bars + benchmark_bars)
             conn.commit()
 
-        with pool().connection() as conn:
+        with database().connection() as conn:
             state, unpriced = repo.build_state(conn, pid, latest_close(bars))
             if unpriced:
                 logger.warning(
@@ -155,7 +155,7 @@ def run(
 
     # The combined total, not any pot's own: each pot has its own API key, but
     # the keys draw on one DeepSeek account balance, so runway is computed once.
-    with pool().connection() as conn:
+    with database().connection() as conn:
         total_spend = repo.spend(conn, as_of, pid=None)
 
     facts = _facts_table(as_of, accounts, total_spend, _credit_usd())
@@ -176,7 +176,7 @@ def run(
     result: MailResult = send(subject, body_html, body_markdown)
     logger.info("summary email %s", result.status)
 
-    with pool().connection() as conn:
+    with database().connection() as conn:
         summary_id = repo.save_summary(
             conn,
             as_of,
@@ -211,7 +211,7 @@ def _reconcile(pid: int, broker: Broker) -> int:
     changed nothing. Each trade is committed on its own: one order the broker
     cannot answer for must not roll back the fills already applied.
     """
-    with pool().connection() as conn:
+    with database().connection() as conn:
         pending = repo.unreconciled_trades(conn, pid)
 
     if not pending:
@@ -224,7 +224,7 @@ def _reconcile(pid: int, broker: Broker) -> int:
             logger.warning("no broker record for %s", trade["client_order_id"])
             continue
 
-        with pool().connection() as conn:
+        with database().connection() as conn:
             repo.update_trade_outcome(
                 conn,
                 trade["id"],
