@@ -38,6 +38,11 @@ output "postgres_database_name" {
   value       = azurerm_postgresql_flexible_server_database.this.name
 }
 
+output "database_blob_url" {
+  description = "The DuckDB file the jobs and the API share. `make deploy` sets it as DATABASE_BLOB_URL on every workload."
+  value       = local.database_blob_url
+}
+
 output "api_fqdn" {
   description = "Public hostname of the API container app."
   value       = azurerm_container_app.api.ingress[0].fqdn
