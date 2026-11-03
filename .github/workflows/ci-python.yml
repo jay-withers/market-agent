@@ -9,7 +9,7 @@ name: ci-python
 # run `make test` before pushing.
 #
 # That gap matters most for the changes nobody reads: renovate.json sets
-# autoApprove, so a dependency bump reaches main without a human. A psycopg or
+# autoApprove, so a dependency bump reaches main without a human. A duckdb or
 # pydantic release that broke the engine or the request shapes would have
 # merged green.
 #
@@ -45,12 +45,11 @@ jobs:
       working-directory: apps/marketagent
       python-version: "3.14"
       extras: dev
-      # Reported, never gated. The figure is bimodal: the pure modules — the
-      # risk engine, the models, the benchmark arithmetic — sit at 100%, while
-      # everything behind a psycopg connection sits far lower, because
-      # repository.py's SQL has no database to run against in CI. A
-      # --cov-fail-under over that mixture would be met by mocking the
-      # connection, which asserts the mock rather than the behaviour.
+      # Reported, never gated. The database is embedded DuckDB, so
+      # repository.py's and queries.py's SQL runs in every CI run; what stays
+      # lower is the network-facing code (Alpaca, DeepSeek, the blob lease),
+      # where a --cov-fail-under would be met by mocking the client, which
+      # asserts the mock rather than the behaviour.
       #
       # The corollary is that it has to be *seen* instead, which is what the
       # comment is for: a number nobody is shown and nothing enforces is not a
@@ -62,12 +61,3 @@ jobs:
       # not invalidate the --locked run.
       coverage: marketagent
       coverage-pr-comment: true
-      # repository.py and queries.py are hand-written SQL, and without a server
-      # for it to run against none of it was executed by anything but the
-      # deployed job at 06:00 UTC. The tests skip when POSTGRES_TEST_DSN is
-      # absent, which this input is what sets — so a clone with no Docker still
-      # runs `make test`, and CI runs the whole suite.
-      #
-      # 18-alpine matches docker/Dockerfile.db, so the local loop and CI apply
-      # the same migrations to the same major version.
-      postgres: "18-alpine"

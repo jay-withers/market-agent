@@ -1,7 +1,7 @@
 # Infrastructure
 
 The Terraform root configuration: what it creates and why it is shaped by
-cost, the database region trap, PostgreSQL, naming, security, running SQL by
+cost, the database region trap, the database, naming, security, running SQL by
 hand, Checkov, monitoring, state, environments and schedules. Moved out of
 CLAUDE.md, which keeps the rules and links here.
 
@@ -46,8 +46,9 @@ Resource group (read by data source: github-repos creates it), user-assigned man
 Application Insights (workspace-based), Key Vault (RBAC), Container Apps
 environment (Consumption-only), two container apps (`api`, `dashboard`),
 scheduled container app jobs — an `agent-<pot>` and a `sync-<pot>` per pot in
-`local.pots`, plus `summary` and `weekly` covering every pot — a
-PostgreSQL Flexible Server plus database, and the alerting in `main.alerts.tf`
+`local.pots`, plus `summary` and `weekly` covering every pot — a storage
+account holding the DuckDB database (and, until a follow-up removes it, the
+PostgreSQL Flexible Server it replaced), and the alerting in `main.alerts.tf`
 (action group, five metric alerts, one log alert, a budget, two diagnostic
 settings). Names come from `Azure/naming/azurerm`.
 
@@ -59,13 +60,12 @@ why:
 - **There is no Azure Container Registry.** ACR Basic is a flat monthly charge
   with no consumption tier; images will live in ghcr.io. Don't add ACR back
   without raising the cost trade-off.
-- **The database is PostgreSQL Flexible Server, and that was forced, not chosen.**
-  Azure SQL serverless is the better fit on cost — it auto-pauses to near zero —
-  but this subscription cannot provision Azure SQL in any region the
-  `allowed-locations-dev` policy permits. See "The database and the region trap"
-  below before assuming this is a preference that can be revisited. The
-  consequence for future application code is `psycopg`, not `pyodbc`/`aioodbc`;
-  the relational schema from the project spec is unaffected.
+- **The database is a DuckDB file in blob storage, not a server.** It was a
+  PostgreSQL Flexible Server, forced rather than chosen (Azure SQL, which
+  auto-pauses, can't be provisioned here; see "The database and the region
+  trap"), and that server billed its B1ms every hour for a database the jobs
+  touch for minutes a day. A blob of a few MB costs pennies. See "The database"
+  below.
 - **Container apps use `min_replicas = 0`** and the environment has no
   `workload_profile` block. Adding a workload profile introduces a standing
   per-hour charge.
@@ -143,7 +143,41 @@ subscription (`az provider register --namespace Microsoft.App`). A fresh
 subscription fails the container apps environment with
 `MissingSubscriptionRegistration` until that is done.
 
-### PostgreSQL specifics
+### The database
+
+One DuckDB file, `marketagent.duckdb`, in the `database` container of
+`stmarketagentdev` (`main.storage.tf`). `apps/marketagent/src/marketagent/db.py`
+is the whole mechanism:
+
+- **A writer holds the blob's lease for one `database().connection()` block.**
+  It downloads the file if the ETag moved, runs the block, commits, uploads and
+  releases. The pots' jobs start together and queue on the lease block by
+  block; a lease left by a crashed job lapses after 60 seconds, and nothing
+  it wrote was uploaded. Verified against Azurite with three processes doing
+  read-modify-write: no update lost.
+- **The API is a reader.** It checks the ETag at most every 30 seconds and
+  opens its copy read-only, so a page never waits on a job and a job never
+  waits on a page.
+- **DuckDB rather than SQLite** because the SQL was written for Postgres:
+  DuckDB keeps DECIMAL exact through `sum()` and arithmetic, and speaks
+  `LATERAL`, `FILTER`, `generate_series` and `::` casts. What it doesn't:
+  foreign keys that allow an upsert of a referenced row (so the schema has
+  none), `FOR UPDATE`, advisory locks, `jsonb_*` functions (`json_each`
+  instead), correlated `OFFSET`, and `GROUP BY` inferred from a key.
+- **The schema migrates itself.** `schema/0NN-*.sql` files apply in order on
+  the first write that finds one missing, and each records its own
+  `schema_migrations` row.
+- **A store of record**: `prevent_destroy`, a `CanNotDelete` lock, versioning
+  and 30-day soft delete. Undo a bad write by promoting the previous version
+  in the portal (or `az storage blob copy start` from the version ID).
+- Entra only (`shared_access_key_enabled = false`). The identity and the
+  operators (`key_vault_administrator_object_ids`) have Storage Blob Data
+  Contributor on the container.
+
+### PostgreSQL specifics (the retired server)
+
+Kept until `main.database.tf` is removed, a few days after the move to the
+blob, for whoever reads the server's history.
 
 - The Entra administrator is a **separate resource**
   (`azurerm_postgresql_flexible_server_active_directory_administrator`), not an
@@ -239,7 +273,8 @@ uppercase; job names also reject underscores.
 
 ### Security posture
 
-Passwordless throughout. The PostgreSQL server sets
+Passwordless throughout. The database's storage account takes Entra tokens
+only (`shared_access_key_enabled = false`). The retired PostgreSQL server sets
 `authentication { active_directory_auth_enabled = true, password_auth_enabled = false }`,
 which lets `administrator_login`/`administrator_password` stay unset — no database
 password exists in source, state or Key Vault. The administrator is a named human
@@ -268,64 +303,31 @@ a member (adds the `azuread` provider and needs directory permissions).
 
 ### Running SQL by hand
 
-`sql/` at the repository root holds one self-contained file per task, executed by
-`scripts/Invoke-DbSql.ps1`. The split is deliberate: each `.sql` file names its
-own identities and databases literally, so it runs under plain `psql --file`, and
-the script is connection plumbing that knows nothing about what it runs.
+`make sql` runs SQL from stdin against the Azure blob, as yourself (`az
+login`), through `marketagent sql`:
 
-Schema changes are numbered migrations (`001-schema.sql`) written entirely as
-`CREATE ... IF NOT EXISTS`, and each inserts its own row into `schema_migrations`
-at the end — the runner stays ignorant of what it ran. Chosen over Alembic
-because the pattern already existed and the schema changes rarely; the honest
-cost is no down-migrations and no ordering guarantee beyond the filename.
+```bash
+echo "SELECT name, cash_usd FROM portfolio" | make sql
+make sql < fix.sql
+```
 
-**`demo/seed.sql` is deliberately not in `sql/`**, and that is the whole point
-of it living in its own directory: `make sql` with no arguments runs the
-*entire* `sql/` directory against **Azure**, so a destructive fixture file
-there would eventually be applied to the real database by someone bringing the
-schema up to date. It is loaded only by `make demo`, and it opens with a guard
-that raises unless `current_database()` is the local `marketagent`.
-Prices are a deterministic pseudo-random walk hashed from the ticker and the
-day index rather than `random()`, so the same seed always draws the same chart
-and a screenshot means something.
+It is one database block: it takes the lease like a job (so it waits for a
+running one), runs everything as one transaction, and uploads only if it
+succeeded. A schema change doesn't go this way: it goes in `schema/` and ships
+with the code that needs it.
 
-- **`pgaadauth` exists only in the `postgres` maintenance database.** The
-  application database has `plpgsql` and nothing else, so
-  `pgaadauth_create_principal` fails there with `function ... does not exist` —
-  which reads like a syntax or type problem rather than a wrong-database one.
-  Roles are cluster-wide, so `grant-uai-access.sql` does the create after
-  `\connect postgres`, then `\connect psqldb-marketagent-dev` for the GRANTs.
-  `\connect` mid-file reuses the same token, so no re-authentication is needed.
-- **`-Path` takes files and/or directories**, and defaults to the whole of `sql/`
-  — a directory expands to its `*.sql` sorted by name, which is what the numeric
-  prefixes are for. Everything in one invocation runs under **one** firewall rule
-  and **one** access token; batching is what makes a migration run tolerable,
-  given the serialisation trap below. `-SqlFile` survives as an alias.
-- Each file gets **its own `psql` process** rather than all of them being
-  concatenated: files are allowed to `\connect` elsewhere (`grant-uai-access.sql`
-  has to), and `ON_ERROR_STOP` only aborts the process it is set on, so one
-  process would let a later file run against the wrong database or after a
-  failure.
-- `ALTER DEFAULT PRIVILEGES` only ever affects objects created *afterwards*, so it
-  cannot rescue a migration that ran before it. `grant-uai-access.sql` therefore
-  also carries `GRANT ... ON ALL TABLES/SEQUENCES IN SCHEMA public`, which makes
-  it safe to run at any point in the sequence rather than only first.
-- The script hardcodes the dev resource names as parameter defaults. That is safe
-  precisely because the naming convention has no random suffix, and it keeps
-  Terraform, the state backend and git out of the path entirely.
-- **Firewall rules require public access.** With
-  `public_network_access_enabled = false` the API refuses every firewall
-  operation, `list` included, and with no VNet or private endpoint the server is
-  then unreachable by anything — the container apps included, since the
-  "allow Azure services" sentinel is itself a firewall rule.
-- The rule is named after the caller's public IP and reused if present; removal
-  is prompted rather than automatic (`-KeepFirewallRule`, assumed when stdin is
-  redirected). Firewall changes serialise on the server, so a second one while
-  the first is still processing fails with `ServerIsBusy` — which is why a kept
-  rule makes a retry loop much quicker.
-- `$PSNativeCommandUseErrorActionPreference` is **off by default even in
-  PowerShell 7.6**, so the script opts in explicitly; without it a failing `az`
-  or `psql` is silently ignored.
+`make import-pg` was the one-off copy off the PostgreSQL server. It attaches
+the server read-only through DuckDB's postgres extension, copies every table
+by column name, moves each id sequence past the highest id, and uploads only
+if every row count matches. It opens a firewall rule for your IP for its
+length, as the old `make sql` did.
+
+**`demo/seed.sql` is destructive** and opens with a guard that aborts if the
+database holds any agent run it did not write, which every real one does. It
+is loaded only by `make demo`, into Azurite. Prices are a deterministic
+pseudo-random walk hashed from the ticker and the day index rather than
+`random()`, so the same seed always draws the same chart and a screenshot
+means something.
 
 Deliberately destroyable: `purge_protection_enabled = false` on the Key Vault and
 `prevent_deletion_if_contains_resources = false` on the provider, both so

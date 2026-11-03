@@ -16,7 +16,7 @@ PORTFOLIO ?= tech
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install lint test test-db secrets sql up down logs demo run-agent run-weekly build push deploy deployed-tag smoke logs-azure init fmt validate plan apply
+.PHONY: help install lint test secrets sql import-pg up down logs demo run-agent run-weekly build push deploy deployed-tag smoke logs-azure init fmt validate plan apply
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -36,27 +36,49 @@ test: ## Run the Python test suite
 	# not install it. Without this the target only works after `make install`.
 	uv run --directory $(APP_DIR) --extra dev pytest
 
-# The database tests skip without POSTGRES_TEST_DSN, so `make test` stays
-# runnable on a clone with no Docker and this is the target that adds them.
-#
-# host.docker.internal rather than localhost: the Docker daemon runs on the
-# *host* (docker-outside-of-docker), so compose publishes 5432 there and not
-# into this container. The suite creates and drops its own scratch database, so
-# it never touches rows the compose stack is holding.
-test-db: ## Run the Python test suite including the database tests (needs `make up`)
-	POSTGRES_TEST_DSN="postgresql://postgres:local@host.docker.internal:5432/postgres" \
-		uv run --directory $(APP_DIR) --extra dev pytest
-
 secrets: ## Prompt for the application secrets and store them in Key Vault
 	./scripts/Set-KeyVaultSecrets.ps1
 
-sql: ## Run every SQL file in sql/ against the database, in filename order
-	./scripts/Invoke-DbSql.ps1
+# Against the real blob, as yourself (`az login`; the operators have Storage
+# Blob Data Contributor on the container). It takes the blob's lease like a job,
+# so it waits for a running job and a job waits for it. One transaction: a
+# failing statement uploads nothing.
+#
+#   make sql < some.sql
+#   echo "SELECT name, cash_usd FROM portfolio" | make sql
+DATABASE_BLOB_URL ?= https://stmarketagent$(ENV).blob.core.windows.net/database/marketagent.duckdb
 
-# The local loop: Postgres with the schema baked in, plus the API. No Azure.
+sql: ## Run SQL from stdin against the Azure database as one transaction
+	DATABASE_BLOB_URL=$(DATABASE_BLOB_URL) DATABASE_PATH=$$(mktemp -d)/marketagent.duckdb \
+		uv run --directory $(APP_DIR) marketagent sql
+
+# Once, to move off the PostgreSQL server: copies every table into the blob and
+# refuses to upload unless each count matches. Run it with no job running, just
+# before the release that switches the jobs over. As the server's Entra
+# administrator, from this machine: the server admits Azure IPs only, so this
+# opens a firewall rule for your public IP for the length of the command and
+# removes it after, success or not. The token rides in IMPORT_PG_DSN rather
+# than on the command line.
+PG_SERVER ?= psql-marketagent-$(ENV)
+PG_DATABASE ?= psqldb-marketagent-$(ENV)
+PG_RESOURCE_GROUP ?= rg-marketagent-$(ENV)
+
+import-pg: ## Copy the PostgreSQL database into the Azure blob, once (stop the jobs first)
+	@set -eu; \
+	ip="$$(curl -fsS https://api.ipify.org)"; \
+	rule="import-pg-$$(date +%s)"; \
+	trap 'az postgres flexible-server firewall-rule delete -g $(PG_RESOURCE_GROUP) -n $(PG_SERVER) -r "$$rule" --yes -o none' EXIT; \
+	az postgres flexible-server firewall-rule create -g $(PG_RESOURCE_GROUP) -n $(PG_SERVER) -r "$$rule" \
+		--start-ip-address "$$ip" --end-ip-address "$$ip" -o none; \
+	IMPORT_PG_DSN="host=$(PG_SERVER).postgres.database.azure.com dbname=$(PG_DATABASE) sslmode=require user=$$(az ad signed-in-user show --query userPrincipalName -o tsv) password=$$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)" \
+	DATABASE_BLOB_URL=$(DATABASE_BLOB_URL) DATABASE_PATH=$$(mktemp -d)/marketagent.duckdb \
+		uv run --directory $(APP_DIR) marketagent import-pg
+
+# The local loop: Azurite (the Storage emulator) holding the database blob, plus
+# the API. No Azure.
 # Note the published ports land on the Docker *host* — from inside the dev
 # container, reach a service at its bridge IP or via host.docker.internal.
-up: ## Start the local stack (Postgres + API) with docker compose
+up: ## Start the local stack (Azurite + API) with docker compose
 	docker compose up -d --build
 
 down: ## Stop the local stack and delete its data volume
@@ -66,21 +88,17 @@ logs: ## Follow the local stack's logs
 	docker compose logs -f
 
 # Fake data, so the dashboard can be looked at without deploying anything and
-# without a DeepSeek or Alpaca key — the API only reads Postgres, so a seeded
-# database is a complete local stack.
+# without a DeepSeek or Alpaca key — the API only reads the database, so a
+# seeded one is a complete local stack.
 #
 # Piped on stdin rather than mounted: compose here has no bind mounts, because
 # the daemon runs on the host and would resolve a relative path there.
 #
-# demo/seed.sql is destructive and deliberately lives outside sql/, so that
-# `make sql` — which runs the whole of sql/ against *Azure* by default — can
-# never pick it up. It also refuses to run against any database but the local
-# `marketagent` one.
+# demo/seed.sql is destructive, and refuses to run against a database holding
+# any agent run it did not write itself, which every real one does.
 demo: ## Start the local stack and load fake data for a dashboard preview
-	docker compose up -d --build db api dashboard
-	@echo "==> waiting for postgres"
-	@until docker compose exec -T db pg_isready -U postgres -d marketagent >/dev/null 2>&1; do sleep 1; done
-	docker compose exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d marketagent < demo/seed.sql
+	docker compose up -d --build azurite api dashboard
+	docker compose run --rm -T --no-deps agent sql < demo/seed.sql
 	@echo ""
 	@echo "==> OPEN THIS:  http://localhost:8080"
 	@echo ""
@@ -179,8 +197,13 @@ push: ## Push both images to ghcr.io (needs write:packages)
 #
 # --set-env-vars only adds/updates the name(s) given — it does not touch any
 # other environment variable already on the container (unlike
-# --replace-env-vars) — so IMAGE_TAG moves without disturbing KEY_VAULT_URI,
-# POSTGRES_HOST and the rest of common_env.
+# --replace-env-vars) — so IMAGE_TAG moves without disturbing KEY_VAULT_URI
+# and the rest of common_env.
+#
+# DATABASE_BLOB_URL and DATABASE_PATH ride along on the API and every job, for
+# the same reason as DASHBOARD_ORIGINS below: env is under ignore_changes, so
+# this is how a change to them lands. The URL is a Terraform output; the path
+# is /tmp because the image runs as uid 10001.
 #
 # DASHBOARD_ORIGINS rides along on the API for the same reason: it is under the
 # same ignore, and setting it on every deploy is what stops the CORS allow-list
@@ -211,6 +234,7 @@ deploy: ## Deploy built images to Container Apps via az cli (needs IMAGE_TAG=vX.
 	DASHBOARD_CUSTOM=$$(terraform -chdir=$(TF_DIR) output -raw dashboard_custom_domain_url); \
 	ORIGINS="https://$$DASHBOARD_FQDN$${DASHBOARD_CUSTOM:+,$$DASHBOARD_CUSTOM}"; \
 	SUMMARY=$$(terraform -chdir=$(TF_DIR) output -raw summary_job_name); \
+	DATABASE="DATABASE_BLOB_URL=$$(terraform -chdir=$(TF_DIR) output -raw database_blob_url) DATABASE_PATH=/tmp/marketagent.duckdb"; \
 	WEEKLY=$$(terraform -chdir=$(TF_DIR) output -raw weekly_review_job_name); \
 	POT_JOBS=$$(terraform -chdir=$(TF_DIR) output -json agent_job_names 2>/dev/null | jq -r '.[]'); \
 	SYNC_JOBS=$$(terraform -chdir=$(TF_DIR) output -json sync_job_names 2>/dev/null | jq -r '.[]'); \
@@ -221,14 +245,14 @@ deploy: ## Deploy built images to Container Apps via az cli (needs IMAGE_TAG=vX.
 	fi; \
 	az containerapp update --name $$API --resource-group $$RG \
 	  --image $(IMAGE_REGISTRY)/marketagent:$(MARKETAGENT_IMAGE_TAG) \
-	  --set-env-vars IMAGE_TAG=$(MARKETAGENT_IMAGE_TAG) DASHBOARD_ORIGINS=$$ORIGINS; \
+	  --set-env-vars IMAGE_TAG=$(MARKETAGENT_IMAGE_TAG) DASHBOARD_ORIGINS=$$ORIGINS $$DATABASE; \
 	az containerapp update --name $$DASHBOARD --resource-group $$RG \
 	  --image $(IMAGE_REGISTRY)/dashboard:$(DASHBOARD_IMAGE_TAG) \
 	  --set-env-vars IMAGE_TAG=$(DASHBOARD_IMAGE_TAG); \
 	for JOB in $$POT_JOBS $$SYNC_JOBS $$SUMMARY $$WEEKLY; do \
 	  az containerapp job update --name $$JOB --resource-group $$RG \
 	    --image $(IMAGE_REGISTRY)/marketagent:$(MARKETAGENT_IMAGE_TAG) \
-	    --set-env-vars IMAGE_TAG=$(MARKETAGENT_IMAGE_TAG); \
+	    --set-env-vars IMAGE_TAG=$(MARKETAGENT_IMAGE_TAG) $$DATABASE; \
 	done
 
 # What cd-publish rolls back to when a deploy fails its smoke test: the tag

@@ -507,7 +507,7 @@ def test_a_week_with_no_agent_runs_is_not_reviewed_at_all(monkeypatch):
         def connection(self):
             return contextlib.nullcontext(object())
 
-    monkeypatch.setattr(weekly, "pool", lambda: _Pool())
+    monkeypatch.setattr(weekly, "database", lambda: _Pool())
     monkeypatch.setattr(weekly.repo, "active_portfolios", lambda _c: list(POTS))
     monkeypatch.setattr(weekly.repo, "portfolio_id", lambda _c, name=None: 1)
     monkeypatch.setattr(weekly.repo, "initial_cash", lambda _c, _p: D("500.0000"))
@@ -526,7 +526,7 @@ def test_a_week_with_no_agent_runs_is_not_reviewed_at_all(monkeypatch):
 # ---------------------------------------------------------------------------
 # Data integrity
 #
-# The checks themselves are exercised against a real Postgres in
+# The checks themselves are exercised against a real database in
 # tests/test_repository.py. What matters here is that a failure actually
 # reaches a human: in the section, and in the subject line, which is the only
 # part of the email that survives being read on a lock screen.

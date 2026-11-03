@@ -4,8 +4,8 @@ After every deploy, `make smoke` (scripts/smoke.sh) starts one run of each job
 — every pot's agent and sync, the summary and the weekly review — with its args
 swapped for `selfcheck`. That run gets everything a real one does: the image,
 the managed identity, the env and the Key Vault access. It checks what a real
-run needs before it does anything: the settings load, PostgreSQL answers over
-the Entra token path, and every secret the jobs read resolves, the per-pot
+run needs before it does anything: the settings load, the database blob reads
+as the managed identity, and every secret the jobs read resolves, the per-pot
 ones for each active pot. It calls no LLM, places no order, reads nothing from
 Alpaca and sends nothing.
 
@@ -39,7 +39,10 @@ def pot_secrets(pot: str) -> tuple[str, ...]:
 def active_pots() -> list[str]:
     from . import db
 
-    with db.pool().connection() as conn:
+    # As a reader, which takes no lease and never uploads: a selfcheck must not
+    # create the database blob if it is missing, but fail because it is.
+    db.use_read_only()
+    with db.database().connection() as conn:
         rows = conn.execute("SELECT name FROM portfolio WHERE is_active ORDER BY id").fetchall()
     return [row[0] for row in rows]
 

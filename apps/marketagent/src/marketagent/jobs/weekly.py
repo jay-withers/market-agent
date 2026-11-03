@@ -36,7 +36,7 @@ import markdown as markdown_lib
 
 from .. import repository as repo
 from ..benchmarks import CASH_SYMBOL
-from ..db import pool
+from ..db import database
 from ..llm.base import PROMPT_VERSION, Llm
 from ..llm.deepseek_provider import DeepseekLlm
 from ..mailer import MailResult, send
@@ -65,7 +65,7 @@ def run(
     llm = llm or DeepseekLlm()
 
     accounts: dict[str, dict] = {}
-    with pool().connection() as conn:
+    with database().connection() as conn:
         previous = repo.last_recommendations(conn, before=start)
         for name in repo.active_portfolios(conn):
             pid = repo.portfolio_id(conn, name=name)
@@ -90,7 +90,7 @@ def run(
     #
     # Stored alongside the rest, so "has this fired three weeks running" is a
     # query against weekly_reviews.metrics rather than a re-read of the prose.
-    with pool().connection() as conn:
+    with database().connection() as conn:
         for data in accounts.values():
             data["metrics"]["integrity"] = repo.week_integrity(conn, data["pid"], start, as_of)
 
@@ -111,7 +111,7 @@ def run(
     result: MailResult = send(subject, body_html, body_markdown)
     logger.info("weekly review email %s", result.status)
 
-    with pool().connection() as conn:
+    with database().connection() as conn:
         review_id = repo.save_weekly_review(
             conn,
             period_start=start,

@@ -1,4 +1,4 @@
-"""repository.py against a real Postgres.
+"""repository.py against a real database.
 
 Every function here is hand-written SQL, and until these tests existed none of
 it had ever been executed by anything but the deployed job: the first run of a
@@ -6,13 +6,13 @@ statement was 06:00 UTC in a container, where a wrong column name costs a day
 of the experiment. Twenty-eight of the module's thirty functions were never
 named in a test.
 
-A real server rather than a mocked connection, because the failures worth
-catching are the ones only Postgres can raise — a column that does not exist, a
-foreign key to a company nobody seeded, a NUMERIC that will not take the value,
-an ON CONFLICT naming the wrong constraint. A psycopg double would accept all
-four and assert nothing.
+The real engine rather than a mocked connection, because the failures worth
+catching are the ones only the database can raise — a column that does not
+exist, a DECIMAL that will not take the value, an ON CONFLICT naming the wrong
+constraint, a Postgres-ism DuckDB does not speak. A double would accept all of
+them and assert nothing.
 
-Skipped when POSTGRES_TEST_DSN is unset; `make test-db` sets it.
+Runs against a scratch DuckDB file (see conftest).
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ D = Decimal
 TICKER = "AAPL"
 OTHER = "MSFT"
 
-# The pot most tests exercise: 011-sector-pots.sql seeds it with 50 real
+# The pot most tests exercise: 002-seed.sql seeds it with 50 real
 # tickers, including TICKER/OTHER above.
 PORTFOLIO = "tech"
 
@@ -128,7 +128,7 @@ def test_the_watchlist_excludes_the_benchmark_companies(conn):
 
     tickers = repo.active_tickers(conn, pid)
 
-    assert tickers, "011-sector-pots.sql seeds the tech pot's watchlist"
+    assert tickers, "002-seed.sql seeds the tech pot's watchlist"
     assert "SPY" not in tickers
     assert TICKER in tickers
     assert tickers == sorted(tickers)
@@ -136,7 +136,7 @@ def test_the_watchlist_excludes_the_benchmark_companies(conn):
 
 def test_an_unknown_portfolio_names_the_migration_that_creates_one(conn):
     """The failure a fresh database produces, so it has to point somewhere."""
-    with pytest.raises(LookupError, match=r"011-sector-pots\.sql"):
+    with pytest.raises(LookupError, match=r"002-seed\.sql"):
         repo.portfolio_id(conn, "no-such-portfolio")
 
 
@@ -561,7 +561,7 @@ def test_spend_sums_every_job_that_calls_the_model(conn):
     conn.execute(
         "INSERT INTO weekly_reviews (period_start, period_end, subject, assessment,"
         "  body_markdown, body_html, recommendations, metrics, email_status, cost_usd)"
-        " VALUES (%s, %s, 'A subject', 'a', 'b', '<p>b</p>', '[]'::jsonb, '{}'::jsonb,"
+        " VALUES (%s, %s, 'A subject', 'a', 'b', '<p>b</p>', '[]'::JSON, '{}'::JSON,"
         "  'sent', %s)",
         (today - timedelta(days=7), today, D("0.0500")),
     )

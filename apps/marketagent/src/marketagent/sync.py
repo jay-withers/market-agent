@@ -7,17 +7,17 @@ from decimal import Decimal
 from . import alpaca_api
 from . import repository as repo
 from .broker.base import BrokerSnapshot
-from .db import pool
+from .db import database
 from .fetch import FetchError
 from .fx import fetch_gbp_usd
 from .models import PortfolioState, Position, money
 
 
-def synchronize(pid, broker, connection_pool=None) -> BrokerSnapshot:
-    with (connection_pool or pool()).connection() as conn:
-        # Serialize snapshot reads as well as writes so a slower worker cannot
-        # overwrite a newer snapshot captured by another job.
-        conn.execute("SELECT pg_advisory_xact_lock(73011, %s::int)", (pid,))
+def synchronize(pid, broker, db=None) -> BrokerSnapshot:
+    with (db or database()).connection() as conn:
+        # The snapshot is taken inside the block, so the blob lease serializes
+        # it with the write: a slower worker cannot overwrite a newer snapshot
+        # captured by another job.
         snapshot = broker.snapshot()
         if snapshot.account.currency != "USD":
             raise RuntimeError("Only USD accounts can be synchronized")
@@ -38,7 +38,7 @@ def run(portfolio: str) -> None:
     from .jobs.summary import _reconcile
 
     alpaca_api.use_account(portfolio)
-    with pool().connection() as conn:
+    with database().connection() as conn:
         pid = repo.portfolio_id(conn, name=portfolio)
     broker = AlpacaBroker()
     _reconcile(pid, broker)

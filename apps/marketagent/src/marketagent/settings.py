@@ -36,17 +36,16 @@ class Settings(BaseSettings):
 
     environment: str = "dev"
 
-    # Populated from locals.container-apps.tf. The defaults are what a local
-    # `docker compose` run gets; nothing here is environment-specific enough to
-    # be worth a required variable.
-    postgres_host: str = "localhost"
-    postgres_port: int = 5432
-    postgres_database: str = "marketagent"
-    postgres_user: str = "postgres"
-    # Empty against Azure, which has no password at all — that is the signal to
-    # authenticate with an Entra token instead. Set only for a local Postgres,
-    # which `docker compose` runs with ordinary password auth.
-    postgres_password: str = ""
+    # Where the DuckDB file lives (see db.py). With a blob URL, the file at
+    # database_path is this process's working copy of the blob; without one it
+    # is the database itself, which is what the tests and a plain local run use.
+    # Terraform sets the blob URL; /tmp because the image runs as uid 10001 and
+    # /app is not its to write.
+    database_blob_url: str = ""
+    database_path: str = "marketagent.duckdb"
+    # Only for the Azurite emulator in docker compose, which takes its
+    # well-known development key rather than an Entra token. Never set in Azure.
+    azure_storage_connection_string: str = ""
 
     key_vault_uri: str = ""
     # The managed identity's client id. Empty locally, which is the signal to
@@ -226,10 +225,9 @@ class StaticTokenCredential:
     def _check(self, scopes: tuple[str, ...]) -> None:
         """Refuse a scope this token was not issued for.
 
-        Matters because `credential()` also serves Postgres token
-        authentication. Handing a Key Vault token to Postgres would fail as
-        "password authentication failed", which docs/infrastructure.md records as one of the
-        hardest errors in this project to read correctly.
+        Matters because `credential()` also serves the database blob. Handing
+        a Key Vault token to Storage would fail as a 403 that reads like a
+        missing role assignment rather than the wrong token.
         """
         if scopes and self._scope not in scopes:
             raise ValueError(f"this token is scoped to {self._scope}, not {', '.join(scopes)}")
@@ -250,7 +248,7 @@ class StaticTokenCredential:
 
 @lru_cache(maxsize=1)
 def credential():
-    """The credential for Key Vault and for Postgres tokens.
+    """The credential for Key Vault and the database blob.
 
     Three cases, in priority order:
 

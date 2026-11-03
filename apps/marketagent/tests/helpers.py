@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 
-# The pots sql/011-sector-pots.sql seeds, in id order.
+# The active pots schema/002-seed.sql seeds, in id order.
 POTS = ("tech", "health", "energy")
 
 

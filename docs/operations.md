@@ -20,7 +20,8 @@ make install           # pre-commit hooks and Python dependencies
 make test              # the Python test suite (pytest)
 make lint              # all pre-commit hooks against every file
 make secrets           # prompt for the Key Vault values and store them
-make sql               # every file in sql/, in filename order, against the database
+make sql < file.sql    # SQL against the Azure database blob, as one leased transaction
+make import-pg         # once: copy the PostgreSQL database into the blob
 make up / down / logs  # the local docker compose stack
 make demo              # the local stack seeded with fake data, for a dashboard preview
 make run-agent         # one agent run against the local stack
@@ -36,26 +37,16 @@ make apply             # terraform init + apply (set ENV=dev|stg|prd, default de
 ```
 
 **A local `make plan`/`make apply` needs the operator's values exported.**
-`key_vault_administrator_object_ids`, `alert_email_address` and
-`postgres_entra_administrator` aren't committed: CI reads them from the
+`key_vault_administrator_object_ids`, `alert_email_address` and (until the
+retired server is removed) `postgres_entra_administrator` aren't committed: CI reads them from the
 `TF_VAR_*` variables github-repos sets on the `dev` environment. Copy them from
 `gh variable list --env dev`, lower-casing the name after `TF_VAR_`
 (`export TF_VAR_alert_email_address=…`).
 
-**`make sql` is not part of `make deploy`, and the schema is not versioned with
-the image.** A migration the code depends on has to be applied first, or the
-deployed workload fails against a database that predates it — the agent job
-queries `companies.is_benchmark`, so it would have failed outright on a
-database holding only `001` through `003`. This has already been forgotten once.
-The weekly review job is the same shape of dependency: it needs `005` for
-`weekly_reviews`, and its first Sunday run against a database without it fails
-on a missing relation. `006-decision-context.sql` is the same again — the agent
-writes `ai_decisions.prompt_context` on every decision, so a deploy of that code
-against a database without it fails on the first analysis, not at start-up. So
-is `007-job-costs.sql`, which the summary and weekly jobs write to on every run.
-And `011-sector-pots.sql`, the sharpest of them: the API, the dashboard and
-every job read `portfolio.is_active`, and `agent_runs.config` is written at the
-start of every run, so a deploy ahead of it breaks everything at once.
+**The schema ships with the image.** `schema/0NN-*.sql` live inside the
+package, and the first writer to open the database applies any it lacks. On
+PostgreSQL, `make sql` was a separate step that had to run before the deploy
+that needed it, and it was forgotten more than once (`005`, `006`, `011`).
 
 **`make deploy` is `az cli`, not `terraform apply`.** The image and the
 `IMAGE_TAG` env var on the API app and all three jobs carry
@@ -72,7 +63,7 @@ which resolves the app/job names and resource group from `terraform output`
 `az containerapp update` / `az containerapp job update --image ... --set-env-vars
 IMAGE_TAG=...` against each. `--set-env-vars` adds/updates only the name given
 and leaves every other env var alone, which is what lets `IMAGE_TAG` move
-without disturbing `KEY_VAULT_URI`, `POSTGRES_HOST` and the rest of
+without disturbing `KEY_VAULT_URI`, `DATABASE_BLOB_URL` and the rest of
 `common_env`.
 
 The trade-off of ignoring the whole `env` list rather than indexing into
@@ -129,33 +120,25 @@ image the code writing the row is running. The dashboard never reads it, and
 any of it: the first run of a statement was the deployed job at 06:00 UTC.
 Both modules sat near 30%; they are now at 97% and 98%.
 
-- **A real Postgres, not a mocked connection.** The failures worth catching are
-  the ones only the server can raise — a column that does not exist, a foreign
-  key to a company nobody seeded, a CHECK constraint refusing a status string,
-  an `ON CONFLICT` naming the wrong index. A psycopg double accepts all four.
+- **The real engine, not a mocked connection.** The failures worth catching
+  are the ones only the database can raise — a column that does not exist, a
+  CHECK constraint refusing a status string, an `ON CONFLICT` naming the wrong
+  index, a Postgres-ism DuckDB does not speak. A double accepts all of them.
   Writing these caught exactly that class of thing in the *tests* themselves:
   `agent_runs.status` rejects `success` (the code correctly writes `succeeded`).
-- **`POSTGRES_TEST_DSN` gates them, and its absence skips rather than fails.**
-  `make test` therefore still works on a clone with no Docker — 299 pass and 68
-  skip — and `make test-db` runs the lot. Deliberately not `DATABASE_URL`: a
-  developer with that pointing somewhere real would have the fixtures create
-  and drop databases on it, which they do.
-- **The fixtures apply `sql/0*.sql` to a scratch database** created and dropped
-  per session, so a run never touches rows a developer was looking at. Lines
-  starting with `\` are stripped first — each migration ends with `\echo`
-  progress lines that the server cannot parse — which is what keeps the harness
-  free of a `psql` on PATH, worth having since psql has gone missing across a
-  dev container rebuild before.
+- **DuckDB is embedded, so nothing is skipped.** The fixtures build one
+  scratch database file per session from `schema/`, in `make test` and in CI
+  alike, with no server to start. Under Postgres these needed `make test-db`
+  and a container, and a clone without Docker skipped 68 of them.
 - **Isolation is per-test rollback on one session connection**, not a rebuilt
   schema: no function in `repository.py` commits, since the caller owns the
   transaction — that is what lets the agent put a decision and its trade in one
-  — so discarding the transaction discards the test. The whole database suite
-  runs in well under a second.
-- In CI the server comes from the shared workflow's `postgres` input, which
-  starts one with `docker run` and exports `POSTGRES_TEST_DSN`. It is `docker
-  run` rather than a `services:` block because a service cannot be made
-  conditional — an empty image is a workflow error — so a `services:` block
-  would impose Postgres on every repo calling that workflow.
+  — so discarding the transaction discards the test. `test_agent_run.py` is the
+  exception, since `run()` commits for real: it gives `run()` a real
+  `db.Database` on the same file and deletes what it wrote.
+- **The blob lease is not in the suite**; it needs a Storage endpoint. It was
+  checked against Azurite with three processes incrementing one value 30 times:
+  the result was exactly 30 higher.
 
 `jobs/agent.py` is the largest remaining gap at 32%: the loop itself, which
 needs the same database plus injected `llm` and `broker`. The pieces are now in
@@ -168,8 +151,7 @@ Terraform check.
 `make install` is expected to be re-run after a dev container rebuild, not only
 after a clone: `uv` installs into `~/.local/bin`, which is the container's
 writable layer and does not survive one. `az login` and `gh auth login` go the
-same way, and so does anything `apt-get install`ed by hand — `psql` was missing
-after the last rebuild despite the deployment plan recording it as present.
+same way, and so does anything `apt-get install`ed by hand.
 
 ## Pre-commit config
 
@@ -250,7 +232,7 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
   the images compile, but neither executes a test, so the risk engine was
   guarded only by whoever remembered `make test`. The sharp edge was Renovate:
   `autoApprove` means a dependency bump reaches `main` with no human reading
-  it, so a `psycopg` or `pydantic` release that broke the engine or the
+  it, so a `duckdb` or `pydantic` release that broke the engine or the
   request shapes would have merged green. Being a reusable-workflow
   call, its status check context is **`test / Test`**, not the bare `test` job
   id — the same namespacing `pre-commit / Pre-commit` has.
@@ -288,10 +270,9 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
   There is no `--cov-fail-under` on purpose, because the figure was bimodal
   rather than uniform: the pure modules are at 100% (`risk.py`,
   `models.py`, `benchmarks.py`, `fx.py`, `mailer.py`, `risklimits.py`) and
-  everything behind a psycopg connection is far lower — `repository.py` at 27%,
-  with 28 of its 30 functions never named in a test, `queries.py` at 37%,
-  `jobs/agent.py`'s loop at 32%. That is not neglect; CI has no database, so
-  that SQL has nothing to run against. A threshold over the mixture would be
+  everything behind the database connection was far lower when CI had no
+  database — `repository.py` at 27%, `queries.py` at 37%, `jobs/agent.py`'s
+  loop at 32%. DuckDB being embedded closed most of that. A threshold over the mixture would be
   met by mocking the connection and the Entra token path, which asserts the
   mock rather than the behaviour. **83% overall at 367 tests** is the figure to
   compare against; treat a drop as something to read, not as a build failure.
@@ -315,7 +296,7 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
 
   - **The API is stubbed in the browser, not run.** `tests/fixtures.ts` holds
     the response shapes and `page.route` serves them, so the suite needs no
-    Postgres, no API image and no network. It is a *layout* suite; wiring it
+    database, no API image and no network. It is a *layout* suite; wiring it
     to a database would make it a layout suite that only runs when a database
     happens to be up.
   - **Route registration order is load-bearing.** Playwright matches handlers

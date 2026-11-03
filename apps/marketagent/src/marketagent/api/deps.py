@@ -9,17 +9,13 @@ from typing import Annotated, Any
 from fastapi import Depends, Header, HTTPException, Query, status
 
 from .. import repository as repo
-from ..db import pool
+from ..db import database
 from ..settings import secret, settings
 
 
 def connection() -> Iterator[Any]:
-    """A pooled connection for the duration of one request.
-
-    Read-only endpoints, so nothing commits; the context manager returns the
-    connection to the pool either way.
-    """
-    with pool().connection() as conn:
+    """A read-only connection to the API's copy of the database, per request."""
+    with database().connection() as conn:
         yield conn
 
 

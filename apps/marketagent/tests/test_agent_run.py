@@ -1,10 +1,10 @@
-"""jobs.agent.run() end to end, against a real Postgres.
+"""jobs.agent.run() end to end, against a real database.
 
 `test_agent.py` covers the two pure pieces of the loop (the decision history
 and the spend ceiling) with no database at all. Everything else — the two
 LLM stages, the risk engine wired to a real `agent_runs`/`ai_decisions`/
 `trades` write path, the budget guard actually stopping a run — only runs
-against Postgres, which is why it sat at 32% coverage with nothing here.
+against a database, which is why it sat at 32% coverage with nothing here.
 
 `repository.py`'s own tests share one connection across the whole session and
 rely on rollback for isolation (see `conftest.conn`) — a real function there
@@ -12,10 +12,10 @@ never commits, which is what makes rollback-only isolation work. `run()`
 cannot use that connection: it commits at each stage on purpose, so a crash
 partway leaves whatever already ran as evidence. Reusing the shared session
 connection here would let a committed row from this file leak into every
-other test file sharing it. `agent_dsn` below gives `run()` its own fresh
-connection per `pool().connection()` call instead — the same granularity
-production's real pool gives it — and resets the mutated tables by row
-afterwards, back to what `sql/003-seed-watchlist.sql` leaves behind.
+other test file sharing it. `agent_db` below gives `run()` a real
+`db.Database` on the session's file, so each `database().connection()` block
+is its own transaction as in production, and resets the mutated tables by row
+afterwards, back to what `schema/002-seed.sql` leaves behind.
 
 `DryRunBroker` is the real implementation, not a fake: it does no I/O, so
 nothing is lost by using it, and it is what exercises the fill path `_execute`
@@ -27,9 +27,9 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-import psycopg
 import pytest
 
+from marketagent import db
 from marketagent import repository as repo
 from marketagent.broker.dryrun import DryRunBroker
 from marketagent.fx import FxRate
@@ -42,7 +42,7 @@ from marketagent.news import Article
 
 D = Decimal
 
-# One of the names sql/011-sector-pots.sql puts on the tech pot's
+# One of the names schema/002-seed.sql puts on the tech pot's
 # watchlist — this file exercises the loop against that account throughout.
 TICKER = "NVDA"
 PORTFOLIO = "tech"
@@ -50,11 +50,11 @@ RATE = FxRate(gbp_usd=D("1.3400"), as_of=date(2026, 9, 14))
 BAR_DATE = date(2026, 9, 14)
 
 
-def _reset(dsn: str) -> None:
-    """Back to what 003-seed-watchlist.sql leaves: ten companies, one
-    portfolio at its initial cash, nothing else. Deletes rather than rollback
-    because run() commits for real — see the module docstring."""
-    with psycopg.connect(dsn, autocommit=True) as conn:
+def _reset(path) -> None:
+    """Back to what 002-seed.sql leaves: the seeded companies and pots at their
+    initial cash, nothing else. Deletes rather than rollback because run()
+    commits for real — see the module docstring."""
+    with db.open_file(path) as conn:
         conn.execute("DELETE FROM trades")
         conn.execute("DELETE FROM ai_decisions")
         conn.execute("DELETE FROM news_analysis")
@@ -70,26 +70,13 @@ def _reset(dsn: str) -> None:
 
 
 @pytest.fixture
-def agent_dsn(database_dsn):
+def agent_db(database_path):
     """The scratch database, reset both before and after — a previous test's
     failure must not leave the next one a dirty baseline, matching why
     conftest.conn rolls back on both sides of the shared connection."""
-    _reset(database_dsn)
-    yield database_dsn
-    _reset(database_dsn)
-
-
-class _FreshConnectionPool:
-    """Stands in for the real psycopg_pool.ConnectionPool: a genuinely new
-    connection per checkout, which is the granularity `pool().connection()`
-    gives run() in production. Each connection commits and closes on its own
-    `with` block exit, same as a pooled one returning to the pool."""
-
-    def __init__(self, dsn: str) -> None:
-        self._dsn = dsn
-
-    def connection(self):
-        return psycopg.connect(self._dsn)
+    _reset(database_path)
+    yield database_path
+    _reset(database_path)
 
 
 def _bar(ticker: str, close: str = "150.0000") -> Bar:
@@ -161,19 +148,19 @@ class _FakeLlm:
 
 
 @pytest.fixture(autouse=True)
-def _patch_market_data(monkeypatch, agent_dsn):
+def _patch_market_data(monkeypatch, agent_db):
     """Everything run() fetches directly rather than through an injected
     parameter — fx, prices and news are all outbound network calls the loop
     makes for itself, unlike llm and broker."""
     monkeypatch.setenv("RISK_MAX_TRADE_USD", "50")
     monkeypatch.setenv("RISK_MAX_POSITION_USD", "100")
-    monkeypatch.setattr(agent, "pool", lambda: _FreshConnectionPool(agent_dsn))
+    monkeypatch.setattr(agent, "database", lambda: db.Database(agent_db))
     monkeypatch.setattr(agent, "fetch_daily_bars", lambda tickers, days: [_bar(t) for t in tickers])
     monkeypatch.setattr(agent, "fetch_news", lambda tickers, hours: [_article(TICKER)])
 
 
-def _portfolio_cash(dsn: str) -> Decimal:
-    with psycopg.connect(dsn) as conn:
+def _portfolio_cash(path) -> Decimal:
+    with db.open_file(path) as conn:
         return repo.load_cash(conn, repo.portfolio_id(conn, PORTFOLIO))
 
 
@@ -182,7 +169,7 @@ def _portfolio_cash(dsn: str) -> Decimal:
 # ---------------------------------------------------------------------------
 
 
-def test_a_buy_is_analysed_approved_and_filled(agent_dsn, monkeypatch):
+def test_a_buy_is_analysed_approved_and_filled(agent_db, monkeypatch):
     monkeypatch.setenv("DRY_RUN", "true")
     llm = _FakeLlm(TICKER, action="BUY", amount_usd=40.0)
 
@@ -192,7 +179,7 @@ def test_a_buy_is_analysed_approved_and_filled(agent_dsn, monkeypatch):
     # the other nine seeded tickers must never reach it.
     assert llm.analysed == [TICKER]
 
-    with psycopg.connect(agent_dsn) as conn:
+    with db.open_file(agent_db) as conn:
         run_row = conn.execute(
             "SELECT status, dry_run, trigger, decisions_made, trades_executed, error "
             "FROM agent_runs WHERE id = %s",
@@ -220,15 +207,15 @@ def test_a_buy_is_analysed_approved_and_filled(agent_dsn, monkeypatch):
 
     # Cash moved by the fill — a dry run still updates our own ledger, only the
     # broker call itself is simulated.
-    assert _portfolio_cash(agent_dsn) == D("99960.0000")
+    assert _portfolio_cash(agent_db) == D("99960.0000")
 
 
-def test_a_decision_is_persisted_with_the_history_it_was_shown(agent_dsn):
+def test_a_decision_is_persisted_with_the_history_it_was_shown(agent_db):
     """The point of `prompt_context`: a decision has to carry what the model
     was shown, not just what it answered."""
     agent.run(portfolio=PORTFOLIO, llm=_FakeLlm(TICKER), broker=DryRunBroker())
 
-    with psycopg.connect(agent_dsn) as conn:
+    with db.open_file(agent_db) as conn:
         pid = repo.portfolio_id(conn, PORTFOLIO)
         history = repo.recent_decisions(conn, pid, TICKER, limit=5)
 
@@ -237,7 +224,7 @@ def test_a_decision_is_persisted_with_the_history_it_was_shown(agent_dsn):
 
     # The buying headroom the prompt showed, and the trade count behind it, so
     # the decision stays replayable against what the model was told.
-    with psycopg.connect(agent_dsn) as conn:
+    with db.open_file(agent_db) as conn:
         (context,) = conn.execute(
             "SELECT prompt_context FROM ai_decisions ORDER BY id DESC LIMIT 1"
         ).fetchone()
@@ -250,12 +237,12 @@ def test_a_decision_is_persisted_with_the_history_it_was_shown(agent_dsn):
 # ---------------------------------------------------------------------------
 
 
-def test_a_hold_is_persisted_with_no_trade_and_cash_untouched(agent_dsn):
+def test_a_hold_is_persisted_with_no_trade_and_cash_untouched(agent_db):
     run_id = agent.run(
         portfolio=PORTFOLIO, llm=_FakeLlm(TICKER, action="HOLD"), broker=DryRunBroker()
     )
 
-    with psycopg.connect(agent_dsn) as conn:
+    with db.open_file(agent_db) as conn:
         decision = conn.execute(
             "SELECT action, approved_amount_usd FROM ai_decisions WHERE run_id = %s",
             (run_id,),
@@ -269,7 +256,7 @@ def test_a_hold_is_persisted_with_no_trade_and_cash_untouched(agent_dsn):
         ).fetchone()[0]
         assert trade_count == 0
 
-    assert _portfolio_cash(agent_dsn) == D("100000.0000")
+    assert _portfolio_cash(agent_db) == D("100000.0000")
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +264,7 @@ def test_a_hold_is_persisted_with_no_trade_and_cash_untouched(agent_dsn):
 # ---------------------------------------------------------------------------
 
 
-def test_crossing_the_budget_ceiling_fails_the_run_with_evidence(agent_dsn, monkeypatch):
+def test_crossing_the_budget_ceiling_fails_the_run_with_evidence(agent_db, monkeypatch):
     """`MAX_RUN_COST_USD` set below what even the cheap filter call costs, so
     the very first call trips it — proving the check runs per call rather
     than once per stage, which is the whole reason it exists."""
@@ -286,7 +273,7 @@ def test_crossing_the_budget_ceiling_fails_the_run_with_evidence(agent_dsn, monk
     with pytest.raises(BudgetExceeded):
         agent.run(portfolio=PORTFOLIO, llm=_FakeLlm(TICKER), broker=DryRunBroker())
 
-    with psycopg.connect(agent_dsn) as conn:
+    with db.open_file(agent_db) as conn:
         run_row = conn.execute(
             "SELECT status, error FROM agent_runs ORDER BY id DESC LIMIT 1"
         ).fetchone()
@@ -301,10 +288,10 @@ def test_crossing_the_budget_ceiling_fails_the_run_with_evidence(agent_dsn, monk
 
     # Untouched: the run failed before the risk engine or the broker ever saw
     # a recommendation.
-    assert _portfolio_cash(agent_dsn) == D("100000.0000")
+    assert _portfolio_cash(agent_db) == D("100000.0000")
 
 
-def test_paper_fills_are_mirrored_without_applying_cash_twice(agent_dsn):
+def test_paper_fills_are_mirrored_without_applying_cash_twice(agent_db):
     from marketagent.broker.base import BrokerAccount, BrokerPosition, BrokerSnapshot, OrderResult
 
     class PaperBroker:
@@ -326,7 +313,7 @@ def test_paper_fills_are_mirrored_without_applying_cash_twice(agent_dsn):
             )
 
     agent.run(portfolio=PORTFOLIO, llm=_FakeLlm(TICKER, amount_usd=40), broker=PaperBroker())
-    with psycopg.connect(agent_dsn) as conn:
+    with db.open_file(agent_db) as conn:
         assert repo.load_cash(conn, repo.portfolio_id(conn, PORTFOLIO)) == D(99960)
         assert conn.execute("SELECT count(*) FROM positions").fetchone()[0] == 1
         assert conn.execute("SELECT notional_usd FROM trades").fetchone()[0] == D(40)
@@ -337,9 +324,9 @@ def test_paper_fills_are_mirrored_without_applying_cash_twice(agent_dsn):
 # ---------------------------------------------------------------------------
 
 
-def _hold(dsn: str, ticker: str, value: str, cash: str) -> None:
+def _hold(path, ticker: str, value: str, cash: str) -> None:
     """Leave the pot holding `ticker` at `value` with `cash` left over."""
-    with psycopg.connect(dsn, autocommit=True) as conn:
+    with db.open_file(path) as conn:
         pid = repo.portfolio_id(conn, PORTFOLIO)
         conn.execute("UPDATE portfolio SET cash_usd = %s WHERE id = %s", (D(cash), pid))
         conn.execute(
@@ -360,13 +347,13 @@ def _record_news(monkeypatch, ticker: str) -> list[list[str]]:
     return asked
 
 
-def test_a_pot_with_no_buying_headroom_analyses_only_its_holdings(agent_dsn, monkeypatch):
+def test_a_pot_with_no_buying_headroom_analyses_only_its_holdings(agent_db, monkeypatch):
     """At the 80% exposure ceiling every BUY of an unheld ticker is refused
     whatever the model says, so only the holding is worth an analysis — for a
     possible SELL. News is not even fetched for the rest of the watchlist."""
     monkeypatch.setenv("DRY_RUN", "true")
     held = "AAPL"
-    _hold(agent_dsn, held, value="390", cash="10")
+    _hold(agent_db, held, value="390", cash="10")
     asked = _record_news(monkeypatch, held)
     llm = _FakeLlm(held, action="SELL", amount_usd=20.0)
 
@@ -376,7 +363,7 @@ def test_a_pot_with_no_buying_headroom_analyses_only_its_holdings(agent_dsn, mon
     assert llm.analysed == [held]
 
 
-def test_a_pot_with_headroom_analyses_its_whole_watchlist(agent_dsn, monkeypatch):
+def test_a_pot_with_headroom_analyses_its_whole_watchlist(agent_db, monkeypatch):
     monkeypatch.setenv("DRY_RUN", "true")
     asked = _record_news(monkeypatch, TICKER)
 
@@ -386,13 +373,13 @@ def test_a_pot_with_headroom_analyses_its_whole_watchlist(agent_dsn, monkeypatch
     assert len(asked[0]) == 10
 
 
-def test_an_unheld_ticker_is_not_analysed_once_headroom_runs_out_mid_run(agent_dsn, monkeypatch):
+def test_an_unheld_ticker_is_not_analysed_once_headroom_runs_out_mid_run(agent_db, monkeypatch):
     """The up-front check passed, but by this ticker an earlier BUY's open
     order has used the headroom up: every BUY of an unheld ticker would now be
     refused, so its analysis is skipped rather than paid for. Simulated by
     letting the up-front check through on a pot already at the ceiling."""
     monkeypatch.setenv("DRY_RUN", "true")
-    _hold(agent_dsn, "AAPL", value="390", cash="10")
+    _hold(agent_db, "AAPL", value="390", cash="10")
     _record_news(monkeypatch, TICKER)
     monkeypatch.setattr(agent, "_analysable", lambda pid, tickers, closes, opening: tickers)
     llm = _FakeLlm(TICKER)
@@ -400,12 +387,12 @@ def test_an_unheld_ticker_is_not_analysed_once_headroom_runs_out_mid_run(agent_d
     run_id = agent.run(portfolio=PORTFOLIO, llm=llm, broker=DryRunBroker())
 
     assert llm.analysed == []
-    with psycopg.connect(agent_dsn) as conn:
+    with db.open_file(agent_db) as conn:
         status = conn.execute("SELECT status FROM agent_runs WHERE id = %s", (run_id,)).fetchone()
         assert status == ("succeeded",)
 
 
-def test_nothing_is_analysed_once_the_daily_trade_limit_is_spent(agent_dsn, monkeypatch):
+def test_nothing_is_analysed_once_the_daily_trade_limit_is_spent(agent_db, monkeypatch):
     """With the trade budget gone even a SELL is refused, so the run pays for
     no analysis at all and still closes its row as a success."""
     monkeypatch.setenv("DRY_RUN", "true")
@@ -417,18 +404,18 @@ def test_nothing_is_analysed_once_the_daily_trade_limit_is_spent(agent_dsn, monk
 
     assert asked == [[]]
     assert llm.analysed == []
-    with psycopg.connect(agent_dsn) as conn:
+    with db.open_file(agent_db) as conn:
         status = conn.execute("SELECT status FROM agent_runs WHERE id = %s", (run_id,)).fetchone()
         assert status == ("succeeded",)
 
 
-def test_a_run_records_the_model_and_risk_settings_it_used(agent_dsn, monkeypatch):
+def test_a_run_records_the_model_and_risk_settings_it_used(agent_db, monkeypatch):
     monkeypatch.setenv("DRY_RUN", "true")
     monkeypatch.setenv("ANALYSIS_EFFORT", "low")
 
     run_id = agent.run(portfolio=PORTFOLIO, llm=_FakeLlm(TICKER), broker=DryRunBroker())
 
-    with psycopg.connect(agent_dsn) as conn:
+    with db.open_file(agent_db) as conn:
         row = conn.execute("SELECT config FROM agent_runs WHERE id = %s", (run_id,)).fetchone()
     config = row[0]
     assert config["analysis_effort"] == "low"
@@ -436,12 +423,12 @@ def test_a_run_records_the_model_and_risk_settings_it_used(agent_dsn, monkeypatc
     assert "allowed_tickers" not in config["risk"]
 
 
-def test_a_retired_pot_refuses_to_run_and_opens_no_row(agent_dsn):
-    with psycopg.connect(agent_dsn, autocommit=True) as conn:
+def test_a_retired_pot_refuses_to_run_and_opens_no_row(agent_db):
+    with db.open_file(agent_db) as conn:
         conn.execute("UPDATE portfolio SET is_active = false WHERE name = %s", (PORTFOLIO,))
 
     with pytest.raises(RuntimeError, match="retired"):
         agent.run(portfolio=PORTFOLIO, llm=_FakeLlm(TICKER), broker=DryRunBroker())
 
-    with psycopg.connect(agent_dsn) as conn:
+    with db.open_file(agent_db) as conn:
         assert conn.execute("SELECT count(*) FROM agent_runs").fetchone()[0] == 0

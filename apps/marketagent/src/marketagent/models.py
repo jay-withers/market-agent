@@ -1,7 +1,7 @@
 """Domain models, risk configuration, and the LLM's structured output types.
 
-Money is `Decimal`, never `float`, matching the `NUMERIC(18,4)` columns in
-`sql/001-schema.sql`. The whole experiment reduces to a P&L figure, and binary
+Money is `Decimal`, never `float`, matching the `DECIMAL(18,4)` columns in
+`schema/001-schema.sql`. The whole experiment reduces to a P&L figure, and binary
 floating point cannot represent a penny exactly.
 """
 

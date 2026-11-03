@@ -140,7 +140,7 @@ resource "azurerm_container_app" "api" {
   # sidesteps indexing into a map-driven `dynamic` block by a position that
   # would silently shift if common_env ever gains or loses a key — the
   # trade-off is that a future change to any of common_env's other values
-  # (KEY_VAULT_URI, POSTGRES_HOST, ...) needs a `make deploy` to actually land,
+  # (KEY_VAULT_URI, DATABASE_BLOB_URL, ...) needs a `make deploy` to actually land,
   # not just `terraform apply`.
   #
   # API_REQUIRE_TOKEN, added above, is caught by the same ignore: on an
@@ -197,7 +197,7 @@ resource "azurerm_container_app" "dashboard" {
       }
 
       # Not `common_env`: the dashboard still holds no database credential and
-      # has no use for POSTGRES_* or the App Insights connection string. These
+      # has no use for DATABASE_* or the App Insights connection string. These
       # two are exactly what the entrypoint needs to fetch DASHBOARD-PASSCODE
       # and API-BEARER-TOKEN from Key Vault itself, with the container's
       # managed identity — the same way every other secret in this repo is
