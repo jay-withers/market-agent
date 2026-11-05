@@ -34,6 +34,7 @@ from ..llm.deepseek_provider import DeepseekLlm
 from ..marketdata import Bar, fetch_daily_bars, latest_close
 from ..models import Recommendation
 from ..news import Article, fetch_news
+from ..pricehistory import restated_history
 from ..risk import evaluate, new_buy_headroom
 from ..settings import settings
 from ..sync import risk_state, synchronize
@@ -145,6 +146,7 @@ def run(
                     "Use an isolated database for dry runs; this portfolio mirrors Alpaca"
                 )
         bars = fetch_daily_bars(tickers, days=PRICE_HISTORY_DAYS)
+        history = restated_history(database(), bars)
         closes = latest_close(bars)
         # The allowlist stays the whole watchlist even when the analysis below
         # is narrowed to holdings.
@@ -154,7 +156,7 @@ def run(
         counts["news_fetched"] = len(articles)
 
         with database().connection() as conn:
-            repo.save_prices(conn, bars)
+            repo.save_prices(conn, history + bars)
             news_ids = repo.save_news(conn, articles)
             conn.commit()
 
@@ -480,6 +482,18 @@ def _prompt(ticker, articles, bars, state, limits, history=(), buy_room=None) ->
     held = state.position_value(ticker)
     if buy_room is None:
         buy_room = new_buy_headroom(state, limits, 0, held)
+    # A held name is still analysed with no headroom left (it may be a SELL),
+    # and "largest BUY permitted: USD 0" alone was not enough: the model kept
+    # returning BUYs the exposure ceiling refused. Derived only from the stored
+    # `buy_headroom_usd` and limits, so the decision stays replayable.
+    if buy_room < limits.min_trade_usd:
+        buy_line = (
+            f"no BUY of {ticker} can be approved now: the remaining headroom "
+            f"(USD {buy_room}) is below the USD {limits.min_trade_usd} minimum trade. "
+            "Return HOLD or SELL."
+        )
+    else:
+        buy_line = f"largest BUY of {ticker} permitted now: USD {buy_room}"
 
     return f"""Ticker: {ticker}
 Date: {datetime.now(UTC):%Y-%m-%d} (all times UTC)
@@ -506,7 +520,7 @@ Portfolio (mirrors the Alpaca paper account):
   total value: USD {state.total_value_usd}
   invested: USD {state.invested_usd}
   held in {ticker}: USD {held}
-  largest BUY of {ticker} permitted now: USD {buy_room}
+  {buy_line}
 
 Risk limits that will be applied to your suggestion:
   max per position: USD {limits.max_position_usd}

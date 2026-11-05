@@ -36,6 +36,7 @@ from ..llm.deepseek_provider import DeepseekLlm, balance_usd
 from ..mailer import MailResult, send
 from ..marketdata import fetch_daily_bars, latest_close
 from ..models import money
+from ..pricehistory import restated_history
 from ..settings import settings
 from ..sync import synchronize
 
@@ -90,9 +91,10 @@ def run(
 
         bars = fetch_daily_bars(holdings, days=PRICE_HISTORY_DAYS) if holdings else []
         benchmark_bars = fetch_benchmark_bars(benchmark_symbols, days=PRICE_HISTORY_DAYS)
+        history = restated_history(database(), bars + benchmark_bars)
 
         with database().connection() as conn:
-            repo.save_prices(conn, bars + benchmark_bars)
+            repo.save_prices(conn, history + bars + benchmark_bars)
             conn.commit()
 
         with database().connection() as conn:

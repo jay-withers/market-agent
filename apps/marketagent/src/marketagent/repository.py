@@ -12,7 +12,7 @@ decision and the trade implementing it must both land or neither.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -249,6 +249,85 @@ def save_prices(conn: Any, bars: list[Bar]) -> int:
             ],
         )
     return len(bars)
+
+
+# A stored close and a fresh one for the same day differing by more than this
+# means Alpaca restated the history: `adjustment=all` rewrites every bar before
+# a split or a dividend. One unit of the column's last place, so rounding to
+# DECIMAL(18,4) on the way in never counts as a restatement.
+RESTATEMENT_TOLERANCE_USD = Decimal("0.0001")
+
+# How far back a split-sized move in stored history still triggers a re-fetch.
+# A real move re-fetches to the same values, so this only bounds how long one
+# harmless extra request a day goes on for.
+RESTATEMENT_SPIKE_DAYS = 30
+
+
+def _day_moves(where: str) -> str:
+    """Each stored close's percentage move on the previous stored close.
+
+    Shared by `restated_tickers` and `week_integrity`'s price_spike check, so
+    the thing that repairs a split and the thing that reports one agree on what
+    a split looks like. `where` filters `prices pr` before the window function.
+    """
+    return (
+        "SELECT pr.ticker, pr.bar_date,"
+        "       round((pr.close_usd / NULLIF("
+        "         lag(pr.close_usd) OVER (PARTITION BY pr.ticker ORDER BY pr.bar_date), 0)"
+        "         - 1) * 100, 1) AS pct"
+        f"  FROM prices pr WHERE {where}"
+    )
+
+
+def restated_tickers(conn: Any, bars: list[Bar], today: date | None = None) -> dict[str, date]:
+    """Tickers in `bars` whose stored history no longer matches Alpaca's.
+
+    Each run re-fetches only the last few days, and `adjustment=all` restates
+    every bar before a split. So after a split the newest week is in the new
+    terms and everything older is still in the old, and `prices` shows a cliff
+    that never happened — the 2026-10-29 NOW price_spike. Returned for each
+    ticker is its earliest stored bar, which is where a re-fetch must start.
+
+    A ticker is restated if a fresh bar disagrees with the stored bar for the
+    same day, or if its stored history has a split-sized move in the last
+    `RESTATEMENT_SPIKE_DAYS`. The second catches a split whose overlap has
+    already been overwritten, which is how NOW stands now.
+    """
+    if not bars:
+        return {}
+    tickers = sorted({b.ticker for b in bars})
+    stored = {
+        (ticker, day): close
+        for ticker, day, close in conn.execute(
+            "SELECT ticker, bar_date, close_usd FROM prices"
+            " WHERE ticker = ANY(%s) AND bar_date >= %s",
+            (tickers, min(b.bar_date for b in bars)),
+        ).fetchall()
+    }
+    stale = {
+        b.ticker
+        for b in bars
+        if (b.ticker, b.bar_date) in stored
+        and abs(stored[(b.ticker, b.bar_date)] - b.close_usd) > RESTATEMENT_TOLERANCE_USD
+    }
+    since = (today or date.today()) - timedelta(days=RESTATEMENT_SPIKE_DAYS)
+    stale |= {
+        row[0]
+        for row in conn.execute(
+            "SELECT DISTINCT ticker FROM (" + _day_moves("pr.ticker = ANY(%s)") + ") m"
+            " WHERE m.bar_date >= %s AND abs(m.pct) > %s",
+            (tickers, since, SPIKE_PCT),
+        ).fetchall()
+    }
+    if not stale:
+        return {}
+    return {
+        ticker: earliest
+        for ticker, earliest in conn.execute(
+            "SELECT ticker, min(bar_date) FROM prices WHERE ticker = ANY(%s) GROUP BY ticker",
+            (sorted(stale),),
+        ).fetchall()
+    }
 
 
 def save_news(conn: Any, articles: list[Article]) -> dict[str, int]:
@@ -984,12 +1063,15 @@ def week_integrity(conn: Any, pid: int, start: date, end: date) -> list[dict[str
         + " — the chart draws straight across the gap",
     )
 
-    # 2. A day with no agent run at all. The cron is daily, weekends included,
-    #    so there is no trading calendar to reason about here.
+    # 2. A day with no agent run for this pot. The cron is daily, weekends
+    #    included, so there is no trading calendar to reason about here. Scoped
+    #    to the pot: each pot has its own job, and another pot's run says
+    #    nothing about whether this one ran.
     no_run_days = listing(
         "SELECT d::date FROM generate_series(%(start)s::date, %(end)s::date, '1 day') d"
         " WHERE NOT EXISTS ("
-        "   SELECT 1 FROM agent_runs r WHERE r.started_at::date = d::date)"
+        "   SELECT 1 FROM agent_runs r"
+        "    WHERE r.portfolio_id = %(pid)s AND r.started_at::date = d::date)"
         " ORDER BY d"
     )
     record(
@@ -1001,28 +1083,48 @@ def week_integrity(conn: Any, pid: int, start: date, end: date) -> list[dict[str
         else "no agent run on " + ", ".join(str(d[0]) for d in no_run_days),
     )
 
-    # 3. A run that failed, or one still marked running long past the job
-    #    timeout — SIGKILL cannot be caught, so that row was never closed.
+    # 3. A run of this pot that failed, or one still marked running long past
+    #    the job timeout — SIGKILL cannot be caught, so that row was never
+    #    closed. Scoped to the pot, for the same reason as missing_runs:
+    #    unscoped, one pot's failed run is reported against every pot.
+    #
+    #    A failure followed by a successful run of the same pot on the same day
+    #    is the job's retry (`replica_retry_limit = 1`) doing its job. The day's
+    #    decisions exist, so the record is intact: it is named in the detail
+    #    but does not fail the check.
     bad_runs = listing(
-        "SELECT started_at::date, status,"
-        "       (status = 'running'"
-        "        AND started_at < now() - to_seconds(%(timeout)s)) AS stale"
-        " FROM agent_runs"
-        " WHERE started_at::date BETWEEN %(start)s AND %(end)s"
-        "   AND (status = 'failed'"
-        "        OR (status = 'running'"
-        "            AND started_at < now() - to_seconds(%(timeout)s)))"
-        " ORDER BY started_at",
+        "SELECT r.started_at::date, r.status,"
+        "       (r.status = 'running'"
+        "        AND r.started_at < now() - to_seconds(%(timeout)s)) AS stale,"
+        "       EXISTS ("
+        "         SELECT 1 FROM agent_runs later"
+        "          WHERE later.portfolio_id = r.portfolio_id"
+        "            AND later.status = 'succeeded'"
+        "            AND later.started_at::date = r.started_at::date"
+        "            AND later.started_at > r.started_at) AS recovered"
+        " FROM agent_runs r"
+        " WHERE r.portfolio_id = %(pid)s"
+        "   AND r.started_at::date BETWEEN %(start)s AND %(end)s"
+        "   AND (r.status = 'failed'"
+        "        OR (r.status = 'running'"
+        "            AND r.started_at < now() - to_seconds(%(timeout)s)))"
+        " ORDER BY r.started_at",
         {**window, "timeout": JOB_TIMEOUT_SECONDS},
     )
-    record(
-        "failed_runs",
-        not bad_runs,
-        len(bad_runs),
-        "no failed or abandoned runs"
-        if not bad_runs
-        else ", ".join(f"{row[0]} {'abandoned' if row[2] else row[1]}" for row in bad_runs),
+    unrecovered = [row for row in bad_runs if not row[3]]
+    recovered = [row for row in bad_runs if row[3]]
+
+    def _run(row: tuple) -> str:
+        return f"{row[0]} {'abandoned' if row[2] else row[1]}"
+
+    detail = (
+        ", ".join(_run(row) for row in unrecovered)
+        if unrecovered
+        else "no failed or abandoned runs"
     )
+    if recovered:
+        detail += "; recovered by retry: " + ", ".join(_run(row) for row in recovered)
+    record("failed_runs", not unrecovered, len(unrecovered), detail)
 
     # 4. A held ticker that has stopped being priced. This is the one that
     #    silently changes the reported total: build_state drops an unpriced
@@ -1050,17 +1152,15 @@ def week_integrity(conn: Any, pid: int, start: date, end: date) -> list[dict[str
 
     # 5. A one-day close move large enough to suggest a corporate action. Bars
     #    are fetched with adjustment=all, which restates the price history
-    #    across a split while `positions.quantity` stays exactly as it was — so
-    #    a split moves the reported value with no trade behind it.
+    #    across a split. `positions.quantity` comes from the broker snapshot, so
+    #    the valuation follows the split; the stored history is what can be left
+    #    half in the old terms, and `pricehistory` re-fetches it on the next run.
+    #    A spike that survives that is a real move, or a broker snapshot that
+    #    has not applied the split yet — which would distort the valuation.
     spikes = listing(
         "SELECT ticker, bar_date, pct FROM ("
-        "  SELECT pr.ticker, pr.bar_date,"
-        "         round((pr.close_usd / NULLIF("
-        "           lag(pr.close_usd) OVER (PARTITION BY pr.ticker ORDER BY pr.bar_date), 0)"
-        "           - 1) * 100, 1) AS pct"
-        "    FROM prices pr"
-        "   WHERE pr.ticker IN (SELECT ticker FROM positions WHERE portfolio_id = %(pid)s)"
-        ") m"
+        + _day_moves("pr.ticker IN (SELECT ticker FROM positions WHERE portfolio_id = %(pid)s)")
+        + ") m"
         " WHERE m.bar_date BETWEEN %(start)s AND %(end)s AND abs(m.pct) > %(pct)s"
         " ORDER BY abs(m.pct) DESC",
         {**window, "pct": SPIKE_PCT},
@@ -1072,7 +1172,8 @@ def week_integrity(conn: Any, pid: int, start: date, end: date) -> list[dict[str
         f"no held ticker moved more than {SPIKE_PCT}% in a day"
         if not spikes
         else ", ".join(f"{t} {p}% on {d}" for t, d, p in spikes)
-        + " — check for a split, which restates closes but not our quantity",
+        + " — if a split, the next run re-fetches the history; if it persists, check the"
+        " broker's quantity applied the split",
     )
 
     # Broker account state is authoritative, including activity outside this agent.

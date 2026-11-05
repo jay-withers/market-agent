@@ -173,3 +173,12 @@ def test_the_news_request_asks_newest_first():
 
     assert captured[0].url.params["sort"] == "desc"
     assert captured[0].url.params["limit"] == "50"
+
+
+def test_a_start_date_replaces_the_window():
+    """pricehistory re-fetches a restated ticker from its earliest stored bar."""
+    captured: list = []
+    fetch_daily_bars(["NVDA"], start=date(2026, 1, 5), client=json_client(BARS, capture=captured))
+
+    assert captured[0].url.params["start"] == "2026-01-05"
+    assert captured[0].url.params["adjustment"] == "all"
