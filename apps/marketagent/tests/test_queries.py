@@ -111,7 +111,8 @@ def _price(conn, ticker: str = TICKER, close: str = "100.0000", day: date = TODA
 def test_the_overview_of_an_untouched_portfolio_is_the_notional_and_no_pnl(conn):
     result = queries.overview(conn, PORTFOLIO)
 
-    assert result["cash_usd"] == 100000.0
+    # 002-seed.sql's $500, each pot's real paper balance.
+    assert result["cash_usd"] == 500.0
     assert result["position_count"] == 0
     assert result["pnl_usd"] == 0.0
     assert result["last_run"] is None
@@ -136,7 +137,8 @@ def test_the_overview_values_positions_at_the_latest_close(conn):
     # 2 shares x $100; no FX conversion
     assert result["positions_value_usd"] == 200.0
     assert result["position_count"] == 1
-    assert result["total_value_usd"] == 100150.0
+    # $500 seed - $50 spent + 2 shares x $100.
+    assert result["total_value_usd"] == 650.0
 
 
 def test_broker_valuation_takes_precedence_over_local_prices(conn):
