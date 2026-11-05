@@ -17,7 +17,7 @@ tfenv/tenv and CI look for it.
 **File layout is enforced, not just conventional**: `locals`/`variable`/`output`/
 `data` blocks must live in a matching `locals.tf`/`variables.tf`/`outputs.tf`/
 `data.tf`, and `terraform{}`/`provider{}` blocks in `versions.tf`, or a
-topic-scoped variant of any of them (`main.database.tf`, `locals.container-apps.tf`,
+topic-scoped variant of any of them (`main.storage.tf`, `locals.container-apps.tf`,
 `variables.optional.tf`), via the local pre-commit hook
 `scripts/check-tf-standards.sh`. TFLint's `terraform_standard_module_structure`
 rule covers similar ground but hardcodes the exact filenames `variables.tf`/
@@ -47,10 +47,10 @@ Application Insights (workspace-based), Key Vault (RBAC), Container Apps
 environment (Consumption-only), two container apps (`api`, `dashboard`),
 scheduled container app jobs — an `agent-<pot>` and a `sync-<pot>` per pot in
 `local.pots`, plus `summary` and `weekly` covering every pot — a storage
-account holding the DuckDB database (and, until a follow-up removes it, the
-PostgreSQL Flexible Server it replaced), and the alerting in `main.alerts.tf`
-(action group, five metric alerts, one log alert, a budget, two diagnostic
-settings). Names come from `Azure/naming/azurerm`.
+account holding the DuckDB database, and the alerting in `main.alerts.tf`
+(action group, one log alert and a budget; the metric-alert table is empty
+since the PostgreSQL server and its two rules were removed in 2026-11), plus
+one diagnostic setting (Key Vault audit). Names come from `Azure/naming/azurerm`.
 
 ### The cost constraint drives most of the design
 
@@ -110,9 +110,11 @@ service objectives across all ten editions report `status: Visible` rather than
 `Available` + 9 `Default` + 29 `Visible`, which shows `Visible` is a meaningful
 per-SKU signal when a region is actually open. There is no SKU that rescues it.
 
-PostgreSQL Flexible Server is restricted in westeurope but **open in northeurope**,
-which is the only reason a database can be deployed at all. Hence
-`var.location = "northeurope"`.
+PostgreSQL Flexible Server was restricted in westeurope but **open in northeurope**,
+which is why `var.location = "northeurope"`. The server was removed in 2026-11,
+when the database became a DuckDB blob, so nothing pins the region any more;
+moving it means a new storage account and a copy of the blob. The probes below
+are kept for a future database that needs a server again.
 
 Probe before changing any of this; the provider's advertised location list is not
 subscription-aware, but the capabilities APIs are:
@@ -125,7 +127,7 @@ az rest --method get --url "https://management.azure.com/subscriptions/$SUB/prov
 az rest --method get --url "https://management.azure.com/subscriptions/$SUB/providers/Microsoft.DBforPostgreSQL/locations/<region>/capabilities?api-version=2023-06-01-preview" --query "value[0].{restricted:restricted,reason:reason}"
 ```
 
-**If the £13/month becomes annoying**, the fix is not a Terraform change — it is
+**If a server is ever needed again** and £13/month is too much, the fix is not a Terraform change — it is
 amending `allowed-locations-dev` to admit a SQL-capable region (francecentral,
 swedencentral, germanywestcentral, switzerlandnorth, italynorth and spaincentral
 were all verified `Available`), then moving back to Azure SQL. That policy looks
@@ -174,43 +176,17 @@ is the whole mechanism:
   operators (`key_vault_administrator_object_ids`) have Storage Blob Data
   Contributor on the container.
 
-### PostgreSQL specifics (the retired server)
+### The retired PostgreSQL server
 
-Kept until `main.database.tf` is removed, a few days after the move to the
-blob, for whoever reads the server's history.
-
-- The Entra administrator is a **separate resource**
-  (`azurerm_postgresql_flexible_server_active_directory_administrator`), not an
-  inline block as it was on Azure SQL, and it requires the principal's *type*
-  explicitly — `data.azurerm_client_config` cannot report it. `object_id` and
-  `principal_name` come from `var.postgres_entra_administrator`, a **named
-  human**, and `principal_type` is fixed to `User`: the administrator is then
-  the same principal whoever or whatever applies. The value isn't committed:
-  CI reads `TF_VAR_POSTGRES_ENTRA_ADMINISTRATOR` from the `dev` environment,
-  where github-repos sets it from its `var.operator`.
-- **`principal_name` must be the UPN, not the display name** — ARM makes it the
-  PostgreSQL role name verbatim. Registered as `Jay Withers`, the role really is
-  called `Jay Withers`, and connecting as the UPN fails with
-  `password authentication failed`, which points at the token rather than the
-  missing role and makes this hard to diagnose. Confirmed both ways: the display
-  name broke the login, the UPN fixed it. Note the `az` flag for this is called
-  `--display-name`, which is how the trap gets set. Read what is actually
-  registered with:
-
-  ```bash
-  SUB=$(az account show --query id -o tsv)
-  az rest --method get --url "https://management.azure.com/subscriptions/$SUB/resourceGroups/rg-marketagent-dev/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-marketagent-dev/administrators?api-version=2023-06-01-preview" --query "value[].properties.principalName"
-  ```
-- `authentication { password_auth_enabled = false }` keeps the passwordless
-  posture: `administrator_login`/`administrator_password` stay unset and no
-  database password exists in source, state or Key Vault.
-- `geo_redundant_backup_enabled` **cannot be changed after creation**, so it is set
-  explicitly rather than left to the provider default.
-- `zone` is under `ignore_changes`: Azure assigns one when omitted and then reports
-  a value that differs from an empty config on the next plan.
-- The naming module has no flexible-server token; `postgresql_server` (slug `psql`)
-  and `postgresql_database` (slug `psqldb`) are the right ones. There is no
-  `postgresql_flexible_server`.
+Removed in 2026-11, once the jobs had run on the blob. Its Terraform
+(`main.database.tf`, the `db-down` and `db-storage` metric alerts, the
+`PostgreSQLLogs` diagnostic setting, `var.postgres_*`) and `make import-pg` are
+in git history. Two lessons from it are worth keeping for any future
+Entra-authenticated server: make the Entra administrator a **named human**, not
+"whoever applies", so a CI apply cannot make the OIDC service principal the only
+way in; and give ARM the account's **UPN, not its display name**, since ARM makes
+it the role name verbatim and a mismatch fails as `password authentication
+failed`, which points at the token instead.
 
 ### Naming
 
@@ -241,7 +217,7 @@ and its container is `weekly-review`.
 
 Two consequences of dropping the suffix:
 
-- **Key Vault and PostgreSQL server names are globally unique across Azure**, so an
+- **Key Vault and storage account names are globally unique across Azure**, so an
   apply can fail on a name someone else already holds — or on one *you* previously
   soft-deleted. The fix is to change `project_name`, not to reintroduce
   `.name_unique`. (`.name_unique` was tried and reverted: its suffix comes from
@@ -265,24 +241,14 @@ own naming module instances only so each carries its workload name
 `terraform console` before changing any of it — note `console` needs a real
 backend init, unlike `validate`.
 
-Also: there is no `postgresql_flexible_server` token — the flexible server uses
-`postgresql_server` (slug `psql`) and its database `postgresql_database` (slug
-`psqldb`). The module doesn't lowercase its dashed names, and
-`postgresql_server`, `container_app` and `container_app_job` all reject
-uppercase; job names also reject underscores.
+Also: the module doesn't lowercase its dashed names, and `container_app` and
+`container_app_job` both reject uppercase; job names also reject underscores.
 
 ### Security posture
 
 Passwordless throughout. The database's storage account takes Entra tokens
-only (`shared_access_key_enabled = false`). The retired PostgreSQL server sets
-`authentication { active_directory_auth_enabled = true, password_auth_enabled = false }`,
-which lets `administrator_login`/`administrator_password` stay unset — no database
-password exists in source, state or Key Vault. The administrator is a named human
-set by `var.postgres_entra_administrator` (object ID and principal name), so a CI
-apply no longer silently makes the OIDC service principal the only way in — the
-trap that an earlier "default to whoever applies" version carried. An Entra group
-would survive personnel change, at the cost of `principal_type = "Group"` and a
-group created out of band.
+only (`shared_access_key_enabled = false`), so no database credential exists in
+source, state or Key Vault.
 
 Terraform owns the Key Vault and its RBAC but creates **no**
 `azurerm_key_vault_secret`: values are set out of band with
@@ -316,11 +282,9 @@ running one), runs everything as one transaction, and uploads only if it
 succeeded. A schema change doesn't go this way: it goes in `schema/` and ships
 with the code that needs it.
 
-`make import-pg` was the one-off copy off the PostgreSQL server. It attaches
-the server read-only through DuckDB's postgres extension, copies every table
-by column name, moves each id sequence past the highest id, and uploads only
-if every row count matches. It opens a firewall rule for your IP for its
-length, as the old `make sql` did.
+`make import-pg` was the one-off copy off the PostgreSQL server, run on
+2026-11-03: it copied every table through DuckDB's postgres extension and
+uploaded only once every row count matched. It was removed with the server.
 
 **`demo/seed.sql` is destructive** and opens with a guard that aborts if the
 database holds any agent run it did not write, which every real one does. It
@@ -332,9 +296,7 @@ means something.
 Deliberately destroyable: `purge_protection_enabled = false` on the Key Vault and
 `prevent_deletion_if_contains_resources = false` on the provider, both so
 `terraform destroy` actually works. That's also why `.tflint.hcl` excludes
-`azurerm_key_vault`, `azurerm_postgresql_flexible_server` and
-`azurerm_postgresql_flexible_server_database` from
-`azurerm_resources_missing_prevent_destroy` (verified: those exact three fire) —
+`azurerm_key_vault` from `azurerm_resources_missing_prevent_destroy` —
 excluded rather than disabling the rule, so it stays armed for anything added
 later.
 
@@ -398,11 +360,11 @@ are committed, the same constraint that put the summary recipient in Key Vault.
 Key Vault is *not* an option for this: a `data` source on the vault would fail
 any stg or prd plan, since those resource groups do not exist. `TF_VAR_alert_email_address` adds a specific address on top.
 
-**All five metric alerts are one `for_each` resource over `local.metric_alerts`.**
-They differ only in what they watch, so the name shape, action group and tags are
-written once in `main.alerts.tf` and every rule's settings — and the reason for
-each threshold — live beside each other in `locals.alerts.tf`. A sixth rule is an
-entry in that map, not another block to keep in step. The `dimension` key is
+**Metric alerts are one `for_each` resource over `local.metric_alerts`**, which
+is empty since the PostgreSQL server's two rules went with it. The name shape,
+action group and tags are written once in `main.alerts.tf` and each rule's
+settings, with the reason for its threshold, would live in `locals.alerts.tf`.
+A new rule is an entry in that map, not another block to keep in step. The `dimension` key is
 `null` on the rules that filter nothing and a `dynamic` block turns a non-null one
 into a criteria dimension: an empty `dimension` block is not the same as no block
 and would match no time series. The budget's two `notification` blocks are left
@@ -419,9 +381,6 @@ Other decisions worth not re-litigating:
 - **No `AllMetrics` anywhere.** Metrics are already in the platform metric
   store, free to query and free to alert on. Routing them into Log Analytics
   pays to store a second copy of what the metric alerts read for nothing.
-- **Postgres logs are `PostgreSQLLogs` only.** The query-store and session
-  categories are per-statement and per-session emissions — the one log shape
-  that could actually reach the cap on a database this small.
 - **The log quota alert is the expensive one**, because reaching
   `daily_quota_gb` stops ingestion for the rest of the day and nothing in the
   metric store reports it. Evaluated hourly for that reason. Measured ingestion

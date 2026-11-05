@@ -35,8 +35,7 @@ container `database`), since 2026-11. It replaced a PostgreSQL Flexible Server
 that billed every hour. Each `database().connection()` block takes the blob's
 lease, downloads the file if it changed, commits, uploads and releases; the
 API reads an ETag-checked copy and never leases. `apps/marketagent/src/marketagent/db.py`
-explains it. The old server (`main.database.tf`) stays until the jobs have run
-on the blob for a few days, then a follow-up removes it.
+explains it. The old server was removed once the jobs had run on the blob.
 
 **A first request after idle is slow.** `min_replicas = 0` means a cold start,
 and the first call can take long enough to look like a failure — that is the
@@ -81,9 +80,9 @@ make deploy IMAGE_TAG=vX.Y.Z
   profile, `min_replicas > 0`, availability tests, extra diagnostic settings
   and `AllMetrics`. Keep the log caps (`daily_quota_gb = 0.15`). No database
   server: the database is a blob, which is why DuckDB replaced PostgreSQL.
-- **northeurope was forced by PostgreSQL**, which was restricted in
-  westeurope; Azure SQL can't be provisioned in any region the policy allows.
-  Nothing pins the region once the server is gone, but moving it means a new
+- **northeurope was forced by the old PostgreSQL server**, which was
+  restricted in westeurope; Azure SQL can't be provisioned in any region the
+  policy allows. Nothing pins the region now, but moving it means a new
   storage account and a copy of the blob.
 
 ### Infrastructure ([layout](docs/infrastructure.md#terraform-layout), [naming](docs/infrastructure.md#naming), [database](docs/infrastructure.md#the-database), [security](docs/infrastructure.md#security-posture))

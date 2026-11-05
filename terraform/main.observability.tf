@@ -49,23 +49,6 @@ resource "azurerm_application_insights" "this" {
 # nothing.
 # ---------------------------------------------------------------------------
 
-# The server error log: start-up failures, connection refusals, and the
-# authentication errors that this project has already found hard to read
-# correctly from the client side alone. Quiet in normal operation.
-resource "azurerm_monitor_diagnostic_setting" "postgres" {
-  name                       = module.naming.monitor_diagnostic_setting.name
-  target_resource_id         = azurerm_postgresql_flexible_server.this.id
-  log_analytics_workspace_id = local.log_analytics_workspace_id
-
-  enabled_log {
-    category = "PostgreSQLLogs"
-  }
-
-  # The query-store and session categories are deliberately absent: they are
-  # per-statement and per-session emissions, which is the one shape of log that
-  # could reach the daily cap on a database this small.
-}
-
 # Who read which secret, and when. The vault holds the DeepSeek key, the
 # Alpaca credentials and the summary recipient, and it is the only place in the
 # system where a credential is handed out — so the read is worth recording.

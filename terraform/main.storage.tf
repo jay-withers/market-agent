@@ -2,10 +2,10 @@
 # container. See apps/marketagent/src/marketagent/db.py for how the jobs and the
 # API share it (a blob lease per write, an ETag-checked copy for reads).
 #
-# This replaced the PostgreSQL Flexible Server in main.database.tf, which billed
-# its B1ms every hour for a database touched for minutes a day. The server
-# stays until the jobs have run on the blob for a few days and the data has
-# been checked, then a follow-up removes it.
+# This replaced a PostgreSQL Flexible Server, which billed its B1ms every hour
+# for a database touched for minutes a day. `make import-pg` copied it here on
+# 2026-11-03 with every table's count checked, and the server was removed once
+# the jobs had run on the blob.
 #
 # **`prevent_destroy` and a delete lock**, as gym-log's training log has: this
 # is the experiment's whole record, and nothing rebuilds it.
