@@ -50,10 +50,15 @@ RATE = FxRate(gbp_usd=D("1.3400"), as_of=date(2026, 9, 14))
 BAR_DATE = date(2026, 9, 14)
 
 
-def _reset(path) -> None:
-    """Back to what 002-seed.sql leaves: the seeded companies and pots at their
-    initial cash, nothing else. Deletes rather than rollback because run()
-    commits for real — see the module docstring."""
+# This file's baseline: Alpaca's default paper balance, which the fake brokers
+# below report. 002-seed.sql seeds each pot at its real $500 instead.
+BASELINE_CASH = 100000
+SEED_CASH = 500
+
+
+def _reset(path, cash: int) -> None:
+    """The seeded companies and pots at `cash`, nothing else. Deletes rather
+    than rollback because run() commits for real — see the module docstring."""
     with db.open_file(path) as conn:
         conn.execute("DELETE FROM trades")
         conn.execute("DELETE FROM ai_decisions")
@@ -63,9 +68,10 @@ def _reset(path) -> None:
         conn.execute("DELETE FROM agent_runs")
         conn.execute("DELETE FROM positions")
         conn.execute(
-            "UPDATE portfolio SET initial_cash_usd=100000,cash_usd=100000,equity_usd=NULL,"
+            "UPDATE portfolio SET initial_cash_usd=%s,cash_usd=%s,equity_usd=NULL,"
             "buying_power_usd=NULL,broker_account_id=NULL,broker_synced_at=NULL,"
-            "is_active = name NOT IN ('static-100', 'dynamic-500')"
+            "is_active = name NOT IN ('static-100', 'dynamic-500')",
+            (cash, cash),
         )
 
 
@@ -74,9 +80,12 @@ def agent_db(database_path):
     """The scratch database, reset both before and after — a previous test's
     failure must not leave the next one a dirty baseline, matching why
     conftest.conn rolls back on both sides of the shared connection."""
-    _reset(database_path)
+    _reset(database_path, BASELINE_CASH)
     yield database_path
-    _reset(database_path)
+    # Back to the seed, not this file's baseline: these commits outlive the
+    # test, and a later file's `conn` sees whatever is left (test_repository's
+    # seeded-cash tests failed alone and passed only after this file).
+    _reset(database_path, SEED_CASH)
 
 
 def _bar(ticker: str, close: str = "150.0000") -> Bar:

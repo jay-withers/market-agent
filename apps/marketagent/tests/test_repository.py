@@ -159,11 +159,13 @@ def test_a_run_records_the_settings_it_decided_under(conn):
     assert stored == config
 
 
-def test_the_seeded_portfolio_starts_at_the_paper_account_default(conn):
+def test_the_seeded_portfolio_starts_at_its_paper_accounts_balance(conn):
+    """$500, each pot's real Alpaca paper balance, not Alpaca's $100,000
+    default. Only a placeholder: the first broker sync overwrites it."""
     pid = repo.portfolio_id(conn, PORTFOLIO)
 
-    assert repo.load_cash(conn, pid) == D("100000.0000")
-    assert repo.initial_cash(conn, pid) == D("100000.0000")
+    assert repo.load_cash(conn, pid) == D("500.0000")
+    assert repo.initial_cash(conn, pid) == D("500.0000")
 
 
 # ---------------------------------------------------------------------------
@@ -267,23 +269,25 @@ def test_a_priced_holding_is_valued_in_usd(conn):
 
 
 def test_a_buy_takes_cash_and_creates_the_position(conn):
-    """Our tables are the ledger — Alpaca's balance describes a different
-    portfolio, one with $100,000 in it."""
+    """Our tables are the ledger: a fill moves cash by its notional, whatever
+    the pot started with."""
     pid = repo.portfolio_id(conn, PORTFOLIO)
+    start = repo.load_cash(conn, pid)
 
     _fill(conn, pid, "BUY", "2.000000", "50.0000", "100.0000", "25.0000")
 
-    assert repo.load_cash(conn, pid) == D("99950.0000")
+    assert repo.load_cash(conn, pid) == start - D("50.0000")
     assert repo.load_positions(conn, pid) == [(TICKER, D("2.000000"), D("100.0000"))]
 
 
 def test_a_sell_returns_cash_and_reduces_the_position(conn):
     pid = repo.portfolio_id(conn, PORTFOLIO)
+    start = repo.load_cash(conn, pid)
     _fill(conn, pid, "BUY", "2.000000", "50.0000", "100.0000", "25.0000")
 
     _fill(conn, pid, "SELL", "1.000000", "30.0000", "120.0000", "30.0000")
 
-    assert repo.load_cash(conn, pid) == D("99980.0000")
+    assert repo.load_cash(conn, pid) == start - D("50.0000") + D("30.0000")
     assert repo.load_positions(conn, pid)[0][1] == D("1.000000")
 
 
