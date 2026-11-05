@@ -92,7 +92,7 @@ resource "azurerm_container_app" "api" {
 
       # Liveness deliberately hits /healthz, which does **not** touch the
       # database. A failed liveness probe restarts the container, so a probe
-      # that depended on PostgreSQL would turn a database blip into a
+      # that depended on the database would turn a database blip into a
       # cluster-wide crash loop.
       liveness_probe {
         transport        = "HTTP"

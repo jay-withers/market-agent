@@ -24,18 +24,8 @@ output "key_vault_name" {
 }
 
 output "identity_name" {
-  description = "Name of the workload's managed identity — the principal named in the `pgaadauth_create_principal` step that grants it database access."
+  description = "Name of the workload's managed identity — the principal granted Storage Blob Data Contributor on the database container."
   value       = azurerm_user_assigned_identity.this.name
-}
-
-output "postgres_fqdn" {
-  description = "Hostname of the PostgreSQL Flexible Server."
-  value       = azurerm_postgresql_flexible_server.this.fqdn
-}
-
-output "postgres_database_name" {
-  description = "Name of the PostgreSQL database."
-  value       = azurerm_postgresql_flexible_server_database.this.name
 }
 
 output "database_blob_url" {

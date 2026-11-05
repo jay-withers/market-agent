@@ -23,11 +23,10 @@ variable "project_name" {
 }
 
 variable "location" {
-  # Constrained from two directions: the `allowed-locations-dev` policy denies
-  # anything outside westeurope/northeurope, and this subscription is blocked
-  # from provisioning PostgreSQL in westeurope. northeurope is the only region
-  # satisfying both. Probe the capabilities API before changing it — see the
-  # README.
+  # The `allowed-locations-dev` policy denies anything outside
+  # westeurope/northeurope. northeurope was forced by the PostgreSQL server,
+  # restricted in westeurope, which is gone; nothing pins it now, but moving
+  # means a new storage account and a copy of the database blob.
   description = "Azure region resources are created in."
   type        = string
   default     = "northeurope"
@@ -37,36 +36,6 @@ variable "tags" {
   description = "Tags applied to all resources, merged with (and taking precedence over) the default tags (`environment`, `managed-by`)."
   type        = map(string)
   default     = {}
-}
-
-variable "postgres_sku_name" {
-  description = "Compute SKU. Burstable B1ms is the smallest Flexible Server offers; there is no serverless or auto-pause tier, so this bills per hour for as long as the server exists."
-  type        = string
-  default     = "B_Standard_B1ms"
-}
-
-variable "postgres_version" {
-  description = "Major PostgreSQL version."
-  type        = string
-  default     = "17"
-}
-
-variable "postgres_storage_mb" {
-  description = "Provisioned storage. Billed on this figure rather than bytes used, and it can never be reduced — only grown — so it sits at Azure's 32 GB minimum."
-  type        = number
-  default     = 32768
-}
-
-variable "postgres_storage_tier" {
-  description = "Storage performance tier. P4 is the default for 32 GB; a higher tier raises the monthly bill for IOPS this workload does not need."
-  type        = string
-  default     = "P4"
-}
-
-variable "postgres_zone" {
-  description = "Availability zone the server is placed in. northeurope offers 1, 2 and 3 for B1ms."
-  type        = string
-  default     = "1"
 }
 
 variable "image_registry" {

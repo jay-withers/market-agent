@@ -26,11 +26,3 @@ variable "alert_email_address" {
     error_message = "alert_email_address must be empty or a plain-ASCII email address."
   }
 }
-
-variable "postgres_entra_administrator" {
-  description = "The Entra user made the PostgreSQL server's Entra administrator: object ID, and the account's real UPN, which ARM makes the PostgreSQL role name and which must match exactly or the login fails. Explicit rather than derived from the deploying principal, so a CI apply doesn't make the OIDC service principal the administrator and lock every human out. Not committed: CI reads it from the TF_VAR_POSTGRES_ENTRA_ADMINISTRATOR variable github-repos sets on the `dev` environment; a local plan needs TF_VAR_postgres_entra_administrator exported."
-  type = object({
-    object_id      = string
-    principal_name = string
-  })
-}

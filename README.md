@@ -28,12 +28,10 @@ both deployed and running — see [The application](#the-application) and
 | Container app job `daily-summary` | Scheduled: performance, benchmarks, email |
 | Container app job `weekly-review` | Scheduled Sunday: reviews the week, proposes changes |
 | Storage account `stmarketagentdev` | The database: one DuckDB file in the `database` container. Versioned, soft-deleted, delete-locked |
-| PostgreSQL Flexible Server + database | **Retired**: the database before the blob, kept a few days for checking, then removed |
 | Action group | Where alerts go — subscription Owners, by role rather than by address |
-| Metric alerts (2) | The database is down or near full |
 | Log alerts | Dedicated workspaces get an ingestion-quota alert; the shared platform monitors job failures |
 | Budget | Monthly Azure spend, notifying at 80% actual and 100% forecast |
-| Diagnostic settings (2) | PostgreSQL server logs and Key Vault audit events |
+| Diagnostic setting | Key Vault audit events |
 
 Two departures from the original design:
 
@@ -339,7 +337,6 @@ moved from a PostgreSQL server into a blob — see below.
 | Managed identity, resource group | Free |
 | Alert rules | A few pence a month each; they read the platform metric store and need no agent or synthetic traffic |
 | Database (storage account) | Pennies: a few MB, its versions, and a few hundred operations a day |
-| PostgreSQL Flexible Server (retired) | ~£13/month while it still exists — removed once the blob is proven |
 
 ### Why the database moved into a blob
 
@@ -408,8 +405,7 @@ rebuild.
 Dev sets `shared_platform` to the three existing resources in `rg-platform-dev`
 (the platform subscription). Terraform reads them as data
 sources; their lifecycle, retention, ingestion caps and workspace-wide quota alerts
-belong to the platform. Key Vault diagnostics (and the retired PostgreSQL
-server's) go to the shared
+belong to the platform. Key Vault diagnostics go to the shared
 workspace, and the workloads receive the shared Application Insights connection
 string. Job alerts and historical log queries filter by environment and job.
 The deployment identity needs read access to those resources and permission to
@@ -469,9 +465,10 @@ Promote the previous version in the portal, or copy it over the current blob by
 version ID.
 
 **Moving off PostgreSQL** was `make import-pg`, run once with the jobs idle. It
-attaches the server read-only through DuckDB's postgres extension, copies every
-table, and uploads only if every row count matches. The server
-(`main.database.tf`) stays for a few days after, then a follow-up removes it.
+attached the server read-only through DuckDB's postgres extension, copied every
+table, and uploaded only if every row count matched. It ran on 2026-11-03, and
+the server and the import command were removed once the jobs had run on the
+blob.
 
 ## Scheduling
 
@@ -489,7 +486,7 @@ destroy/create in the plan. Harmless: jobs hold no state.
 Every configuration follows a fixed layout, enforced rather than merely
 documented: `locals`/`variable`/`output`/`data` blocks must live in a matching
 `locals.tf`/`variables.tf`/`outputs.tf`/`data.tf` — or a topic-scoped variant such
-as `main.database.tf` or `variables.optional.tf` — and `terraform{}`/`provider{}`
+as `main.storage.tf` or `variables.optional.tf` — and `terraform{}`/`provider{}`
 blocks in `versions.tf`, via the local pre-commit hook `check-tf-standards`
 (`scripts/check-tf-standards.sh`). `main.tf` is left for resources and modules.
 
@@ -551,7 +548,6 @@ apps/
     src/marketagent/
       settings.py               # config; secrets from env, then Key Vault
       db.py                     # DuckDB file in blob: lease per write, cached reads
-      importpg.py               # one-off copy off the retired PostgreSQL server
       schema/                   # numbered, idempotent; applied by the first writer
       models.py                 # domain, risk config, the LLM's output types
       risk.py                   # the deterministic risk engine (pure)
@@ -565,7 +561,7 @@ apps/
       repository.py             # the writes, sharing a caller's transaction
       telemetry.py              # App Insights; off without a connection string
       queries.py                # the API's reads
-      cli.py                    # marketagent api|agent|sync|summary|weekly|sql|import-pg
+      cli.py                    # marketagent api|agent|sync|summary|weekly|sql
       llm/base.py  llm/deepseek_provider.py
       broker/base.py  broker/alpaca.py  broker/dryrun.py
       jobs/agent.py  jobs/summary.py
@@ -585,7 +581,6 @@ terraform/
   main.alerts.tf                # action group, alert rules, budget
                                 #   (what each rule watches: locals.alerts.tf)
   main.key-vault.tf             # vault and RBAC (never the secret values)
-  main.database.tf              # the retired PostgreSQL server, until it is removed
   main.storage.tf               # the database's storage account, container and grants
   main.container-apps-env.tf    # Container Apps environment
   main.container-apps.tf        # api and dashboard

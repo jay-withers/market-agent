@@ -21,7 +21,6 @@ make test              # the Python test suite (pytest)
 make lint              # all pre-commit hooks against every file
 make secrets           # prompt for the Key Vault values and store them
 make sql < file.sql    # SQL against the Azure database blob, as one leased transaction
-make import-pg         # once: copy the PostgreSQL database into the blob
 make up / down / logs  # the local docker compose stack
 make demo              # the local stack seeded with fake data, for a dashboard preview
 make run-agent         # one agent run against the local stack
@@ -37,8 +36,7 @@ make apply             # terraform init + apply (set ENV=dev|stg|prd, default de
 ```
 
 **A local `make plan`/`make apply` needs the operator's values exported.**
-`key_vault_administrator_object_ids`, `alert_email_address` and (until the
-retired server is removed) `postgres_entra_administrator` aren't committed: CI reads them from the
+`key_vault_administrator_object_ids` and `alert_email_address` aren't committed: CI reads them from the
 `TF_VAR_*` variables github-repos sets on the `dev` environment. Copy them from
 `gh variable list --env dev`, lower-casing the name after `TF_VAR_`
 (`export TF_VAR_alert_email_address=…`).

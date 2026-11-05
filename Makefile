@@ -16,7 +16,7 @@ PORTFOLIO ?= tech
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install lint test secrets sql import-pg up down logs demo run-agent run-weekly build push deploy deployed-tag smoke logs-azure init fmt validate plan apply
+.PHONY: help install lint test secrets sql up down logs demo run-agent run-weekly build push deploy deployed-tag smoke logs-azure init fmt validate plan apply
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -51,28 +51,6 @@ DATABASE_BLOB_URL ?= https://stmarketagent$(ENV).blob.core.windows.net/database/
 sql: ## Run SQL from stdin against the Azure database as one transaction
 	DATABASE_BLOB_URL=$(DATABASE_BLOB_URL) DATABASE_PATH=$$(mktemp -d)/marketagent.duckdb \
 		uv run --directory $(APP_DIR) marketagent sql
-
-# Once, to move off the PostgreSQL server: copies every table into the blob and
-# refuses to upload unless each count matches. Run it with no job running, just
-# before the release that switches the jobs over. As the server's Entra
-# administrator, from this machine: the server admits Azure IPs only, so this
-# opens a firewall rule for your public IP for the length of the command and
-# removes it after, success or not. The token rides in IMPORT_PG_DSN rather
-# than on the command line.
-PG_SERVER ?= psql-marketagent-$(ENV)
-PG_DATABASE ?= psqldb-marketagent-$(ENV)
-PG_RESOURCE_GROUP ?= rg-marketagent-$(ENV)
-
-import-pg: ## Copy the PostgreSQL database into the Azure blob, once (stop the jobs first)
-	@set -eu; \
-	ip="$$(curl -fsS https://api.ipify.org)"; \
-	rule="import-pg-$$(date +%s)"; \
-	trap 'az postgres flexible-server firewall-rule delete -g $(PG_RESOURCE_GROUP) -n $(PG_SERVER) -r "$$rule" --yes -o none' EXIT; \
-	az postgres flexible-server firewall-rule create -g $(PG_RESOURCE_GROUP) -n $(PG_SERVER) -r "$$rule" \
-		--start-ip-address "$$ip" --end-ip-address "$$ip" -o none; \
-	IMPORT_PG_DSN="host=$(PG_SERVER).postgres.database.azure.com dbname=$(PG_DATABASE) sslmode=require user=$$(az ad signed-in-user show --query userPrincipalName -o tsv) password=$$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)" \
-	DATABASE_BLOB_URL=$(DATABASE_BLOB_URL) DATABASE_PATH=$$(mktemp -d)/marketagent.duckdb \
-		uv run --directory $(APP_DIR) marketagent import-pg
 
 # The local loop: Azurite (the Storage emulator) holding the database blob, plus
 # the API. No Azure.
