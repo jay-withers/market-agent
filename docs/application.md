@@ -228,6 +228,10 @@ or dashboard tab iterates them.
   holding), and `ANALYSIS_SYSTEM`'s point 5 says to HOLD when that is under the
   minimum and never to ask for more. Both are in `prompt_context`
   (`buy_headroom_usd`, `trades_today`). `PROMPT_VERSION` went to `v7` for it.
+  A held name is still analysed with no headroom (it may be a SELL), and
+  "USD 0" alone did not stop a health BUY being refused on
+  `max_total_exposure_pct` in the 2026-11-01 week, so under the minimum trade
+  the line now says no BUY can be approved and to return HOLD or SELL (`v8`).
 - **The pots run concurrently**, as separate jobs at the same cron time. A pot's
   run length is its analyses in series, so a 50-ticker pot is roughly 10-18
   minutes on a normal day. Expect about $0.10-0.19 a day per pot while it is
@@ -594,16 +598,28 @@ moved for no stated reason. That is the class of fault these catch.
 - `missing_valuations`, `missing_runs`, `failed_runs` — a day with no
   valuation, a day with no agent run, and a run that failed or was abandoned
   past `JOB_TIMEOUT_SECONDS`. The agent cron is daily including weekends, so
-  there is no trading calendar to reason about.
+  there is no trading calendar to reason about. The run checks are scoped to
+  the pot: until the 2026-11-01 review they read `agent_runs` unfiltered, so
+  one pot's failed run failed every pot's check while each pot's own run table
+  showed success. A failure followed by a later successful run of the same pot
+  that day is the job's retry (`replica_retry_limit = 1`) working: it is named
+  as "recovered by retry" but passes.
 - `stale_prices` — a holding whose newest bar is over `STALE_PRICE_DAYS` (4)
   old. This is the one that silently moves the reported total: `build_state`
   **drops** an unpriced holding from the valuation rather than carrying it
   forward, so the total understates and then rebounds when the price returns,
   with no trade behind either move.
 - `price_spike` — a held ticker moving more than `SPIKE_PCT` (25%) in a day.
-  Bars are fetched with `adjustment=all`, which restates the close across a
-  split while `positions.quantity` stays exactly as it was, so a split moves
-  the reported value with no trade behind it. 25% is deliberately well clear
+  Bars are fetched with `adjustment=all`, which restates every earlier close
+  across a split, but each run fetches only the last week, so the stored
+  history used to be left half in the old terms (NOW, 2026-10-29). The
+  valuation itself is the broker's quantity times the latest close, both
+  post-split. `pricehistory.restated_history` now re-fetches a ticker's whole
+  stored history when a fresh bar disagrees with the stored one or a
+  split-sized move sits in the last `RESTATEMENT_SPIKE_DAYS` (30) of stored
+  history, so a split heals on the next run. A spike that persists is a real
+  move, or a broker snapshot that has not applied the split yet, which
+  *would* distort the total. 25% is deliberately well clear
   of a real move — AMD did +9.2% in a day in September 2026 and must not fire
   it. A check that cries wolf is ignored within a month.
 - `cash_drift` — `cash_gbp` reproduced from the trade log alone. This is what

@@ -1182,6 +1182,87 @@ def test_a_failed_run_is_caught(conn):
     assert "failed" in check["detail"]
 
 
+def test_another_pots_failed_run_does_not_fail_this_pot(conn):
+    """Each pot has its own job; one pot's failure is not every pot's."""
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    other = repo.portfolio_id(conn, next(p for p in POTS if p != PORTFOLIO))
+    end = date.today()
+    start = end - timedelta(days=6)
+    _clean_week(conn, pid, start, end)
+    conn.execute(
+        "INSERT INTO agent_runs (portfolio_id, started_at, status) VALUES (%s, %s, 'failed')",
+        (other, datetime.combine(start, datetime.min.time(), UTC)),
+    )
+
+    checks = _week(conn, pid, start, end)
+
+    assert checks["failed_runs"]["ok"], checks["failed_runs"]
+    # ...while the pot that did fail still says so.
+    assert not _week(conn, other, start, end)["failed_runs"]["ok"]
+
+
+def test_another_pots_run_does_not_fill_this_pots_missing_day(conn):
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    other = repo.portfolio_id(conn, next(p for p in POTS if p != PORTFOLIO))
+    end = date.today()
+    start = end - timedelta(days=6)
+    _clean_week(conn, pid, start, end)
+    gap = start + timedelta(days=2)
+    conn.execute(
+        "UPDATE agent_runs SET portfolio_id = %s WHERE portfolio_id = %s AND started_at::date = %s",
+        (other, pid, gap),
+    )
+
+    check = _week(conn, pid, start, end)["missing_runs"]
+
+    assert not check["ok"]
+    assert str(gap) in check["detail"]
+
+
+def test_a_failure_the_retry_recovered_passes_but_is_named(conn):
+    """replica_retry_limit = 1: a failed attempt then a success is an intact day."""
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    end = date.today()
+    start = end - timedelta(days=6)
+    _clean_week(conn, pid, start, end)
+    day = start + timedelta(days=1)
+    conn.execute(
+        "INSERT INTO agent_runs (portfolio_id, started_at, status) VALUES (%s, %s, 'failed')",
+        (pid, datetime.combine(day, datetime.min.time(), UTC)),
+    )
+    # The clean week's success for that day must come after the failure.
+    conn.execute(
+        "UPDATE agent_runs SET started_at = started_at + INTERVAL 10 MINUTE"
+        " WHERE portfolio_id = %s AND status = 'succeeded' AND started_at::date = %s",
+        (pid, day),
+    )
+
+    check = _week(conn, pid, start, end)["failed_runs"]
+
+    assert check["ok"], check
+    assert check["count"] == 0
+    assert "recovered by retry" in check["detail"]
+    assert str(day) in check["detail"]
+
+
+def test_a_failure_after_the_days_success_is_not_recovered(conn):
+    """Only a *later* success recovers a failure."""
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    end = date.today()
+    start = end - timedelta(days=6)
+    _clean_week(conn, pid, start, end)
+    day = start + timedelta(days=1)
+    conn.execute(
+        "INSERT INTO agent_runs (portfolio_id, started_at, status) VALUES (%s, %s, 'failed')",
+        (pid, datetime.combine(day, datetime.min.time(), UTC) + timedelta(hours=1)),
+    )
+
+    check = _week(conn, pid, start, end)["failed_runs"]
+
+    assert not check["ok"]
+    assert check["count"] == 1
+
+
 def test_a_run_abandoned_past_the_timeout_is_caught_as_well_as_a_failure(conn):
     """SIGKILL cannot be caught, so the row stays 'running' for ever."""
     pid = repo.portfolio_id(conn, PORTFOLIO)
@@ -1306,3 +1387,73 @@ def test_an_old_broker_snapshot_is_reported(conn):
         "UPDATE portfolio SET broker_synced_at=now()-interval '2 days' WHERE id=%s", (pid,)
     )
     assert not _week(conn, pid, start, end)["broker_sync"]["ok"]
+
+
+# ---------------------------------------------------------------------------
+# restated_tickers
+#
+# adjustment=all rewrites every bar before a split, but each run re-fetches
+# only the last week, so the stored history ends up half in each set of terms.
+# ---------------------------------------------------------------------------
+
+
+def _history(ticker: str, first: date, closes: list[str]) -> list[Bar]:
+    return [_bar(ticker, first + timedelta(days=i), close) for i, close in enumerate(closes)]
+
+
+def test_a_fresh_bar_that_disagrees_with_the_stored_one_is_a_restatement(conn):
+    """The first run after a 4:1 split: the overlap comes back at a quarter."""
+    first = date.today() - timedelta(days=20)
+    repo.save_prices(conn, _history(TICKER, first, ["400.0000"] * 20))
+    fresh = _history(TICKER, first + timedelta(days=15), ["100.0000"] * 5)
+
+    assert repo.restated_tickers(conn, fresh) == {TICKER: first}
+
+
+def test_a_dividend_sized_restatement_is_caught_too(conn):
+    first = date.today() - timedelta(days=10)
+    repo.save_prices(conn, _history(TICKER, first, ["100.0000"] * 10))
+    fresh = _history(TICKER, first + timedelta(days=5), ["99.9800"] * 5)
+
+    assert TICKER in repo.restated_tickers(conn, fresh)
+
+
+def test_a_stored_cliff_is_caught_once_the_overlap_has_moved_on(conn):
+    """How NOW stood: the overlap already restated, the older rows not."""
+    first = date.today() - timedelta(days=20)
+    repo.save_prices(conn, _history(TICKER, first, ["400.0000"] * 10 + ["100.0000"] * 10))
+    fresh = _history(TICKER, first + timedelta(days=15), ["100.0000"] * 5)
+
+    assert repo.restated_tickers(conn, fresh) == {TICKER: first}
+
+
+def test_matching_history_is_not_restated(conn):
+    """Only TICKER is restated; OTHER, also in the batch, is left alone."""
+    first = date.today() - timedelta(days=10)
+    repo.save_prices(conn, _history(TICKER, first, ["100.0000"] * 10))
+    repo.save_prices(conn, _history(OTHER, first, ["50.0000"] * 10))
+    fresh = _history(TICKER, first + timedelta(days=5), ["100.0000"] * 5) + _history(
+        OTHER, first + timedelta(days=5), ["50.0000"] * 5
+    )
+
+    assert repo.restated_tickers(conn, fresh) == {}
+
+
+def test_an_old_cliff_outside_the_window_is_left_alone(conn):
+    first = date.today() - timedelta(days=repo.RESTATEMENT_SPIKE_DAYS + 20)
+    repo.save_prices(conn, _history(TICKER, first, ["400.0000"] * 5 + ["100.0000"] * 10))
+    fresh = [_bar(TICKER, first + timedelta(days=14), "100.0000")]
+
+    assert repo.restated_tickers(conn, fresh) == {}
+
+
+def test_saving_the_refetched_history_with_the_fresh_bars_clears_the_spike(conn):
+    """The jobs save history + bars in one call, overlapping days included."""
+    first = date.today() - timedelta(days=20)
+    repo.save_prices(conn, _history(TICKER, first, ["400.0000"] * 10 + ["100.0000"] * 10))
+    history = _history(TICKER, first, ["100.0000"] * 20)
+    fresh = history[-5:]
+
+    repo.save_prices(conn, history + fresh)
+
+    assert repo.restated_tickers(conn, fresh) == {}

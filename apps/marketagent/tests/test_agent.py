@@ -65,7 +65,7 @@ def _limits() -> RiskLimits:
     )
 
 
-def _rendered(history) -> str:
+def _rendered(history, buy_room=None) -> str:
     return _prompt(
         "NVDA",
         [
@@ -89,6 +89,7 @@ def _rendered(history) -> str:
         _state(),
         _limits(),
         history,
+        buy_room,
     )
 
 
@@ -173,6 +174,23 @@ def test_the_prompt_shows_the_exposure_ceiling_and_the_largest_permitted_buy():
     assert "max total exposure: 80% of total value invested" in prompt
     # $500 cash, nothing held: the $50 trade cap is the tightest.
     assert "largest BUY of NVDA permitted now: USD 50.0000" in prompt
+
+
+def test_with_no_room_for_a_buy_the_prompt_says_so_outright():
+    """A held name is analysed with no headroom left, and "USD 0" alone did not
+    stop it: the 2026-11-01 review found a health BUY refused on
+    max_total_exposure_pct. Under the minimum trade, say no BUY can pass."""
+    prompt = _rendered([], buy_room=D("3.0000"))
+    assert "no BUY of NVDA can be approved now" in prompt
+    assert "below the USD 5 minimum trade" in prompt
+    assert "Return HOLD or SELL." in prompt
+    assert "largest BUY of NVDA permitted now" not in prompt
+
+
+def test_at_the_minimum_trade_the_buy_room_is_shown_as_usual():
+    prompt = _rendered([], buy_room=D("5"))
+    assert "largest BUY of NVDA permitted now: USD 5" in prompt
+    assert "no BUY of NVDA can be approved" not in prompt
 
 
 def test_the_price_history_survived_the_decision_history_being_added():

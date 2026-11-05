@@ -37,17 +37,22 @@ def _decimal(value: Any) -> Decimal:
     return Decimal(str(value))
 
 
-def fetch_daily_bars(tickers: list[str], days: int = 5, client: Any = None) -> list[Bar]:
+def fetch_daily_bars(
+    tickers: list[str], days: int = 5, client: Any = None, start: date | None = None
+) -> list[Bar]:
     """Daily bars for `tickers` over roughly the last `days` calendar days.
 
     Calendar days, not trading days: asking for a fixed window and taking what
     comes back is simpler than modelling the exchange calendar, and every
-    caller wants "the recent past" rather than an exact count.
+    caller wants "the recent past" rather than an exact count. `start`, when
+    given, replaces the window: `pricehistory` uses it to re-fetch a ticker's
+    whole stored history after a corporate action restated it.
     """
     if not tickers:
         return []
 
-    start = (datetime.now(UTC) - timedelta(days=days)).date()
+    if start is None:
+        start = (datetime.now(UTC) - timedelta(days=days)).date()
     payload = paginate_data(
         BARS_PATH,
         {
