@@ -45,7 +45,7 @@ D = Decimal
 # One of the names schema/002-seed.sql puts on the tech pot's
 # watchlist — this file exercises the loop against that account throughout.
 TICKER = "NVDA"
-PORTFOLIO = "tech"
+PORTFOLIO = "sp500"
 RATE = FxRate(gbp_usd=D("1.3400"), as_of=date(2026, 9, 14))
 BAR_DATE = date(2026, 9, 14)
 
@@ -70,7 +70,7 @@ def _reset(path, cash: int) -> None:
         conn.execute(
             "UPDATE portfolio SET initial_cash_usd=%s,cash_usd=%s,equity_usd=NULL,"
             "buying_power_usd=NULL,broker_account_id=NULL,broker_synced_at=NULL,"
-            "is_active = name NOT IN ('static-100', 'dynamic-500')",
+            "is_active = name IN ('sp500', 'voo')",
             (cash, cash),
         )
 
@@ -378,8 +378,9 @@ def test_a_pot_with_headroom_analyses_its_whole_watchlist(agent_db, monkeypatch)
 
     agent.run(portfolio=PORTFOLIO, llm=_FakeLlm(TICKER), broker=DryRunBroker())
 
-    # 012-narrow-tech-pot.sql cut tech from 50 names to these ten.
-    assert len(asked[0]) == 10
+    # Every S&P 500 constituent 003-sp500-pots.sql seeds: the cap limits
+    # analyses, not the news fetched.
+    assert len(asked[0]) == 503
 
 
 def test_an_unheld_ticker_is_not_analysed_once_headroom_runs_out_mid_run(agent_db, monkeypatch):
@@ -441,3 +442,130 @@ def test_a_retired_pot_refuses_to_run_and_opens_no_row(agent_db):
 
     with db.open_file(agent_db) as conn:
         assert conn.execute("SELECT count(*) FROM agent_runs").fetchone()[0] == 0
+
+
+# ---------------------------------------------------------------------------
+# The cap on analyses (MAX_ANALYSES_PER_RUN)
+# ---------------------------------------------------------------------------
+
+
+def test_the_cap_limits_analyses_to_the_tickers_with_the_most_news(agent_db, monkeypatch):
+    monkeypatch.setenv("DRY_RUN", "true")
+    monkeypatch.setenv("MAX_ANALYSES_PER_RUN", "2")
+    news = {"MSFT": 3, "NVDA": 2, "AAPL": 1}
+    monkeypatch.setattr(
+        agent,
+        "fetch_news",
+        lambda tickers, hours: [
+            Article(
+                external_id=f"{t}-{i}",
+                headline=f"{t} news {i}",
+                published_at=datetime(2026, 9, 14, 12, 0, tzinfo=UTC),
+                tickers=(t,),
+            )
+            for t, n in news.items()
+            for i in range(n)
+        ],
+    )
+
+    class _AllRelevant(_FakeLlm):
+        """Every article relevant; records the ticker each analysis is for."""
+
+        def filter_news(self, ticker, headline, summary):
+            self.relevant_ticker = ticker
+            return super().filter_news(ticker, headline, summary)
+
+        def analyse(self, prompt):
+            self.relevant_ticker = prompt.split("\n", 1)[0].removeprefix("Ticker: ")
+            return super().analyse(prompt)
+
+    llm = _AllRelevant(TICKER, action="HOLD")
+    agent.run(portfolio=PORTFOLIO, llm=llm, broker=DryRunBroker())
+
+    # Three tickers had relevant news; the two with the most were analysed.
+    assert llm.analysed == ["MSFT", "NVDA"]
+
+
+def test_a_held_ticker_with_news_is_analysed_before_the_cap_bites(agent_db, monkeypatch):
+    """The cap must never cost the chance of a SELL on news about a holding."""
+    from marketagent.jobs.agent import _ranked
+
+    relevant = {"AAPL": [object()], "MSFT": [object()] * 3, "NVDA": [object()] * 2, "ZTS": []}
+    tickers = sorted(relevant)
+
+    assert _ranked(tickers, relevant, {"AAPL"}, 2) == ["AAPL", "MSFT"]
+    assert _ranked(tickers, relevant, set(), None) == ["MSFT", "NVDA", "AAPL"]
+
+
+# ---------------------------------------------------------------------------
+# The passive pot (jobs/passive.py)
+# ---------------------------------------------------------------------------
+
+
+def _passive_db(monkeypatch, agent_db, cash: str = "500"):
+    from marketagent.jobs import passive
+
+    monkeypatch.setenv("DRY_RUN", "true")
+    monkeypatch.setenv("RISK_MAX_CONCENTRATION_PCT", "100")
+    monkeypatch.setenv("RISK_MAX_TOTAL_EXPOSURE_PCT", "99")
+    monkeypatch.setenv("RISK_MAX_POSITION_USD", "1000000")
+    monkeypatch.setenv("RISK_MAX_TRADE_USD", "1000000")
+    monkeypatch.setattr(passive, "database", lambda: db.Database(agent_db))
+    monkeypatch.setattr(
+        passive, "fetch_daily_bars", lambda tickers, days: [_bar(t, "500.0000") for t in tickers]
+    )
+    with db.open_file(agent_db) as conn:
+        conn.execute(
+            "UPDATE portfolio SET cash_usd = %s, initial_cash_usd = %s WHERE name = 'voo'",
+            (D(cash), D(cash)),
+        )
+    return passive
+
+
+class _NoModel:
+    """A passive run must never build or call a model."""
+
+    def __init__(self, *a, **k):
+        raise AssertionError("the passive pot built a model")
+
+
+def test_the_passive_pot_invests_its_cash_in_voo_without_a_model(agent_db, monkeypatch):
+    _passive_db(monkeypatch, agent_db)
+    monkeypatch.setattr(agent, "DeepseekLlm", _NoModel)
+
+    run_id = agent.run(portfolio="voo", broker=DryRunBroker())
+
+    with db.open_file(agent_db) as conn:
+        assert conn.execute(
+            "SELECT status, decisions_made, trades_executed, cost_usd"
+            " FROM agent_runs WHERE id = %s",
+            (run_id,),
+        ).fetchone() == ("succeeded", 1, 1, D("0"))
+        decision = conn.execute(
+            "SELECT ticker, action, model, approved_amount_usd FROM ai_decisions WHERE run_id = %s",
+            (run_id,),
+        ).fetchone()
+        trade = conn.execute(
+            "SELECT ticker, side, notional_usd FROM trades WHERE decision_id IS NOT NULL"
+            " AND portfolio_id = (SELECT id FROM portfolio WHERE name = 'voo')"
+        ).fetchone()
+    # 99% exposure ceiling on $500: $495 invested, $5 kept for rounding.
+    assert decision == ("VOO", "BUY", "rule:passive", D("495.0000"))
+    assert trade == ("VOO", "BUY", D("495.0000"))
+
+
+def test_a_fully_invested_passive_pot_does_nothing(agent_db, monkeypatch):
+    _passive_db(monkeypatch, agent_db, cash="5")
+    with db.open_file(agent_db) as conn:
+        conn.execute(
+            "INSERT INTO positions (portfolio_id, ticker, quantity, avg_cost_usd, market_value_usd)"
+            " SELECT id, 'VOO', 1, 495, 495 FROM portfolio WHERE name = 'voo'"
+        )
+
+    run_id = agent.run(portfolio="voo", broker=DryRunBroker())
+
+    with db.open_file(agent_db) as conn:
+        assert conn.execute(
+            "SELECT status, decisions_made, trades_executed FROM agent_runs WHERE id = %s",
+            (run_id,),
+        ).fetchone() == ("succeeded", 0, 0)

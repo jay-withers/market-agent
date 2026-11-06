@@ -33,7 +33,7 @@ TODAY = date.today()
 # The tech pot is seeded with real watchlist data by schema/002-seed.sql;
 # nothing here depends on which pot is used, so one constant keeps every call
 # site consistent.
-PORTFOLIO = "tech"
+PORTFOLIO = "sp500"
 
 
 def _decision(
@@ -268,7 +268,7 @@ def test_watchlist_returns_the_seeded_snapshot_with_its_source(conn):
 
     apple = next(r for r in rows if r["ticker"] == "AAPL")
     assert apple["name"]
-    assert apple["source"] == "sector_snapshot"
+    assert apple["source"] == "sp500_index"
     assert apple["added_at"]
 
 
@@ -282,13 +282,12 @@ def test_watchlist_excludes_benchmarks(conn):
 
 
 def test_each_pot_has_its_own_watchlist(conn):
-    """The seeded lists do not overlap, so no ticker is traded by two pots.
-    Tech was narrowed to ten by 012-narrow-tech-pot.sql; the others hold 50."""
+    """sp500 watches every constituent; voo holds only the ETF it tracks."""
     lists = {name: {r["ticker"] for r in queries.watchlist(conn, name)} for name in POTS}
 
-    assert len(lists["tech"]) == 10
-    assert len(lists["health"]) == len(lists["energy"]) == 50
-    assert not (lists["tech"] & lists["health"] or lists["health"] & lists["energy"])
+    assert len(lists["sp500"]) == 503
+    assert lists["voo"] == {"VOO"}
+    assert "VOO" not in lists["sp500"]
 
 
 def test_accounts_lists_the_active_pots_in_order_and_not_the_retired_ones(conn):
@@ -353,8 +352,19 @@ def test_comparison_returns_every_active_pot_keyed_by_name(conn):
     """Every pot's series in one payload, keyed by pot name, rather than
     several documents the dashboard has to merge itself. Retired pots are left
     out."""
-    static_pid = repo.portfolio_id(conn, "tech")
-    dynamic_pid = repo.portfolio_id(conn, "health")
+    static_pid = repo.portfolio_id(conn, "sp500")
+    dynamic_pid = repo.portfolio_id(conn, "voo")
+    retired_pid = repo.portfolio_id(conn, "tech")
+    repo.save_daily_performance(
+        conn,
+        retired_pid,
+        TODAY,
+        D("500.0000"),
+        D("0.0000"),
+        D("500.0000"),
+        D("0.0000"),
+        D("0.0000"),
+    )
     repo.save_daily_performance(
         conn,
         static_pid,
@@ -379,9 +389,9 @@ def test_comparison_returns_every_active_pot_keyed_by_name(conn):
     result = queries.comparison(conn, days=30)
 
     assert list(result) == list(POTS)
-    assert [r["total_value_usd"] for r in result["tech"]] == [510.0]
-    assert [r["total_value_usd"] for r in result["health"]] == [520.0]
-    assert result["energy"] == []
+    assert [r["total_value_usd"] for r in result["sp500"]] == [510.0]
+    assert [r["total_value_usd"] for r in result["voo"]] == [520.0]
+    assert "tech" not in result
 
 
 # ---------------------------------------------------------------------------

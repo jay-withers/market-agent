@@ -8,8 +8,8 @@ from typing import Any
 
 import httpx
 
-# The active pots schema/002-seed.sql seeds, in id order.
-POTS = ("tech", "health", "energy")
+# The active pots the schema seeds (003-sp500-pots.sql), in id order.
+POTS = ("sp500", "voo")
 
 
 def mock_client(handler) -> httpx.Client:

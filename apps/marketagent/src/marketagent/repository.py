@@ -69,6 +69,12 @@ def active_portfolios(conn: Any) -> list[str]:
     return [str(row[0]) for row in rows]
 
 
+def strategy(conn: Any, pid: int) -> str:
+    """How the pot decides: 'agent' (the model) or 'passive' (jobs/passive.py)."""
+    row = conn.execute("SELECT strategy FROM portfolio WHERE id = %s", (pid,)).fetchone()
+    return str(row[0]) if row and row[0] else "agent"
+
+
 def is_active(conn: Any, pid: int) -> bool:
     row = conn.execute("SELECT is_active FROM portfolio WHERE id = %s", (pid,)).fetchone()
     return bool(row and row[0])
