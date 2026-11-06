@@ -52,22 +52,32 @@ locals {
     ALPACA_TRADING_BASE_URL = "https://paper-api.alpaca.markets"
   })
 
-  # One entry per pot, each with its own agent job, sync job, Alpaca paper
-  # account and DeepSeek key. The key must match a `portfolio` row (schema/002-seed.sql);
+  # One entry per pot, each with its own agent job, sync job and Alpaca paper
+  # account. The key must match an active `portfolio` row (schema/003-sp500-pots.sql);
   # the app derives the pot's Key Vault secret names from it.
   #
   # `env` is where one pot differs from the others — ANALYSIS_EFFORT, a RISK_*
-  # limit or MAX_RUN_COST_USD — merged over the agent's defaults. Every pot
-  # runs the same settings today so the comparison is between sectors, and an
-  # override lands only when the job is created: `env` is under ignore_changes,
-  # so changing one later is `az containerapp job update --set-env-vars`.
+  # limit, MAX_RUN_COST_USD or MAX_ANALYSES_PER_RUN — merged over the agent's
+  # defaults. An override lands only when the job is created: `env` is under
+  # ignore_changes, so changing one later is
+  # `az containerapp job update --set-env-vars`.
   #
-  # No MAX_RUN_COST_USD override: the app's $1.00 default is about 2.5x what a
-  # 50-ticker pot costs even with news on every ticker (~$0.008 per analysis).
+  # sp500: the agent over every S&P 500 constituent. MAX_ANALYSES_PER_RUN is
+  # what bounds its cost: at ~$0.008 an analysis, 30 is at most ~$0.25 and
+  # ~20 minutes a run, inside the $1.00 ceiling and the job's 60 minutes.
+  #
+  # voo: passive (`portfolio.strategy`), holding Vanguard's S&P 500 ETF with
+  # no model and no DeepSeek key. Its limits let one ticker take the whole
+  # account, keeping 1% back so a fractional order never overdraws.
   pots = {
-    tech   = { env = {} }
-    health = { env = {} }
-    energy = { env = {} }
+    sp500 = { env = { MAX_ANALYSES_PER_RUN = "30" } }
+    voo = { env = {
+      RISK_MAX_CONCENTRATION_PCT  = "100"
+      RISK_MAX_TOTAL_EXPOSURE_PCT = "99"
+      RISK_MAX_POSITION_USD       = "1000000"
+      RISK_MAX_TRADE_USD          = "1000000"
+      RISK_MAX_DAILY_TRADES       = "1"
+    } }
   }
 
   agent_env = { for pot, cfg in local.pots : pot => merge(local.agent_base_env, cfg.env) }

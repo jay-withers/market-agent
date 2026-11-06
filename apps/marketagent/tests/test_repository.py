@@ -42,9 +42,9 @@ D = Decimal
 TICKER = "AAPL"
 OTHER = "MSFT"
 
-# The pot most tests exercise: 002-seed.sql seeds it with 50 real
-# tickers, including TICKER/OTHER above.
-PORTFOLIO = "tech"
+# The pot most tests exercise: 003-sp500-pots.sql seeds it with every S&P 500
+# constituent, TICKER/OTHER above included.
+PORTFOLIO = "sp500"
 
 
 def _bar(ticker: str = TICKER, day: date = date(2026, 9, 14), close: str = "100.0000") -> Bar:
@@ -144,7 +144,7 @@ def test_only_the_new_pots_are_active_and_the_old_accounts_are_kept(conn):
     """Retired, not deleted: the old accounts still resolve so their history
     stays readable, but nothing iterates them."""
     assert repo.active_portfolios(conn) == list(POTS)
-    for retired in ("static-100", "dynamic-500"):
+    for retired in ("static-100", "dynamic-500", "tech", "health", "energy"):
         assert not repo.is_active(conn, repo.portfolio_id(conn, retired))
     assert repo.is_active(conn, repo.portfolio_id(conn, PORTFOLIO))
 

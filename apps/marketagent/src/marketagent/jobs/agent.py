@@ -88,6 +88,14 @@ def run(
     tested by spending money and placing orders.
     """
     cfg = settings()
+    with database().connection() as conn:
+        passive_pot = repo.strategy(conn, repo.portfolio_id(conn, name=portfolio)) == "passive"
+    if passive_pot:
+        # Before any model is built: a passive pot has no DeepSeek key.
+        from . import passive
+
+        return passive.run(portfolio, trigger=trigger, image_tag=image_tag, broker=broker)
+
     # The pot's own key, so DeepSeek's usage page attributes its spend to it.
     llm = llm or DeepseekLlm(api_key_secret=deepseek_key(portfolio))
     alpaca_api.use_account(portfolio)
@@ -192,7 +200,10 @@ def run(
             conn.commit()
 
         # --- Stage two: analysis, risk, execution ---------------------------
-        for ticker in tickers:
+        with database().connection() as conn:
+            holdings = {t for t, *_ in repo.load_positions(conn, pid)}
+        ranked = _ranked(tickers, relevant, holdings, cfg.max_analyses_per_run)
+        for ticker in ranked:
             # No relevant news means nothing has changed, so there is nothing
             # to pay the expensive model to think about. This is where the
             # cascade earns its keep.
@@ -342,8 +353,36 @@ def _config(llm: Llm) -> dict[str, object]:
         "analysis_model": getattr(llm, "analysis_model", cfg.analysis_model),
         "analysis_effort": getattr(llm, "analysis_effort", cfg.analysis_effort),
         "max_run_cost_usd": str(cfg.max_run_cost_usd),
+        "max_analyses_per_run": cfg.max_analyses_per_run,
         "risk": limits.model_dump(mode="json", exclude={"allowed_tickers"}),
     }
+
+
+def _ranked(
+    tickers: list[str],
+    relevant: dict[str, list[Article]],
+    holdings: set[str],
+    cap: int | None,
+) -> list[str]:
+    """The tickers with relevant news, in the order they get analysed, capped.
+
+    Held tickers come first, so a cap can never cost the chance of a SELL on
+    news about something the pot owns; then the rest by how many relevant
+    articles each has, the best signal available before paying for analysis.
+    Ties go alphabetically, so the same day's news always picks the same
+    names. A ticker cut today is not lost: the allowlist is still the whole
+    watchlist, and tomorrow's news ranks afresh.
+    """
+    with_news = [t for t in tickers if relevant[t]]
+    ordered = sorted(with_news, key=lambda t: (t not in holdings, -len(relevant[t]), t))
+    if cap is None or len(ordered) <= cap:
+        return ordered
+    logger.info(
+        "analysing %d of %d tickers with relevant news (MAX_ANALYSES_PER_RUN)",
+        cap,
+        len(ordered),
+    )
+    return ordered[:cap]
 
 
 def _analysable(pid: int, tickers: list[str], closes: dict[str, Bar], opening) -> list[str]:

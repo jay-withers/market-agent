@@ -74,6 +74,7 @@ def run(
                 "initial": repo.initial_cash(conn, pid),
                 "inception": repo.portfolio_inception(conn, pid),
                 "tickers": repo.active_tickers(conn, pid),
+                "strategy": repo.strategy(conn, pid),
                 "metrics": repo.week_metrics(conn, pid, start, as_of),
             }
 
@@ -260,9 +261,18 @@ def _account_section(name: str, data: dict) -> list[str]:
     valuation = metrics["valuation"]
     change, change_pct = _week_change(metrics)
 
-    lines = [
-        f"## {name}",
-        "",
+    passive = data.get("strategy") == "passive"
+    lines = [f"## {name}", ""]
+    if passive:
+        # Said in the facts, not only the prompt, so the reader of the email
+        # knows why this account has no decisions or limits to discuss.
+        lines += [
+            "**Passive comparison account.** Holds "
+            + ", ".join(data["tickers"])
+            + " and reinvests idle cash by rule; no model decides anything here.",
+            "",
+        ]
+    lines += [
         f"Began {inception} with ${initial}.",
         "",
         "### Where the money is",
@@ -289,9 +299,15 @@ def _account_section(name: str, data: dict) -> list[str]:
 
     lines += _benchmark_section(metrics, change_pct)
     lines += _activity_section(metrics["runs"], metrics)
-    lines += _risk_section(metrics, lim)
+    if not passive:
+        # The weekly job's own limits are the agent's defaults; the passive
+        # pot's (one ticker, the whole account) come from its job's env, so
+        # this table would describe a pot it is not, and its one-name watchlist
+        # section has nothing to say.
+        lines += _risk_section(metrics, lim)
     lines += _trades_section(metrics)
-    lines += _watchlist_section(metrics)
+    if not passive:
+        lines += _watchlist_section(metrics)
     lines += _reporting_section(metrics)
     # Last, and deliberately after every figure above: these say whether the
     # figures above can be believed, which only means something once they have
@@ -647,8 +663,7 @@ def _prompt(facts: str, previous: list[dict[str, Any]]) -> str:
         f"{facts}\n\n"
         f"{context}"
         "Write the assessment that goes under the tables above, and propose the changes "
-        "the week's evidence supports. Address each pot explicitly — which leads and which "
-        "trails this week, and whether the evidence points to the pot's sector or to the "
-        "risk limits as the more likely explanation — rather than assessing them as one "
-        "merged experiment."
+        "the week's evidence supports. Address each pot explicitly rather than assessing "
+        "them as one merged experiment. A pot marked as the passive comparison account is "
+        "the control: judge the other pots against it, and propose no change to it."
     )

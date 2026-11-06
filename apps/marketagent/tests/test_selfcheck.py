@@ -12,12 +12,11 @@ import logging
 import pytest
 
 from marketagent import cli, selfcheck
-from tests.helpers import POTS
 
 
 @pytest.fixture
 def database_ok(monkeypatch):
-    monkeypatch.setattr(selfcheck, "active_pots", lambda: list(POTS))
+    monkeypatch.setattr(selfcheck, "active_pots", lambda: [("sp500", "agent"), ("voo", "passive")])
 
 
 def test_passes_when_the_database_and_every_secret_resolve(database_ok):
@@ -26,16 +25,24 @@ def test_passes_when_the_database_and_every_secret_resolve(database_ok):
 
 def test_checks_every_active_pots_secrets(database_ok):
     labels = [label for label, _ in selfcheck.checks()]
-    for pot in POTS:
-        for name in selfcheck.pot_secrets(pot):
+    for pot, how in (("sp500", "agent"), ("voo", "passive")):
+        for name in selfcheck.pot_secrets(pot, how):
             assert f"secret {name}" in labels
 
 
+def test_a_passive_pot_needs_no_deepseek_key(database_ok):
+    """It calls no model, so a missing DEEPSEEK-API-KEY-VOO is not a fault."""
+    labels = [label for label, _ in selfcheck.checks()]
+    assert "secret ALPACA-API-KEY-VOO" in labels
+    assert "secret DEEPSEEK-API-KEY-VOO" not in labels
+    assert "secret DEEPSEEK-API-KEY-SP500" in labels
+
+
 def test_fails_on_a_missing_pot_secret_and_names_it(database_ok, monkeypatch, caplog):
-    monkeypatch.delenv("ALPACA_SECRET_KEY_HEALTH")
+    monkeypatch.delenv("ALPACA_SECRET_KEY_VOO")
     with caplog.at_level(logging.INFO):
         assert selfcheck.run() == 1
-    assert "FAIL secret ALPACA-SECRET-KEY-HEALTH" in caplog.text
+    assert "FAIL secret ALPACA-SECRET-KEY-VOO" in caplog.text
 
 
 def test_fails_when_the_database_cannot_be_reached(monkeypatch, caplog):

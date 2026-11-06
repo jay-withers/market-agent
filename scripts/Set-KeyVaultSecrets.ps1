@@ -119,15 +119,12 @@ param(
         # The shared key: the daily summary and the weekly review.
         'DEEPSEEK-API-KEY'
         # One set per pot, named the way accounts.secret_suffix() derives them.
-        'ALPACA-API-KEY-TECH'
-        'ALPACA-SECRET-KEY-TECH'
-        'DEEPSEEK-API-KEY-TECH'
-        'ALPACA-API-KEY-HEALTH'
-        'ALPACA-SECRET-KEY-HEALTH'
-        'DEEPSEEK-API-KEY-HEALTH'
-        'ALPACA-API-KEY-ENERGY'
-        'ALPACA-SECRET-KEY-ENERGY'
-        'DEEPSEEK-API-KEY-ENERGY'
+        # The passive voo pot calls no model, so it has no DeepSeek key.
+        'ALPACA-API-KEY-SP500'
+        'ALPACA-SECRET-KEY-SP500'
+        'DEEPSEEK-API-KEY-SP500'
+        'ALPACA-API-KEY-VOO'
+        'ALPACA-SECRET-KEY-VOO'
         'RESEND-API-KEY'
         'SUMMARY-EMAIL-TO'
         'DASHBOARD-PASSCODE'
@@ -192,13 +189,10 @@ Write-Host "==> $VaultName holds $($present.Count) secret(s)"
 # costs nothing. Deliberately not a rejection: these prefixes are DeepSeek's
 # and Alpaca's to change, not ours to enforce.
 $expectedPrefixes = @{
-    'DEEPSEEK-API-KEY'        = 'sk-'
-    'DEEPSEEK-API-KEY-TECH'   = 'sk-'
-    'DEEPSEEK-API-KEY-HEALTH' = 'sk-'
-    'DEEPSEEK-API-KEY-ENERGY' = 'sk-'
-    'ALPACA-API-KEY-TECH'     = 'PK'
-    'ALPACA-API-KEY-HEALTH'   = 'PK'
-    'ALPACA-API-KEY-ENERGY'   = 'PK'
+    'DEEPSEEK-API-KEY'       = 'sk-'
+    'DEEPSEEK-API-KEY-SP500' = 'sk-'
+    'ALPACA-API-KEY-SP500'   = 'PK'
+    'ALPACA-API-KEY-VOO'     = 'PK'
 }
 
 # Prompted in the clear, and echoed back on success. This is configuration

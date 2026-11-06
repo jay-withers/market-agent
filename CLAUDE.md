@@ -146,7 +146,9 @@ make deploy IMAGE_TAG=vX.Y.Z
 - Reasoning calls use `REASONING_TIMEOUT_SECONDS` (180s), not `fetch.py`'s
   30s.
 - The database is the list of pots, and it must match Terraform's
-  `local.pots`. Secret names are derived (`ALPACA-API-KEY-TECH`).
+  `local.pots`. Secret names are derived (`ALPACA-API-KEY-SP500`). Two pots:
+  `sp500` (the agent, capped at 30 analyses a run) and `voo` (passive, no
+  model: `portfolio.strategy`, `jobs/passive.py`).
 
 ### Jobs and emails ([summary](docs/application.md#the-summary-job), [weekly](docs/application.md#the-weekly-review), [integrity checks](docs/application.md#the-data-integrity-checks), [monitoring](docs/infrastructure.md#monitoring-and-alerting))
 

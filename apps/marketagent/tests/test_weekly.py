@@ -30,12 +30,17 @@ from marketagent.jobs.weekly import (
     _week_change,
 )
 from marketagent.models import ProposedChange, RiskLimits
-from tests.helpers import POTS
 
 D = Decimal
 END = date(2026, 9, 6)
 START = date(2026, 8, 31)
 INCEPTION = date(2026, 8, 20)
+
+
+# Labels only: these render whatever accounts they are handed, with no
+# database behind them, so three names exercise ranking and listing better
+# than the two live pots would.
+POTS = ("tech", "health", "energy")
 
 
 def _limits(**overrides) -> RiskLimits:
@@ -513,6 +518,7 @@ def test_a_week_with_no_agent_runs_is_not_reviewed_at_all(monkeypatch):
     monkeypatch.setattr(weekly.repo, "initial_cash", lambda _c, _p: D("500.0000"))
     monkeypatch.setattr(weekly.repo, "portfolio_inception", lambda _c, _p: INCEPTION)
     monkeypatch.setattr(weekly.repo, "active_tickers", lambda _c, _p: ["NVDA"])
+    monkeypatch.setattr(weekly.repo, "strategy", lambda _c, _p: "agent")
     monkeypatch.setattr(weekly.repo, "last_recommendations", lambda _c, before: [])
     monkeypatch.setattr(
         weekly.repo,
@@ -600,3 +606,21 @@ def test_the_integrity_section_is_absent_when_the_checks_did_not_run():
     table = _table()
 
     assert "### Data integrity" not in table
+
+
+def test_a_passive_pot_is_labelled_and_has_no_limits_table():
+    """The weekly job's limits are the agent's defaults, not the passive pot's,
+    so showing them under it would describe a pot it is not."""
+    passive = {**_account_data(), "strategy": "passive", "tickers": ["VOO"]}
+    table = _facts_table(START, END, {"tech": _account_data(), "voo": passive})
+    voo = table.split("## voo", 1)[1]
+
+    assert "**Passive comparison account.** Holds VOO" in voo
+    assert "Total exposure ceiling" not in voo
+    assert "Total exposure ceiling" in table.split("## voo", 1)[0]
+
+
+def test_the_prompt_treats_the_passive_pot_as_the_control():
+    prompt = weekly._prompt("facts", [])
+    assert "passive comparison account is the control" in prompt
+    assert "propose no change to it" in prompt

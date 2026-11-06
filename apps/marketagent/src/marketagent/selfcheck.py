@@ -30,21 +30,27 @@ logger = logging.getLogger(__name__)
 SHARED_SECRETS = (SHARED_DEEPSEEK_KEY, "RESEND-API-KEY")
 
 
-def pot_secrets(pot: str) -> tuple[str, ...]:
-    """What alpaca_api.py and the agent's DeepSeek provider read for one pot."""
+def pot_secrets(pot: str, strategy: str = "agent") -> tuple[str, ...]:
+    """What alpaca_api.py and the agent's DeepSeek provider read for one pot.
+
+    A passive pot calls no model, so it has no DeepSeek key to check.
+    """
     suffix = secret_suffix(pot)
-    return (f"ALPACA-API-KEY-{suffix}", f"ALPACA-SECRET-KEY-{suffix}", deepseek_key(pot))
+    alpaca = (f"ALPACA-API-KEY-{suffix}", f"ALPACA-SECRET-KEY-{suffix}")
+    return alpaca if strategy == "passive" else (*alpaca, deepseek_key(pot))
 
 
-def active_pots() -> list[str]:
+def active_pots() -> list[tuple[str, str]]:
     from . import db
 
     # As a reader, which takes no lease and never uploads: a selfcheck must not
     # create the database blob if it is missing, but fail because it is.
     db.use_read_only()
     with db.database().connection() as conn:
-        rows = conn.execute("SELECT name FROM portfolio WHERE is_active ORDER BY id").fetchall()
-    return [row[0] for row in rows]
+        rows = conn.execute(
+            "SELECT name, coalesce(strategy, 'agent') FROM portfolio WHERE is_active ORDER BY id"
+        ).fetchall()
+    return [(row[0], row[1]) for row in rows]
 
 
 def checks() -> list[tuple[str, Callable[[], object]]]:
@@ -67,7 +73,7 @@ def checks() -> list[tuple[str, Callable[[], object]]]:
         pots = []
     else:
         found.append(("database", lambda: pots or _no_pots()))
-    names = [*SHARED_SECRETS, *(name for pot in pots for name in pot_secrets(pot))]
+    names = [*SHARED_SECRETS, *(name for pot, how in pots for name in pot_secrets(pot, how))]
     found += [(f"secret {name}", lambda name=name: present(name)) for name in names]
     # Optional: absent means the summary skips its email, which is not a fault.
     found.append(

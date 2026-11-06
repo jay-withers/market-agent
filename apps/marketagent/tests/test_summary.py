@@ -26,10 +26,15 @@ from marketagent.jobs.summary import (
     _spend_section,
 )
 from marketagent.models import PortfolioState, Position
-from tests.helpers import POTS
 
 D = Decimal
 TODAY = date(2026, 9, 3)
+
+
+# Labels only: these render whatever accounts they are handed, with no
+# database behind them, so three names exercise ranking and listing better
+# than the two live pots would.
+POTS = ("tech", "health", "energy")
 
 
 def _state() -> PortfolioState:

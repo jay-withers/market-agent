@@ -182,30 +182,50 @@ not a cost one.
 
 ### The pots
 
-Three fixed pots, `tech`, `health` and `energy`, each about 50 S&P 500 names
-from one sector (energy is Energy plus Utilities, since Energy alone has about
-22). Each has its own Alpaca paper account and its own DeepSeek key, so
-DeepSeek's usage page attributes cost to a pot. They replaced static-100 and
-dynamic-500 in the old `sql/011-sector-pots.sql` (now `schema/002-seed.sql`), which marks the old accounts inactive
-rather than deleting them: their history stays readable, but no job, API route
-or dashboard tab iterates them.
+Two pots, set up to answer one question: does the agent picking S&P 500
+stocks beat simply holding the S&P 500? `schema/003-sp500-pots.sql` (2026-11)
+created them.
+
+- **`sp500`**, the agent, watches every S&P 500 constituent (503 tickers, a
+  fixed snapshot of Wikipedia's list taken 2026-11-06). With that many names
+  the analysis stage is the cost, at ~$0.008 an analysis, so
+  `MAX_ANALYSES_PER_RUN = 30` caps each run (`agent._ranked`). Held tickers with
+  relevant news go first, so the cap never costs a SELL; then the rest by
+  relevant-article count. That is at most ~$0.25 and ~20 minutes a run. The
+  allowlist is still the whole watchlist.
+- **`voo`**, passive (`portfolio.strategy = 'passive'`, `jobs/passive.py`),
+  holds Vanguard's S&P 500 ETF and puts any idle cash back in, with no model,
+  no news and no DeepSeek key. It uses **VOO rather than VUAA**, the UCITS
+  class, because Alpaca trades US-listed instruments only. Same index, same
+  provider. VOO distributes dividends where VUAA accumulates them, and
+  reinvesting them is what makes the two equivalent. Its single decision a
+  run goes through `ai_decisions` (`model = 'rule:passive'`) and the risk
+  engine like any other, so it uses the same order and ledger path. Its
+  `RISK_*` overrides let one ticker take 99% of the account. Unlike the
+  simulated SPY arm in `benchmarks.py`, it pays real fills and cash drag, the
+  same as the agent does.
+
+They replaced `tech`, `health` and `energy` (about 50 names from one sector
+each), which replaced static-100 and dynamic-500 before them. Each was marked
+inactive rather than deleted: its history stays readable, but no job, API
+route or dashboard tab iterates it.
 
 - **The database is the list of pots.** `repository.active_portfolios()` is
   what the summary, the weekly review, the API's `Account` check and
   `/api/accounts` (the dashboard's tabs) all iterate. Terraform's `local.pots`
   is the other half, and the two must name the same pots.
-- **Secret names are derived, not listed.** `accounts.secret_suffix("tech")` is
-  `TECH`, so the pot reads `ALPACA-API-KEY-TECH`, `ALPACA-SECRET-KEY-TECH` and
-  `DEEPSEEK-API-KEY-TECH`. The plain `DEEPSEEK-API-KEY` is the shared key the
+- **Secret names are derived, not listed.** `accounts.secret_suffix("sp500")` is
+  `SP500`, so the pot reads `ALPACA-API-KEY-SP500`, `ALPACA-SECRET-KEY-SP500` and
+  `DEEPSEEK-API-KEY-SP500`. A passive pot needs only the Alpaca pair, and
+  selfcheck reads `portfolio.strategy` to know that. The plain `DEEPSEEK-API-KEY` is the shared key the
   summary and weekly review use: they cover every pot in one call, so charging
   them to a pot would inflate that pot's bill. Every key draws on one DeepSeek
   account balance, so the runway is still computed once.
 - **The lists are fixed.** The rebalance job and the Wikipedia S&P scraping are
-  gone. A new pot is a migration row, a `local.pots` entry and its three
-  secrets, with no code change.
+  gone. A new pot is a migration row, a `local.pots` entry and its secrets,
+  with no code change.
 - **Per-pot settings are env overrides in `local.pots`** (`ANALYSIS_EFFORT`,
-  `RISK_*`, `MAX_RUN_COST_USD`). Every pot uses the same settings for now, so
-  the comparison is between sectors. An override only lands when the job is
+  `RISK_*`, `MAX_RUN_COST_USD`, `MAX_ANALYSES_PER_RUN`). An override only lands when the job is
   created, because `env` is under `ignore_changes`; changing one later is
   `az containerapp job update --set-env-vars`. Each run records its effective
   settings in `agent_runs.config`, because `ai_decisions` stores the model but

@@ -9,10 +9,10 @@ LINES ?= 200
 # hardcoding the dev vault is safe, and overridable for anything else.
 KEY_VAULT_URI ?= https://kv-marketagent-dev.vault.azure.net/
 
-# Which pot run-agent and the logs targets act as. tech is the default so the
+# Which pot run-agent and the logs targets act as. sp500 is the default so the
 # plain command stays useful without an extra flag; another pot needs saying
-# explicitly (`make run-agent PORTFOLIO=health`).
-PORTFOLIO ?= tech
+# explicitly (`make run-agent PORTFOLIO=voo`).
+PORTFOLIO ?= sp500
 
 .DEFAULT_GOAL := help
 
@@ -95,7 +95,7 @@ demo: ## Start the local stack and load fake data for a dashboard preview
 # token is minted here and passed in: it lasts about an hour and is scoped to
 # Key Vault alone, which is a far better thing to hand a container than four
 # long-lived API keys in a .env. Falls back to .env if there is no az login.
-run-agent: ## Run the agent once against the local stack (Alpaca paper orders). PORTFOLIO=tech|health|energy
+run-agent: ## Run the agent once against the local stack (Alpaca paper orders). PORTFOLIO=sp500|voo
 	KEY_VAULT_URI=$(KEY_VAULT_URI) \
 	PORTFOLIO=$(PORTFOLIO) \
 	AZURE_KEYVAULT_TOKEN="$$(az account get-access-token \
@@ -269,7 +269,7 @@ smoke: ## Check MARKETAGENT_IMAGE_TAG/DASHBOARD_IMAGE_TAG are live and ready, an
 # has a live replica: a finished run keeps none, and the CLI then fails with
 # "No replicas found for execution". Use logs-azure-history for a run that is
 # over. PORTFOLIO selects which pot, same as run-agent.
-logs-azure: ## Tail a pot's agent job logs in Azure (only while a run is in flight). PORTFOLIO=tech|health|energy
+logs-azure: ## Tail a pot's agent job logs in Azure (only while a run is in flight). PORTFOLIO=sp500|voo
 	@az containerapp job logs show \
 	  --name $$(terraform -chdir=$(TF_DIR) output -json agent_job_names | jq -r '.["$(PORTFOLIO)"]') \
 	  --resource-group $$(terraform -chdir=$(TF_DIR) output -raw resource_group_name) \
@@ -280,7 +280,7 @@ logs-azure: ## Tail a pot's agent job logs in Azure (only while a run is in flig
 # after a scheduled run has finished. Ingestion lags by a few minutes, which is
 # why it complements the live tail rather than replacing it. Console log rows
 # name the job in ContainerJobName_s; they carry no JobName_s column at all.
-logs-azure-history: ## A pot's recent agent job logs from Log Analytics (LINES=200). PORTFOLIO=tech|health|energy
+logs-azure-history: ## A pot's recent agent job logs from Log Analytics (LINES=200). PORTFOLIO=sp500|voo
 	@az monitor log-analytics query \
 	  --workspace $$(terraform -chdir=$(TF_DIR) output -raw log_analytics_workspace_customer_id) \
 	  --analytics-query "ContainerAppConsoleLogs_CL | where EnvironmentName_s == '$$(terraform -chdir=$(TF_DIR) output -raw container_app_log_environment_name)' | where ContainerJobName_s == '$$(terraform -chdir=$(TF_DIR) output -json agent_job_names | jq -r '.["$(PORTFOLIO)"]')' | where ContainerName_s == 'agent-$(PORTFOLIO)' | top $(LINES) by TimeGenerated desc | order by TimeGenerated asc | project TimeGenerated, Log_s" \

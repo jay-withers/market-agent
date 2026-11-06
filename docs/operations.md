@@ -28,7 +28,7 @@ make run-weekly        # one weekly review against the local stack
 make build             # both images for linux/amd64, tagged with the git SHA
 make push              # both images to ghcr.io (needs write:packages)
 make deploy            # az cli: roll that image tag onto every app and job
-make logs-azure        # tail a pot's deployed agent job logs (PORTFOLIO=tech)
+make logs-azure        # tail a pot's deployed agent job logs (PORTFOLIO=sp500)
 make fmt               # terraform fmt -recursive
 make validate          # terraform init + validate (no Azure credentials)
 make plan              # terraform init + plan (set ENV=dev|stg|prd, default dev)

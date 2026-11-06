@@ -29,18 +29,18 @@ def test_an_unknown_account_name_is_rejected():
 
 
 def test_each_pot_resolves_its_own_credential_pair():
-    alpaca_api.use_account("tech")
-    tech = alpaca_api.headers()
+    alpaca_api.use_account("sp500")
+    sp500 = alpaca_api.headers()
 
-    alpaca_api.use_account("energy")
-    energy = alpaca_api.headers()
+    alpaca_api.use_account("voo")
+    voo = alpaca_api.headers()
 
-    assert tech["APCA-API-KEY-ID"] == "test-alpaca-key-tech"
-    assert energy["APCA-API-SECRET-KEY"] == "test-alpaca-secret-energy"
-    assert tech["APCA-API-KEY-ID"] != energy["APCA-API-KEY-ID"]
+    assert sp500["APCA-API-KEY-ID"] == "test-alpaca-key-sp500"
+    assert voo["APCA-API-SECRET-KEY"] == "test-alpaca-secret-voo"
+    assert sp500["APCA-API-KEY-ID"] != voo["APCA-API-KEY-ID"]
 
 
 def test_headers_carry_the_accept_header_alongside_the_credentials():
-    alpaca_api.use_account("tech")
+    alpaca_api.use_account("sp500")
 
     assert alpaca_api.headers()["accept"] == "application/json"

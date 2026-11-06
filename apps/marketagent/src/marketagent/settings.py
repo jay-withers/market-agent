@@ -90,6 +90,12 @@ class Settings(BaseSettings):
     # leave lying around. Raise it if you mean to spend more.
     max_run_cost_usd: Decimal = Field(default=Decimal("1.00"), gt=0)
 
+    # At most this many analyses per run, the expensive stage (~$0.008 each).
+    # What bounds the cost of a 500-name watchlist: sp500 sets 30 in
+    # Terraform's local.pots. Unset means every ticker with relevant news is
+    # analysed, as before. Which ones make the cut is `agent._ranked`.
+    max_analyses_per_run: int | None = Field(default=None, gt=0)
+
     # Alpaca. The paper host by default and nowhere else: the live host takes
     # the same credentials and the same request shapes, so a wrong base URL
     # would place real orders with no other symptom.
