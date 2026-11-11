@@ -22,13 +22,10 @@ help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-# Expected to be re-run after a dev container rebuild, not just after a clone:
-# uv installs into ~/.local/bin, which is the container's writable layer and
-# does not survive one.
-install: ## Install pre-commit hooks and Python dependencies
+install: ## Install mise tools, pre-commit hooks and Python dependencies
+	mise install
 	pre-commit install
 	pre-commit install --hook-type commit-msg
-	command -v uv >/dev/null || curl -fsSL https://astral.sh/uv/install.sh | sh
 	uv sync --directory $(APP_DIR) --extra dev
 
 test: ## Run the Python test suite
@@ -54,8 +51,6 @@ sql: ## Run SQL from stdin against the Azure database as one transaction
 
 # The local loop: Azurite (the Storage emulator) holding the database blob, plus
 # the API. No Azure.
-# Note the published ports land on the Docker *host* — from inside the dev
-# container, reach a service at its bridge IP or via host.docker.internal.
 up: ## Start the local stack (Azurite + API) with docker compose
 	docker compose up -d --build
 
@@ -82,7 +77,6 @@ demo: ## Start the local stack and load fake data for a dashboard preview
 	@echo ""
 	@echo "    The API is on :8000 but has no page at / — it answers /api/*,"
 	@echo "    /healthz and /docs, so opening :8000 itself shows a bare 404."
-	@echo "    From inside the dev container, use the container's bridge IP."
 
 # `run --rm`, not a long-running service: the agent is a scheduled job, and a
 # container that restarted would trade again each time.

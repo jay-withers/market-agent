@@ -349,8 +349,8 @@ foreach ($secretName in $Name) {
 
     # --value puts the secret in this process's argument list, where anything
     # running as the same user could read it for the lifetime of the call. The
-    # alternative, --file, writes it to disk instead, which is worse. In a
-    # single-user dev container this is the better of the two.
+    # alternative, --file, writes it to disk instead, which is worse. On a
+    # single-user machine this is the better of the two.
     az keyvault secret set `
         --vault-name $VaultName --name $secretName --value $value --output none
 

@@ -4,19 +4,20 @@ Commands, deploys, testing, tooling, CI, Renovate and repo settings: how the
 repo is built, checked and shipped. Moved out of CLAUDE.md, which keeps the
 rules and links here.
 
-## Dev container
+## Tools
 
-The repo is built around the dev container at `.devcontainer/devcontainer.json`,
-which uses the image `ghcr.io/jay-withers/dev-containers/terraform`. It provides
-Terraform, TFLint, terraform-docs, and Checkov, and runs `make install` on
-creation. Prefer working inside the container so tool versions match CI.
+`mise.toml` pins Terraform, TFLint, terraform-docs, Checkov, pre-commit,
+Python, uv, Node and shellcheck. `make install` runs `mise install`, then the
+hooks and the Python dependencies. CI installs the same versions (shared
+workflows v1.26.1+), so a new tool or version bump goes in `mise.toml`. A
+machine is set up once with jay-withers/toolchain. There is no dev container.
 
 ## Commands
 
 `make` with no target prints the self-documenting help (the default goal).
 
 ```bash
-make install           # pre-commit hooks and Python dependencies
+make install           # mise tools, pre-commit hooks and Python dependencies
 make test              # the Python test suite (pytest)
 make lint              # all pre-commit hooks against every file
 make secrets           # prompt for the Key Vault values and store them
@@ -145,11 +146,6 @@ place for it.
 `make test` runs the Python suite. There are no *Terraform* tests — those were
 removed at the user's request — and `make validate` is the credential-free
 Terraform check.
-
-`make install` is expected to be re-run after a dev container rebuild, not only
-after a clone: `uv` installs into `~/.local/bin`, which is the container's
-writable layer and does not survive one. `az login` and `gh auth login` go the
-same way, and so does anything `apt-get install`ed by hand.
 
 ## Pre-commit config
 
@@ -415,8 +411,8 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
 that one line pulls in `config:recommended`, semantic commits, automerge/schedule
 policy, and per-ecosystem grouping. Only what's genuinely specific to this repo
 stays local: `autoApprove` (so Renovate's own PRs clear the branch-protection
-review requirement) and two `regexManagers` (`.terraform-version`, and
-`.tflint.hcl`'s azurerm plugin version pin) — neither is a GitHub Action, npm/pip
+review requirement) and one `regexManagers` entry (`.tflint.hcl`'s azurerm
+plugin version pin; Terraform is in `mise.toml`) — not a GitHub Action, npm/pip
 package or Docker image that a shared preset's manager already covers. Change
 ecosystem-wide policy in `jay-withers/renovate` itself so every consuming repo picks
 it up; only touch this file for something unique here.
