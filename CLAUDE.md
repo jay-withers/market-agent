@@ -60,7 +60,7 @@ changing the thing a rule protects.
 ## Commands
 
 ```bash
-make install           # pre-commit hooks and Python dependencies (re-run after a container rebuild)
+make install           # mise tools, pre-commit hooks and Python dependencies
 make test              # the Python suite, SQL included (DuckDB is embedded)
 make lint              # all pre-commit hooks against every file
 make up / down / demo  # the local docker compose stack (demo seeds fake data)
@@ -178,7 +178,7 @@ make deploy IMAGE_TAG=vX.Y.Z
 - `make deploy` is az cli and needs an explicit tag. `env` is under
   `ignore_changes`, so a `common_env` change lands only through `make deploy`.
 - Images run as uid 10001. Both `uv sync` calls use `--no-editable`. Docker
-  compose uses no bind mounts (docker-outside-of-docker).
+  compose uses no bind mounts.
 - Keep `marketagent selfcheck` side-effect free and complete. `scripts/smoke.sh`
   is shared verbatim with five repos.
 - Tags are immutable (`vX.Y.Z` and short SHA). After a release, check the

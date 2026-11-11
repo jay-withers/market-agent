@@ -11,8 +11,7 @@ CLAUDE.md, which keeps the rules and links here.
 its own `provider` block in `versions.tf`, and `.terraform.lock.hcl` is committed.
 There is no `examples/` directory (an earlier version had one purely so a
 provider-less module could be planned) and there are no tests. The Terraform
-version is pinned in `.terraform-version` at the repo root, which is where
-tfenv/tenv and CI look for it.
+version is pinned in `mise.toml` at the repo root, which mise and CI read.
 
 **File layout is enforced, not just conventional**: `locals`/`variable`/`output`/
 `data` blocks must live in a matching `locals.tf`/`variables.tf`/`outputs.tf`/

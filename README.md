@@ -88,9 +88,7 @@ make down        # stop, and delete the data volume
 ```
 
 The dashboard is then on <http://localhost:8080> and the API on
-<http://localhost:8000>. Note that published ports land on the Docker *host*, so
-from inside the dev container reach a service at its bridge IP or via
-`host.docker.internal`.
+<http://localhost:8000>.
 
 The dashboard accounts in USD to match Alpaca. Its `$ USD` / `£ GBP` control
 can convert every displayed amount using the latest reference rate; changing
@@ -265,15 +263,21 @@ past the job timeout as abandoned.
 
 ## Getting started
 
-Open the repository in the dev container (VS Code: **Reopen in Container**, or
-GitHub Codespaces). It ships with Terraform, TFLint, terraform-docs and Checkov,
-and runs `make install` on creation to wire up the pre-commit hooks.
-
-Outside a dev container, install the hooks manually:
+Once per machine, set up the tools with
+[jay-withers/toolchain](https://github.com/jay-withers/toolchain)
+(`bash src/setup.sh`), which installs [mise](https://mise.jdx.dev). Then, in
+this repo:
 
 ```bash
-make install
+mise trust && make install   # make install runs `mise install` first
 ```
+
+`mise.toml` pins every tool this repo's hooks, build and CI use; CI installs
+the same versions (jay-withers/workflows v1.26.1+). Add a tool there rather
+than installing it by hand.
+
+`make install` also syncs the Python dependencies with uv. Node, for the
+dashboard, is in `mise.toml` too.
 
 ## Commands
 

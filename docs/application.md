@@ -723,13 +723,11 @@ a file. That credential **refuses a scope it was not issued for**, because
 fails as a 403 that reads like a missing role assignment. `.env` still works and
 `.env.example` documents it, for anyone with no Azure access.
 
-**`docker compose` here has no bind mounts, on purpose.** The Docker daemon runs
-on the *host* (docker-outside-of-docker), so a relative bind mount resolves
-against the host filesystem and fails from inside the dev container with
-"path is not shared from the host", because `/workspaces/market-agent` does not
-exist there. Build contexts are sent by the *client* and work from either side.
-Published ports land on the **host**, so from inside the dev container reach a
-service at its bridge IP or `host.docker.internal`. That is also why
+**`docker compose` here has no bind mounts, on purpose.** A bind mount names a
+path on the *daemon's* side, so the stack would break against any daemon that
+does not share this filesystem (it did, from the old dev container, with "path
+is not shared from the host"). Build contexts are sent by the *client* and work
+from either side. That is also why
 `make demo` pipes `demo/seed.sql` into `marketagent sql` on stdin rather than
 mounting it.
 
@@ -760,9 +758,8 @@ because a comment opening `# shellcheck` is a *directive* rather than prose,
 and the parse error (`SC1072: Expected '=' after directive key`) is reported
 against the whole `run:` block rather than the line.
 
-The dev container carries shellcheck as of
-[dev-containers#67](https://github.com/jay-withers/dev-containers/pull/67), so
-this is handled here — but **rebuild the container if `command -v shellcheck`
+`mise.toml` pins shellcheck, so `mise install` provides it locally and CI
+installs the same version — but **run `mise install` if `command -v shellcheck`
 comes up empty**, and expect the trap anywhere else. Note that *having a
 shellcheck pre-commit hook does not help*: this repo has `shellcheck-py`, which
 installs into its own isolated hook environment and is not on `PATH` for the

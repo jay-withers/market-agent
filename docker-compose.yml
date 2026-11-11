@@ -15,10 +15,9 @@
 # which beats writing four long-lived API keys into a .env. A .env still works
 # if you prefer it, or if you have no Azure access at all.
 #
-# Deliberately free of bind mounts. The Docker daemon here runs on the host
-# (docker-outside-of-docker), so a relative bind mount means a *host* path and
-# fails from inside the dev container; build contexts are sent by the client and
-# work from either side.
+# Deliberately free of bind mounts, so the stack runs the same against any
+# daemon (Docker Desktop on WSL or macOS, or a remote one): a bind mount names
+# a path on the daemon's side, while build contexts are sent by the client.
 #
 # Works because settings.secret() reads an environment variable before falling
 # back to Key Vault, and db.py reaches the blob with Azurite's well-known
@@ -46,8 +45,7 @@ services:
     image: mcr.microsoft.com/azure-storage/azurite:3.35.0
     command: ["azurite-blob", "--blobHost", "0.0.0.0", "--skipApiVersionCheck"]
     ports:
-      # Published on the *host*. From inside the dev container reach it at the
-      # container's bridge IP, or at host.docker.internal:10000.
+      # localhost:10000.
       - "10000:10000"
     volumes:
       - azurite-data:/data
