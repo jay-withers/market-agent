@@ -16,7 +16,7 @@ PORTFOLIO ?= sp500
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install lint test secrets sql up down logs demo run-agent run-weekly build push deploy deployed-tag smoke logs-azure init fmt validate plan apply
+.PHONY: help install lint test typecheck secrets sql up down logs demo run-agent run-weekly build push deploy deployed-tag smoke logs-azure init fmt validate plan apply
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -104,6 +104,9 @@ run-weekly: ## Run the weekly review once against the local stack
 	AZURE_KEYVAULT_TOKEN="$$(az account get-access-token \
 	  --resource https://vault.azure.net --query accessToken -o tsv 2>/dev/null)" \
 	docker compose run --rm weekly
+
+typecheck: ## Type-check src/ and tests/ with mypy (config in pyproject.toml)
+	uv run --directory $(APP_DIR) --extra dev mypy
 
 lint: ## Run all pre-commit hooks against every file
 	pre-commit run --all-files

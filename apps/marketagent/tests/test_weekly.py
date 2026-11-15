@@ -526,7 +526,7 @@ def test_a_week_with_no_agent_runs_is_not_reviewed_at_all(monkeypatch):
         lambda _c, _p, _s, _e: _metrics(runs={"runs": 0}),
     )
 
-    assert weekly.run(as_of=END, llm=_ExplodingLlm()) is None
+    assert weekly.run(as_of=END, llm=_ExplodingLlm()) is None  # type: ignore[arg-type]  # a fake
 
 
 # ---------------------------------------------------------------------------

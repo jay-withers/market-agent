@@ -1,6 +1,6 @@
 name: ci-python
 
-# Runs the Python test suite on a pull request.
+# Runs the Python test suite, mypy and the diff-coverage gate on a pull request.
 #
 # Until this existed, nothing in CI ran pytest at all. ci-pre-commit lints the
 # code with ruff and ci-container-build proves the images compile, but neither
@@ -40,12 +40,12 @@ jobs:
     # The reusable workflow runs unfiltered by path, which is deliberate: the
     # suite takes seconds, and a required check skipped by a path filter never
     # reports, blocking a pull request rather than passing it.
-    uses: jay-withers/workflows/.github/workflows/python.yml@1961dfbd65114641c5fcfd4677a7ca3f0668e513 # v1.26.1
+    uses: jay-withers/workflows/.github/workflows/python.yml@80eaaece845470ae15cb01af2cb859afcd01a66d # v1.28.0
     with:
       working-directory: apps/marketagent
       python-version: "3.14"
       extras: dev
-      # Reported, never gated. The database is embedded DuckDB, so
+      # The total is reported, never gated. The database is embedded DuckDB, so
       # repository.py's and queries.py's SQL runs in every CI run; what stays
       # lower is the network-facing code (Alpaca, DeepSeek, the blob lease),
       # where a --cov-fail-under would be met by mocking the client, which
@@ -61,3 +61,8 @@ jobs:
       # not invalidate the --locked run.
       coverage: marketagent
       coverage-pr-comment: true
+      # diff-coverage gates only the lines a PR changes, where the cheap way to
+      # pass is to test the new code. A test that only asserts a mock still
+      # counts, so review the tests too.
+      diff-coverage: "80"
+      typecheck: mypy

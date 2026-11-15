@@ -83,6 +83,7 @@ def test_a_provider_failure_is_reported_not_raised(monkeypatch):
     result = send("s", "h", "t", client=sequence_client([(422, {"message": "bad from"})]))
 
     assert result.status == "failed"
+    assert result.error is not None
     assert "422" in result.error
 
 

@@ -232,7 +232,7 @@ def _comparison_section(accounts: dict[str, dict]) -> list[str]:
         + " |",
         "| Change this week | "
         + " | ".join(
-            f"{_signed(changes[n])}%" if changes[n] is not None else "not computable" for n in names
+            f"{_signed(c)}%" if (c := changes[n]) is not None else "not computable" for n in names
         )
         + " |",
         "| Most frequent binding constraint | "
@@ -241,10 +241,11 @@ def _comparison_section(accounts: dict[str, dict]) -> list[str]:
         "| Watchlist names with no decisions | " + " | ".join(idle_names(n) for n in names) + " |",
         "",
     ]
-    if len(names) > 1 and all(t is not None for t in totals.values()):
-        ranked = sorted(names, key=lambda n: totals[n], reverse=True)
+    valued = {n: t for n in names if (t := totals[n]) is not None}
+    if len(names) > 1 and len(valued) == len(names):
+        ranked = sorted(valued, key=valued.__getitem__, reverse=True)
         first, last = ranked[0], ranked[-1]
-        gap = totals[first] - totals[last]
+        gap = valued[first] - valued[last]
         lines.append(
             f"**{first}** leads and **{last}** trails, ${gap} apart this week."
             if gap
@@ -292,7 +293,8 @@ def _account_section(name: str, data: dict) -> list[str]:
             f"| Since inception | ${_signed(valuation['pnl_usd'])} "
             f"({_signed(valuation['pnl_pct'])}%) |",
         ]
-    if change is None:
+    # _week_change returns both or neither; checking both is for the type.
+    if change is None or change_pct is None:
         lines.append("| Change this week | no valuation before this week to compare against |")
     else:
         lines.append(f"| Change this week | ${_signed(change)} ({_signed(change_pct)}%) |")

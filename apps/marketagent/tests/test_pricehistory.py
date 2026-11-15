@@ -36,11 +36,12 @@ def _bar(day: date, close: str) -> Bar:
 def test_a_restated_ticker_is_refetched_from_its_earliest_stored_bar(conn, monkeypatch):
     first = date.today() - timedelta(days=20)
     calls = []
-    monkeypatch.setattr(
-        pricehistory,
-        "fetch_daily_bars",
-        lambda tickers, start: calls.append((tickers, start)) or [_bar(first, "100")],
-    )
+
+    def fetch(tickers, start):
+        calls.append((tickers, start))
+        return [_bar(first, "100")]
+
+    monkeypatch.setattr(pricehistory, "fetch_daily_bars", fetch)
     monkeypatch.setattr(pricehistory.repo, "restated_tickers", lambda _conn, _bars: {"AAPL": first})
 
     assert pricehistory.restated_history(_Db(conn), [_bar(date.today(), "100")]) == [

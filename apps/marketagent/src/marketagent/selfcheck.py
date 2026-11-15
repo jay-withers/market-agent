@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from functools import partial
+from typing import NoReturn
 
 from .accounts import SHARED_DEEPSEEK_KEY, deepseek_key, secret_suffix
 
@@ -74,7 +76,7 @@ def checks() -> list[tuple[str, Callable[[], object]]]:
     else:
         found.append(("database", lambda: pots or _no_pots()))
     names = [*SHARED_SECRETS, *(name for pot, how in pots for name in pot_secrets(pot, how))]
-    found += [(f"secret {name}", lambda name=name: present(name)) for name in names]
+    found += [(f"secret {name}", partial(present, name)) for name in names]
     # Optional: absent means the summary skips its email, which is not a fault.
     found.append(
         ("secret SUMMARY-EMAIL-TO (optional)", lambda: optional_secret("SUMMARY-EMAIL-TO"))
@@ -82,7 +84,7 @@ def checks() -> list[tuple[str, Callable[[], object]]]:
     return found
 
 
-def _no_pots() -> None:
+def _no_pots() -> NoReturn:
     raise LookupError("no active pot in the portfolio table")
 
 
