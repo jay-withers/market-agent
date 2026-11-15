@@ -476,6 +476,7 @@ def test_one_decision_comes_back_with_the_articles_and_trades_behind_it(conn):
 
     found = queries.decision(conn, did)
 
+    assert found is not None
     assert [n["headline"] for n in found["news"]] == ["A headline"]
     assert len(found["trades"]) == 1
 
@@ -613,7 +614,9 @@ def test_the_latest_summary_is_the_most_recent_day(conn):
             conn, day, subject, "body", "<p>body</p>", None, None, "sent", None, None, None
         )
 
-    assert queries.latest_summary(conn)["subject"] == "Newer"
+    latest = queries.latest_summary(conn)
+    assert latest is not None
+    assert latest["subject"] == "Newer"
 
 
 def test_the_latest_review_withholds_the_rendered_html(conn):
@@ -640,6 +643,7 @@ def test_the_latest_review_withholds_the_rendered_html(conn):
 
     found = queries.latest_review(conn)
 
+    assert found is not None
     assert "body_html" not in found
     assert found["assessment"] == "An assessment"
     assert found["recommendations"][0]["change"] == "drop TSLA"

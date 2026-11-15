@@ -19,6 +19,7 @@ machine is set up once with jay-withers/toolchain. There is no dev container.
 ```bash
 make install           # mise tools, pre-commit hooks and Python dependencies
 make test              # the Python test suite (pytest)
+make typecheck         # mypy, as CI runs it
 make lint              # all pre-commit hooks against every file
 make secrets           # prompt for the Key Vault values and store them
 make sql < file.sql    # SQL against the Azure database blob, as one leased transaction
@@ -231,7 +232,7 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
   call, its status check context is **`test / Test`**, not the bare `test` job
   id — the same namespacing `pre-commit / Pre-commit` has.
 
-  Three inputs, and `extras: dev` is the one to understand: **pytest is an
+  `extras: dev` is the input to understand: **pytest is an
   extra, not a dependency group, and `uv run` installs groups but not extras.**
   Without it the job fails with a bare `Failed to spawn: pytest` after a
   successful-looking install — and only in CI, because locally `make install`
@@ -245,7 +246,13 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
   instead of passing it. (`ci-container-build` filters inside the workflow
   instead, behind its always-reporting `container-build` gate.)
 
-  **Coverage is reported and never gated.** `coverage: marketagent` and
+  **mypy runs after the suite** (`typecheck: mypy`, workflows v1.28.0+), from
+  the `dev` extra's pinned version and `[tool.mypy]` in `pyproject.toml`, so
+  it's the same check as `make typecheck`.
+
+  **Total coverage is reported and never gated; the PR's own lines are.**
+  `diff-coverage: "80"` fails `test / Test` when under 80% of the lines a PR
+  changes in `marketagent` are run by a test. `coverage: marketagent` and
   `coverage-pr-comment: true` are inputs on the shared workflow, which puts the
   table in the job summary and in one self-updating PR comment. It lives there
   rather than in this repo because coverage reporting is generic Python CI

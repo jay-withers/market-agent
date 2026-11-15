@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
 import pytest
 
@@ -34,7 +35,7 @@ def test_an_unknown_command_is_an_error():
 
 
 def test_the_agent_command_runs_the_job(monkeypatch):
-    called = {}
+    called: dict[str, Any] = {}
     monkeypatch.setattr(cli, "_configure_logging", lambda: None)
     _stub_job(monkeypatch, "agent", _FakeJob(called))
 
@@ -60,7 +61,7 @@ def test_a_failed_agent_run_exits_non_zero_without_re_raising(monkeypatch, caplo
 
 
 def test_the_summary_command_runs_the_summary_job(monkeypatch):
-    called = {}
+    called: dict[str, Any] = {}
     monkeypatch.setattr(cli, "_configure_logging", lambda: None)
     _stub_job(monkeypatch, "summary", _FakeSummary(called))
 
@@ -79,7 +80,7 @@ def test_a_failed_summary_exits_non_zero(monkeypatch, caplog):
 class _FakeJob:
     """Stands in for the `marketagent.jobs.agent` module."""
 
-    def __init__(self, called: dict, error: Exception | None = None):
+    def __init__(self, called: dict, error: BaseException | None = None):
         self._called = called
         self._error = error
 
@@ -117,7 +118,7 @@ def test_a_terminated_agent_run_still_exits_non_zero(monkeypatch, caplog):
 
 
 def test_the_weekly_command_runs_the_review_job(monkeypatch):
-    called = {}
+    called: dict[str, Any] = {}
     monkeypatch.setattr(cli, "_configure_logging", lambda: None)
     _stub_job(monkeypatch, "weekly", _FakeSummary(called))
 
@@ -128,7 +129,7 @@ def test_the_weekly_command_runs_the_review_job(monkeypatch):
 def test_the_weekly_command_takes_a_date_so_a_past_week_can_be_reviewed(monkeypatch):
     """The review reads only stored rows, so an older window is as answerable
     as the current one — and the first run wants last week, not today."""
-    called = {}
+    called: dict[str, Any] = {}
     monkeypatch.setattr(cli, "_configure_logging", lambda: None)
     _stub_job(monkeypatch, "weekly", _FakeSummary(called))
 
@@ -167,7 +168,7 @@ def test_the_sync_command_requires_a_portfolio(monkeypatch):
 
 
 def test_the_sync_command_runs_for_the_named_account(monkeypatch):
-    called = {}
+    called: dict[str, Any] = {}
     monkeypatch.setattr(cli, "_configure_logging", lambda: None)
     _stub_sync(monkeypatch, _FakeSummary(called))
 
@@ -185,7 +186,7 @@ class _FakeSummary:
     one double serves for both.
     """
 
-    def __init__(self, called: dict, error: Exception | None = None):
+    def __init__(self, called: dict, error: BaseException | None = None):
         self._called = called
         self._error = error
 

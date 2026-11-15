@@ -207,13 +207,13 @@ def test_the_price_history_survived_the_decision_history_being_added():
 
 
 def test_spending_under_the_ceiling_is_permitted():
-    assert _check_budget(D("0.19"), D("1.00")) is None
+    _check_budget(D("0.19"), D("1.00"))  # raises when over
 
 
 def test_spending_exactly_the_ceiling_is_permitted():
     # The ceiling is what a run may spend, not what it must stay under: a run
     # failed at its exact budget would be failed for arithmetic.
-    assert _check_budget(D("1.00"), D("1.00")) is None
+    _check_budget(D("1.00"), D("1.00"))  # raises when over
 
 
 def test_crossing_the_ceiling_stops_the_run():

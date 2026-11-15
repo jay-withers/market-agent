@@ -345,7 +345,7 @@ def test_a_position_pushed_over_its_cap_by_a_price_rise_never_yields_a_negative_
     assert verdict.approved_amount_usd is None
     caps = {r.constraint: r.cap_usd for r in verdict.reasons}
     assert caps["max_position_usd"] == D("0.0000")
-    assert all(cap >= 0 for cap in caps.values())
+    assert all(cap is not None and cap >= 0 for cap in caps.values())
 
 
 def test_exposure_already_over_the_ceiling_yields_no_headroom():
@@ -446,8 +446,10 @@ def test_an_approved_amount_never_exceeds_the_binding_cap():
     verdict = evaluate(rec(), state(), limits(), trades_today=0)
 
     caps = {r.constraint: r.cap_usd for r in verdict.reasons}
-    assert verdict.approved_amount_usd == caps[verdict.binding_constraint]
-    assert all(verdict.approved_amount_usd <= cap for cap in caps.values())
+    approved = verdict.approved_amount_usd
+    assert approved is not None
+    assert approved == caps[verdict.binding_constraint]
+    assert all(cap is not None and approved <= cap for cap in caps.values())
 
 
 # ---------------------------------------------------------------------------

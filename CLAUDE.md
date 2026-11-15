@@ -62,6 +62,7 @@ changing the thing a rule protects.
 ```bash
 make install           # mise tools, pre-commit hooks and Python dependencies
 make test              # the Python suite, SQL included (DuckDB is embedded)
+make typecheck         # mypy over the app's src/ and tests/
 make lint              # all pre-commit hooks against every file
 make up / down / demo  # the local docker compose stack (demo seeds fake data)
 make run-agent         # one agent run against the local stack
@@ -192,6 +193,12 @@ Thin callers of `jay-withers/workflows`, pinned by SHA. The required checks
 Playwright layout suite) and `container-build`. ci-python needs
 `extras: dev`. Renovate extends `github>jay-withers/renovate`. `cd-terraform`
 plans on merge and applies only when run by hand.
+
+`test / Test` also runs mypy over `apps/marketagent/src/` and `tests/`
+(`[tool.mypy]` in `pyproject.toml`, so `make typecheck` is the same check) and
+gates diff coverage: at least 80% of the lines a PR changes in `marketagent`
+must be run by a test. Total coverage is reported, never gated. Don't meet the
+diff gate with a test that only asserts a mock; test the behaviour.
 
 ## Commit messages
 

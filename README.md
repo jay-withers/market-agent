@@ -63,6 +63,7 @@ its own.
 ```bash
 make install   # pre-commit hooks and Python dependencies (needs re-running after a rebuild)
 make test      # pytest
+make typecheck # mypy; CI runs it too
 ```
 
 Money is `Decimal` throughout, matching the `DECIMAL(18,4)` columns in `schema/`,

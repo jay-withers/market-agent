@@ -61,7 +61,7 @@ def client(monkeypatch):
     monkeypatch.setattr(queries, "comparison", lambda c, days: {n: [] for n in POTS})
 
     with TestClient(app) as test_client:
-        test_client.conn = conn
+        test_client.conn = conn  # type: ignore[attr-defined]  # for the tests to reach
         yield test_client
 
 

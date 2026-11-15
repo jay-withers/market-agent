@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from typing import Any
 
 import pytest
 
@@ -321,7 +322,7 @@ def test_paper_fills_are_mirrored_without_applying_cash_twice(agent_db):
                 filled_avg_price_usd=D(100),
             )
 
-    agent.run(portfolio=PORTFOLIO, llm=_FakeLlm(TICKER, amount_usd=40), broker=PaperBroker())
+    agent.run(portfolio=PORTFOLIO, llm=_FakeLlm(TICKER, amount_usd=40), broker=PaperBroker())  # type: ignore[arg-type]  # a partial fake
     with db.open_file(agent_db) as conn:
         assert repo.load_cash(conn, repo.portfolio_id(conn, PORTFOLIO)) == D(99960)
         assert conn.execute("SELECT count(*) FROM positions").fetchone()[0] == 1
@@ -490,7 +491,12 @@ def test_a_held_ticker_with_news_is_analysed_before_the_cap_bites(agent_db, monk
     """The cap must never cost the chance of a SELL on news about a holding."""
     from marketagent.jobs.agent import _ranked
 
-    relevant = {"AAPL": [object()], "MSFT": [object()] * 3, "NVDA": [object()] * 2, "ZTS": []}
+    relevant: dict[str, list[Any]] = {
+        "AAPL": [object()],
+        "MSFT": [object()] * 3,
+        "NVDA": [object()] * 2,
+        "ZTS": [],
+    }
     tickers = sorted(relevant)
 
     assert _ranked(tickers, relevant, {"AAPL"}, 2) == ["AAPL", "MSFT"]

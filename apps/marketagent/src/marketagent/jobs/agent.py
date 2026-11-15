@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Literal
 
 from .. import alpaca_api, risklimits
 from .. import repository as repo
@@ -154,7 +155,7 @@ def run(
                     "Use an isolated database for dry runs; this portfolio mirrors Alpaca"
                 )
         bars = fetch_daily_bars(tickers, days=PRICE_HISTORY_DAYS)
-        history = restated_history(database(), bars)
+        restated = restated_history(database(), bars)
         closes = latest_close(bars)
         # The allowlist stays the whole watchlist even when the analysis below
         # is narrowed to holdings.
@@ -164,7 +165,7 @@ def run(
         counts["news_fetched"] = len(articles)
 
         with database().connection() as conn:
-            repo.save_prices(conn, history + bars)
+            repo.save_prices(conn, restated + bars)
             news_ids = repo.save_news(conn, articles)
             conn.commit()
 
@@ -173,25 +174,25 @@ def run(
         analysis_rows = []
         for article in articles:
             for ticker in article.tickers:
-                result = llm.filter_news(ticker, article.headline, article.summary)
-                usage += result.usage
-                cost_usd += result.cost_usd
+                relevance = llm.filter_news(ticker, article.headline, article.summary)
+                usage += relevance.usage
+                cost_usd += relevance.cost_usd
                 _check_budget(cost_usd, cfg.max_run_cost_usd)
                 analysis_rows.append(
                     {
                         "news_id": news_ids[article.external_id],
                         "ticker": ticker,
-                        "relevant": result.value.relevant,
-                        "sentiment": result.value.sentiment,
-                        "sentiment_score": result.value.sentiment_score,
-                        "rationale": result.value.rationale,
-                        "model": result.model,
+                        "relevant": relevance.value.relevant,
+                        "sentiment": relevance.value.sentiment,
+                        "sentiment_score": relevance.value.sentiment_score,
+                        "rationale": relevance.value.rationale,
+                        "model": relevance.model,
                         "prompt_version": PROMPT_VERSION,
-                        "input_tokens": result.usage.input_tokens,
-                        "output_tokens": result.usage.output_tokens,
+                        "input_tokens": relevance.usage.input_tokens,
+                        "output_tokens": relevance.usage.output_tokens,
                     }
                 )
-                if result.value.relevant:
+                if relevance.value.relevant:
                     relevant[ticker].append(article)
 
         counts["news_relevant"] = sum(len(v) for v in relevant.values())
@@ -424,7 +425,7 @@ def _execute(
     bar: Bar,
 ) -> bool:
     """Submit the approved trade and record it. True if it filled."""
-    side = "BUY" if rec.action == "BUY" else "SELL"
+    side: Literal["BUY", "SELL"] = "BUY" if rec.action == "BUY" else "SELL"
     notional_usd = approved_usd
 
     # Deterministic, so a resubmission is idempotent at the broker and the
@@ -460,7 +461,9 @@ def _execute(
     # before the market opens, so the usual outcome is `submitted` and the
     # ledger is untouched until the summary job reconciles.
     filled = order.status in ("filled", "simulated") and order.quantity
-    if order.status == "simulated" and filled and order.filled_avg_price_usd:
+    # order.quantity rather than `filled`, which is the same test here but
+    # loses the narrowing from Decimal | None.
+    if order.status == "simulated" and order.quantity and order.filled_avg_price_usd:
         repo.apply_fill(
             conn,
             pid=pid,

@@ -437,6 +437,7 @@ def test_every_failing_pot_is_named():
     )
 
     alert = _run_alert(accounts)
+    assert alert is not None
     assert "tech: no agent run" in alert
     assert "energy: agent run failed" in alert
     assert "health" not in alert

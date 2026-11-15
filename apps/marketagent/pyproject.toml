@@ -43,6 +43,7 @@ dev = [
   # Test-only — nothing in src/ needs it, DeepSeek is called through plain
   # httpx via fetch.py.
   "httpx2>=2.12",
+  "mypy>=2.4.1",
 ]
 
 # What Terraform's `command = ["marketagent"]` resolves to.
@@ -87,6 +88,26 @@ extend-immutable-calls = [
   "fastapi.Path",
   "fastapi.Query",
 ]
+
+[tool.mypy]
+# `make typecheck` and CI's `typecheck: mypy` both read this. Tests too, so a
+# changed signature can't leave a stale call behind in them. check_untyped_defs
+# so a function without annotations is still checked inside; the pydantic
+# plugin so a model built with a field it doesn't have is caught.
+files = ["src", "tests"]
+check_untyped_defs = true
+warn_unused_ignores = true
+plugins = ["pydantic.mypy"]
+
+# init_forbid_extra is what makes the plugin reject an unknown field. Not
+# init_typed: models here take strings and let pydantic coerce them.
+[tool.pydantic-mypy]
+init_forbid_extra = true
+
+# Markdown ships no type hints; only the summary and weekly emails render it.
+[[tool.mypy.overrides]]
+module = ["markdown", "markdown.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

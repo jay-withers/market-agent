@@ -65,7 +65,7 @@ def test_an_empty_portfolio_is_all_cash():
 
 def test_portfolio_state_is_frozen():
     with pytest.raises(ValidationError) as caught:
-        _state().cash_usd = D("1")
+        _state().cash_usd = D("1")  # type: ignore[misc]  # the point: it must refuse
 
     assert caught.value.errors()[0]["type"] == "frozen_instance"
 
