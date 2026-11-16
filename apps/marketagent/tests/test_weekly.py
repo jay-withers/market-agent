@@ -272,9 +272,34 @@ def test_refusals_and_approvals_are_split_rather_than_pooled():
     # occurrence to isolate the overridden 'tech' account's table.
     refused, approved = table.rsplit("| Approved, bound by | Decisions |", 1)
 
-    assert "| action_is_hold | 45 |" in refused
-    assert "| action_is_hold | 45 |" not in approved
+    assert "| daily_trade_limit | 9 |" in refused
+    assert "| daily_trade_limit | 9 |" not in approved
     assert "| recommended_amount | 6 |" in approved
+
+
+def test_a_hold_is_counted_as_a_no_op_not_a_refusal():
+    """A HOLD proposes no trade, so `action_is_hold` is not a limit that
+    refused anything. Listed under "Refused by" it read as the engine blocking
+    trades the model never proposed."""
+    table = _table()
+
+    assert "No-op HOLD decisions: 45." in table
+    assert "| action_is_hold |" not in table
+
+
+def test_a_week_of_only_holds_names_no_binding_constraint():
+    """Regression: a week with nothing but HOLDs reported `action_is_hold` as
+    the pot's most frequent binding constraint, which hid that no limit bound
+    or refused anything."""
+    table = _table(
+        decisions=[{"action": "HOLD", "decisions": 12, "avg_confidence": D("0.5"), "approved": 0}],
+        constraints=[{"binding": "action_is_hold", "approved": False, "decisions": 12}],
+    )
+
+    assert "action_is_hold" not in table
+    assert "none, only HOLDs (12)" in table
+    assert "No-op HOLD decisions: 12." in table
+    assert "| nothing was refused | 0 |" in table
 
 
 def test_an_approval_bound_by_the_recommendation_is_explained_as_no_clamp():
