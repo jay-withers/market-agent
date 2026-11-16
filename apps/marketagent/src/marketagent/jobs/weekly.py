@@ -202,6 +202,21 @@ def _signed(value: Decimal) -> str:
     return f"{'+' if value >= 0 else ''}{value}"
 
 
+# The gate `evaluate()` returns for a HOLD. It is recorded as the binding
+# constraint because every verdict needs one, but it is not a limit: the model
+# proposed no trade, so nothing was there to refuse. Counted as a refusal, a
+# week of nothing but HOLDs reported it as the pot's most frequent binding
+# constraint and read as the engine blocking trades, so the review counts these
+# apart as no-ops and leaves the refusal figures to the limits.
+HOLD_CONSTRAINT = "action_is_hold"
+
+
+def _split_holds(rows: list[dict[str, Any]]) -> tuple[int, list[dict[str, Any]]]:
+    """The no-op HOLD count, and the constraint rows without it."""
+    holds = sum(r["decisions"] for r in rows if r["binding"] == HOLD_CONSTRAINT)
+    return holds, [r for r in rows if r["binding"] != HOLD_CONSTRAINT]
+
+
 def _comparison_section(accounts: dict[str, dict]) -> list[str]:
     """Which pot leads this week, and which limit is shaping each one."""
     names = list(accounts)
@@ -209,9 +224,12 @@ def _comparison_section(accounts: dict[str, dict]) -> list[str]:
     changes = {n: _week_change(accounts[n]["metrics"])[1] for n in names}
 
     def top_constraint(name: str) -> str:
-        rows = accounts[name]["metrics"]["constraints"]
-        if not rows:
+        all_rows = accounts[name]["metrics"]["constraints"]
+        if not all_rows:
             return "no decisions"
+        holds, rows = _split_holds(all_rows)
+        if not rows:
+            return f"none, only HOLDs ({holds})"
         top = max(rows, key=lambda r: r["decisions"])
         return f"{top['binding'] or '—'} ({top['decisions']})"
 
@@ -497,12 +515,16 @@ def _risk_section(metrics: dict[str, Any], lim: RiskLimits) -> list[str]:
     if not metrics["constraints"]:
         return [*lines, "No decisions were taken this week, so no constraint bound.", ""]
 
-    refused = [r for r in metrics["constraints"] if not r["approved"]]
-    approved = [r for r in metrics["constraints"] if r["approved"]]
+    holds, constraints = _split_holds(metrics["constraints"])
+    refused = [r for r in constraints if not r["approved"]]
+    approved = [r for r in constraints if r["approved"]]
 
     lines += [
         "`binding_constraint` is the single rule that decided each verdict — the gate "
         "that refused it, or the tightest cap that clamped it.",
+        "",
+        f"No-op HOLD decisions: {holds}. A HOLD proposes no trade, so no limit was "
+        "tested; these are not refusals and are left out of the tables below.",
         "",
         "| Refused by | Decisions |",
         "| --- | --- |",
