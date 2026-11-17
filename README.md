@@ -1,6 +1,6 @@
-# MarketAgent — infrastructure
+# market-agent
 
-Azure infrastructure for **MarketAgent**, an AI paper-trading and investment
+The application and Azure infrastructure for **MarketAgent**, an AI paper-trading and investment
 research platform: an LLM analyses financial news and market data and recommends
 BUY/SELL/HOLD, a deterministic risk engine decides what is actually permitted,
 and approved orders run against Alpaca's paper-trading broker. No real money is
@@ -16,22 +16,23 @@ both deployed and running — see [The application](#the-application) and
 | Resource | Purpose |
 | --- | --- |
 | Resource group | Application resources; dev uses shared platform resources in `rg-platform-dev` |
-| User-assigned managed identity | Shared by all five workloads; reads Key Vault and the database blob |
+| User-assigned managed identity | Shared by every app and job; reads Key Vault and the database blob |
 | Log Analytics workspace | Dev uses existing `log-platform-dev` |
 | Application Insights | Dev uses existing `appi-platform-dev` |
 | Key Vault | RBAC-authorised. Terraform owns the vault, **not** the secret values |
 | Container Apps environment | Dev uses existing `cae-platform-dev`, on its Consumption profile |
 | Container app `api` | Read-only FastAPI backend, scales to zero |
 | Container app `dashboard` | React dashboard on nginx, scales to zero |
-| Container app job `agent` | Scheduled: news → analysis → risk engine → Alpaca paper order |
-| Container app job `sync` | Every five minutes: mirror Alpaca cash, equity, positions and open orders |
-| Container app job `daily-summary` | Scheduled: performance, benchmarks, email |
+| Container app job `agent-<pot>` | One per pot (`sp500`, `voo`), daily: news → analysis → risk engine → Alpaca paper order. `voo` is passive and calls no model |
+| Container app job `sync-<pot>` | One per pot, every five minutes in US market hours: mirror Alpaca cash, equity, positions and open orders |
+| Container app job `daily-summary` | Daily: performance, benchmarks, email |
 | Container app job `weekly-review` | Scheduled Sunday: reviews the week, proposes changes |
 | Storage account `stmarketagentdev` | The database: one DuckDB file in the `database` container. Versioned, soft-deleted, delete-locked |
 | Action group | Where alerts go — subscription Owners, by role rather than by address |
-| Log alerts | Dedicated workspaces get an ingestion-quota alert; the shared platform monitors job failures |
+| Log alerts | Dedicated workspaces (stg/prd) get an ingestion-quota alert; in dev the shared platform's alerts cover crashed jobs and apps |
 | Budget | Monthly Azure spend, notifying at 80% actual and 100% forecast |
 | Diagnostic setting | Key Vault audit events |
+| Managed certificate + custom domain | The dashboard at `marketagent.jaywithers.uk` (DNS in [jay-withers/cloudflare](https://github.com/jay-withers/cloudflare)) |
 
 Two departures from the original design:
 
@@ -123,7 +124,7 @@ az containerapp job update --name caj-marketagent-dev-agent \
 
 ## Deploying
 
-All five workloads run from public ghcr.io images. **Merging to `main` builds,
+Every app and job runs from one of two public ghcr.io images. **Merging to `main` builds,
 pushes and deploys them**: `cd-tag` bumps the semver tag, then `cd-publish`
 builds both images on a native amd64 runner, pushes each under two immutable
 tags — the release (`v1.2.3`) and the commit's short SHA, which is what
@@ -203,16 +204,16 @@ public, and because a value read at runtime takes effect on the next scheduled
 run with no redeploy. Note that Resend's shared sender only delivers to the
 address that owns the Resend account until a domain is verified.
 
-`--platform linux/amd64` is not optional: Container Apps runs amd64 only, and a
-native build on an Apple Silicon host produces an image that crash-loops with an
-exec format error and no other clue. The Makefile does it rather than leaving it
-to memory.
+The weekly review (Sundays, after that day's summary) emails the week's review
+and its proposed changes the same way. Every figure and every subject line in
+both emails comes from the database, never from the model.
 
-**Both apps are publicly reachable and unauthenticated**, deliberately: the API
-is read-only, so it cannot place a trade or alter a decision however it is
-called, and no response carries a secret, any PII, or real money. A shared
-bearer sits behind `API_REQUIRE_TOKEN` for when that changes; the proper fix is
-Container Apps EasyAuth with Entra, which `azurerm` does not expose.
+**Both apps are publicly reachable, behind light gates only.** The dashboard
+asks for a passcode (`DASHBOARD-PASSCODE`) and the API wants a shared bearer
+token (`API-BEARER-TOKEN`, switched on by `API_REQUIRE_TOKEN`), enough to keep
+bots and scanners off. Deliberately no more: the API is read-only, so it cannot
+place a trade or alter a decision however it is called, and no response carries
+a secret, any PII, or real money.
 
 ## Monitoring
 
@@ -234,14 +235,14 @@ precisely why it can be trusted to carry the warning.
 killed before it opens its `agent_runs` row leaves no evidence at all, and a job
 that cannot reach the database may never get far enough to write down why:
 
-| Alert | Fires when | Severity |
+| Alert | Fires when | Where |
 | --- | --- | --- |
-| `alert-platform-dev-job-failed` | Any job in the shared environment crashes | 1 |
-| `*-db-down` | The server stops reporting itself alive | 0 |
-| `*-db-storage` | Storage passes 80% of a figure that can never be reduced | 2 |
-| `msqa-*` (dedicated workspace only) | Log ingestion approaches the daily cap, past which logging stops | 2 |
+| Workload crashed | Any job or app in the shared environment fails to start or crash-loops | azure-container-apps |
+| App errors, log quota, ops events | Repeated 4xx/5xx, the shared ingestion cap, drift | azure-container-apps |
+| `msqa-*` (dedicated workspace only) | Log ingestion approaches the daily cap, past which logging stops | here (stg/prd) |
+| Budget | 80% of `monthly_budget_amount` spent, or 100% forecast | here |
 
-They reach whoever holds **Owner** on the subscription, via an ARM role receiver
+This repo's own alerts reach whoever holds **Owner** on the subscription, via an ARM role receiver
 rather than an address — this repository is public and the tfvars files are
 committed, the same reason the summary recipient lives in Key Vault. Set
 `TF_VAR_alert_email_address` to add a specific address as well.
@@ -252,8 +253,8 @@ Two things worth knowing before changing any of it:
   many executions are in each state right now, so `Total` is
   minutes-times-executions and means nothing — verified against a real run,
   where the 06:00 agent job reported a 5-minute `Total` of 16 for `Running` and
-  11 for `Succeeded`. The alerts use `Maximum` over a short window, which is why
-  the threshold is `0`.
+  11 for `Succeeded`. A metric alert on it must use `Maximum` over a short
+  window, with a threshold of `0`. (`local.metric_alerts` is empty today.)
 - **There are no availability tests**, deliberately. A synthetic ping every five
   minutes would keep a `min_replicas = 0` app permanently warm, which costs more
   than the outage it detects.
@@ -293,10 +294,18 @@ make sql < file.sql    # SQL against the Azure database blob, as one leased tran
 make up / down / logs  # the local stack
 make run-agent         # one agent run against the local stack
 make build / push      # the linux/amd64 images, and ghcr.io
-make deploy            # terraform apply with the built image tag
+make deploy IMAGE_TAG=vX.Y.Z  # az cli: roll a published tag onto every app and job
+make smoke IMAGE_TAG=vX.Y.Z   # what cd-publish checks after a deploy
+make deployed-tag      # the tag live on the API
+make typecheck         # mypy over the app
+make demo              # the local stack with fake data
+make run-weekly        # one weekly review against the local stack
+make logs-azure PORTFOLIO=sp500          # tail a pot's agent job while it runs
+make logs-azure-history PORTFOLIO=sp500  # its recent logs from Log Analytics
 make fmt               # terraform fmt -recursive
 make validate          # terraform init + validate (no Azure credentials needed)
 make plan              # terraform init + plan (set ENV=dev|stg|prd, default dev)
+make apply             # local apply, for the changes cd-terraform can't make (below)
 ```
 
 `validate` initialises with `-backend=false`, so it works with no Azure
@@ -315,15 +324,10 @@ partial configuration prompts for the missing values (and fails outright under
 `-input=false`, as in CI).
 
 The storage account (`sttfsharedjw`) is shared across repositories, with **one
-container per repository** — this one uses `market-agent`. Creating the container
-is the only bootstrap step for a new repo:
-
-```bash
-az storage container create \
-  --name market-agent \
-  --account-name sttfsharedjw \
-  --auth-mode login
-```
+container per repository** — this one uses `market-agent`. github-repos creates
+it (this repo's `state_consumers` entry), along with the pipeline identity and
+`rg-marketagent-dev`. Don't create it by hand: github-repos would then need an
+`import`.
 
 Then `make plan` (which runs `terraform init -backend-config=backends/dev.hcl`
 for you).
@@ -402,7 +406,7 @@ make plan ENV=stg
 make plan ENV=prd
 ```
 
-All three are planned in CI, but **only `dev` is actually applied.** Unlike
+CI validates all three, but **only `dev` is planned in CI and applied.** Unlike
 scale-to-zero compute, "production" here still means paper trading, so a second
 and third copy would be three sets of alerts and Key Vaults for nothing. The plumbing is kept so that changing this later is a decision, not a
 rebuild.
@@ -417,9 +421,9 @@ The deployment identity needs read access to those resources and permission to
 join the environment and manage the dashboard certificate there.
 Stg/prd leave `shared_platform` unset and retain dedicated resources.
 
-For an existing dev deployment, follow the
-[shared-platform migration notes](docs/shared-platform-migration.md) before apply:
-the environment change replaces workloads and changes their default hostnames.
+Dev moved onto the shared platform already;
+[docs/shared-platform-migration.md](docs/shared-platform-migration.md) records
+how, for anyone moving another environment.
 
 These files are **committed, not gitignored** — see `.gitignore`. Don't put
 secrets in them; `gitleaks` (pre-commit and CI) scans every commit as a backstop.
@@ -433,12 +437,13 @@ sensitive reaches Terraform source or state.
 `Key Vault Secrets Officer` goes to the object IDs in
 `key_vault_administrator_object_ids` (each environment's tfvars), not to
 whoever applies, since CD applies as a pipeline identity. One of them populates
-the secrets by hand:
-
-```bash
-az keyvault secret set --vault-name "$(terraform -chdir=terraform output -raw key_vault_name)" \
-  --name OPENAI-API-KEY --value '...'
-```
+the secrets with `make secrets` (`scripts/Set-KeyVaultSecrets.ps1`), which
+prompts for each value with masked input and never writes it to disk or shell
+history. Press Enter to skip one; `-Name` sets just one. The secrets: per pot,
+`ALPACA-API-KEY-<POT>`, `ALPACA-SECRET-KEY-<POT>` and (for a pot with a model)
+`DEEPSEEK-API-KEY-<POT>`; the shared `DEEPSEEK-API-KEY` for the summary and
+weekly review; `RESEND-API-KEY` and `SUMMARY-EMAIL-TO` for the emails; and
+`DASHBOARD-PASSCODE` and `API-BEARER-TOKEN` for the gates.
 
 The workload identity holds only `Key Vault Secrets User` — read, not write.
 
@@ -477,9 +482,11 @@ blob.
 
 ## Scheduling
 
-Job schedules are `agent_cron_expression` (default `30 10 * * *`) and
-`daily_summary_cron_expression` (default `0 21 * * *`). Both are **evaluated in
-UTC** — five fields, no seconds — so the wall-clock time shifts by an hour with
+Job schedules are `agent_cron_expression` (default `30 10 * * *`, every pot at
+once), `daily_summary_cron_expression` (`0 21 * * *`),
+`weekly_review_cron_expression` (`0 22 * * 0`, which must stay after that day's
+summary) and `broker_sync_cron_expression` (`*/5 13-21 * * 1-5`, the US session
+in both BST and GMT). All are **evaluated in UTC** — five fields, no seconds — so the wall-clock time shifts by an hour with
 British Summer Time.
 
 Changing a schedule replaces the job rather than updating it
@@ -543,8 +550,12 @@ from the pipeline. Run `make apply ENV=dev` locally for a change that
 Branch protection and other repo-level GitHub settings aren't templated here.
 This repository is managed centrally by
 [jay-withers/github-repos](https://github.com/jay-withers/github-repos)'s
-Terraform root module, which requires `terraform / Terraform` and
-`terraform-plan` (among others) on every PR.
+Terraform root module. The required checks are `pre-commit / Pre-commit`,
+`test / Test`, `terraform / Terraform`, `terraform-plan`, `Layout` (ci-dashboard's
+Playwright layout suite) and `container-build`. `test / Test` includes mypy and
+diff coverage: at least 80% of the lines a PR changes in `marketagent` must be
+run by a test.
+
 ## Structure
 
 ```
@@ -566,18 +577,24 @@ apps/
       repository.py             # the writes, sharing a caller's transaction
       telemetry.py              # App Insights; off without a connection string
       queries.py                # the API's reads
-      cli.py                    # marketagent api|agent|sync|summary|weekly|sql
+      accounts.py               # pot naming: secret names derived from the pot
+      pricehistory.py           # keeps stored prices in one set of terms across splits
+      sync.py                   # mirror the Alpaca account without placing orders
+      selfcheck.py              # the post-deploy check every job runs
+      cli.py                    # marketagent api|agent|sync|summary|weekly|selfcheck|sql
       llm/base.py  llm/deepseek_provider.py
       broker/base.py  broker/alpaca.py  broker/dryrun.py
-      jobs/agent.py  jobs/summary.py
+      jobs/agent.py  jobs/passive.py  jobs/summary.py  jobs/weekly.py
       api/main.py  api/deps.py  api/routers/
     tests/                      # no network, no Azure, no credentials
     Dockerfile
   dashboard/                    # Vite + React + TS -> unprivileged nginx:8080
     src/  nginx/  public/config.json.template
+    tests/  playwright.config.ts  # the Playwright layout suite (ci-dashboard)
     docker-entrypoint.sh        # renders config.json from $API_ORIGIN at start
     Dockerfile
 docker-compose.yml
+demo/seed.sql                   # make demo's fake data; refuses a database with a real run
 .env.example
 terraform/
   main.tf                       # resource group
@@ -588,8 +605,9 @@ terraform/
   main.key-vault.tf             # vault and RBAC (never the secret values)
   main.storage.tf               # the database's storage account, container and grants
   main.container-apps-env.tf    # Container Apps environment
-  main.container-apps.tf        # api and dashboard
-  main.container-apps-jobs.tf   # agent, daily-summary and weekly-review jobs
+  main.container-apps.tf        # api and dashboard, and the dashboard's custom domain
+  main.container-apps-jobs.tf   # per-pot agent and sync jobs, daily-summary, weekly-review
+  moved.tf                      # state moves from earlier layouts
   locals*.tf  variables*.tf  outputs.tf  data.tf  versions.tf
   README.md                     # generated by terraform-docs
   .tflint.hcl  .terraform-docs.yml
@@ -600,10 +618,20 @@ scripts/
   check-tf-standards.sh         # enforces the file-layout convention
   tflint-per-env.sh  checkov-per-env.sh
   hadolint.sh                   # wraps hadolint, resolving DOCKER_HOST first
-docs/deployment-plan.md         # the agreed plan; complete
+  smoke.sh                      # make smoke (shared verbatim with the other apps)
+  render-icons.py               # the dashboard's app icons
+docs/
+  infrastructure.md  application.md  operations.md  # the reasoning behind CLAUDE.md's rules
+  deployment-plan.md            # the agreed plan; complete
+  shared-platform-migration.md
 .github/workflows/
   ci-pre-commit.yml             # lints all files on PRs to main
+  ci-python.yml                 # pytest, mypy, diff coverage (test / Test)
+  ci-dashboard.yml              # the dashboard's Playwright layout suite (Layout)
+  ci-codeql.yml                 # CodeQL over the workflows
   ci-terraform.yml              # terraform validate + dev plan (commented on the PR)
+  schedule-drift.yml            # nightly drift plan of dev, recorded in OpsEvents_CL
+  manual-terraform-unlock.yml   # releases a stuck state lock
   cd-terraform.yml              # plans dev on merge; applies on a manual run
   ci-container-build.yml        # builds both app images on PRs (no push)
   cd-tag.yml                    # auto-tags on merge to main, then publishes
@@ -622,10 +650,6 @@ is not construction:
 - **The experiment itself.** Three to six months of daily runs, then the
   comparison against the S&P 500, a global index, a UK proxy and cash at 5%.
   The benchmark arms are already recorded each evening.
-- **Authentication on the two apps.** Both are publicly reachable, deliberately
-  — the API is read-only and no response carries a secret, PII or real money.
-  The proper fix is Container Apps EasyAuth with Entra, which `azurerm` does
-  not expose and which would need `azapi`.
 - **Cheaper filtering, if it ever matters.** One filter call per
   article/ticker pair is about 110 calls a run. Batching would cut that to
   roughly six, but at the measured £4/month it is a latency argument rather
