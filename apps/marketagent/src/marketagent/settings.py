@@ -1,26 +1,34 @@
 """Configuration and secret resolution.
 
-Every secret is read from an environment variable first and only then from Key
-Vault. That ordering is what makes `docker compose up` work against a local
-`.env` with no Azure involved at all, and it is why Terraform does not manage
-Container Apps Key Vault references: a revision carrying a Key Vault reference
-hard-fails if the secret is absent, and CLAUDE.md is explicit that Terraform
-must never own secret values.
+`Settings` is this app's own. Secret resolution comes from jay-withers/appkit
+(`appkit.keyvault`), shared with career, finances, gym-log and the other agent;
+fix a bug there, once. The wrappers below bind it to these settings and cache
+it, so a test can clear them.
 
-The name mapping is mechanical: `secret("DEEPSEEK-API-KEY")` reads
-`$DEEPSEEK_API_KEY`, falling back to the Key Vault secret named
-`DEEPSEEK-API-KEY`. Key Vault forbids underscores in names, environment
-variables conventionally forbid hyphens, so one of the two has to be rewritten.
+Every secret is read from an environment variable first, then `.env`, and only
+then from Key Vault. That ordering is what makes a local run work with no
+Azure involved, and it is why Terraform manages no Container Apps Key Vault
+reference: a revision carrying one hard-fails if the secret is absent, whereas
+this resolves at runtime and reports what is missing.
+
+The name mapping is mechanical: `secret("RESEND-API-KEY")` reads
+`$RESEND_API_KEY`, then `.env`, then the Key Vault secret named
+`RESEND-API-KEY`. Key Vault forbids underscores in names, environment variables
+conventionally forbid hyphens, so one of the two has to be rewritten.
 """
 
 from __future__ import annotations
 
-import os
-import time
 from decimal import Decimal
 from functools import cache, lru_cache
 from typing import Any
 
+from appkit import keyvault
+
+# Re-exported: the tests (and conftest's cache clearing) reach them here.
+from appkit.keyvault import KEY_VAULT_SCOPE as KEY_VAULT_SCOPE
+from appkit.keyvault import StaticTokenCredential as StaticTokenCredential
+from appkit.keyvault import dotenv as dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -141,142 +149,26 @@ def settings() -> Settings:
 
 @cache
 def secret(name: str) -> str:
-    """Resolve a secret by its hyphenated Key Vault name.
-
-    Cached: the agent job reads each secret once per process, but the API is
-    long-lived and a Key Vault round trip per request would be both slow and
-    rate-limited. The consequence is that rotating a secret needs a new
-    revision, which for a job that runs once a day is not a real constraint.
-    """
-    from_env = os.environ.get(name.replace("-", "_").upper())
-    if from_env:
-        return from_env
-
-    uri = settings().key_vault_uri
-    if not uri:
-        raise RuntimeError(
-            f"{name} is not set and no KEY_VAULT_URI is configured. "
-            f"Set ${name.replace('-', '_').upper()} locally, or "
-            f"`az keyvault secret set --name {name}` for a deployed environment."
-        )
-
-    # Imported here rather than at module scope so the risk engine, the models
-    # and the tests never need the Azure SDK installed or a credential present.
-    from azure.keyvault.secrets import SecretClient
-
-    client = SecretClient(vault_url=uri, credential=credential())
-    return client.get_secret(name).value or ""
+    """Resolve a secret by its hyphenated Key Vault name, raising if it is absent."""
+    return keyvault.resolve(name, key_vault_uri=settings().key_vault_uri, credential=credential)
 
 
 @cache
 def optional_secret(name: str) -> str | None:
     """Resolve a secret that is allowed not to exist, returning None if it does not.
 
-    For values that switch a behaviour on rather than being required to run —
-    the summary email's recipient is the case this exists for. `secret()`
-    raising is right for an API key the job cannot work without, and wrong for
-    a setting whose absence means "don't do that bit".
-
-    **Absence is not the same as failure.** A missing env var, no vault
-    configured, or a secret that is not in the vault all return None; an
-    authentication or network error propagates, because "the credential is
-    broken" must not look like "no email configured".
+    An authentication or network error still raises: "the credential is broken"
+    must not look like "not configured".
     """
-    from_env = os.environ.get(name.replace("-", "_").upper())
-    if from_env:
-        return from_env
-
-    uri = settings().key_vault_uri
-    if not uri:
-        return None
-
-    from azure.core.exceptions import ResourceNotFoundError
-    from azure.keyvault.secrets import SecretClient
-
-    client = SecretClient(vault_url=uri, credential=credential())
-    try:
-        return client.get_secret(name).value or None
-    except ResourceNotFoundError:
-        return None
-
-
-# The scope a Key Vault data-plane token is issued for. `az` calls the same
-# thing `--resource https://vault.azure.net`.
-KEY_VAULT_SCOPE = "https://vault.azure.net/.default"
-
-
-class StaticTokenCredential:
-    """A credential wrapping one pre-fetched access token.
-
-    Exists for the containerised local loop. The application image carries no
-    `az`, so `DefaultAzureCredential` has nothing to fall back to and a
-    container cannot reach Key Vault on its own — the alternative was writing
-    every API key to a `.env` in plaintext. Passing in a token instead is
-    strictly better: it expires in about an hour, it is scoped to Key Vault
-    alone, and no long-lived secret touches the filesystem.
-
-    Never used in Azure, where the managed identity is available directly.
-    """
-
-    def __init__(self, token: str, scope: str = KEY_VAULT_SCOPE) -> None:
-        self._token = token
-        self._scope = scope
-        # az does not report the expiry in a form worth parsing here, and the
-        # SDK only uses this to decide whether to refresh — which this
-        # credential cannot do. An hour matches the real lifetime; an expired
-        # token then fails as a 401 from Key Vault, which is the honest
-        # outcome.
-        self._expires_on = int(time.time()) + 3600
-
-    def _check(self, scopes: tuple[str, ...]) -> None:
-        """Refuse a scope this token was not issued for.
-
-        Matters because `credential()` also serves the database blob. Handing
-        a Key Vault token to Storage would fail as a 403 that reads like a
-        missing role assignment rather than the wrong token.
-        """
-        if scopes and self._scope not in scopes:
-            raise ValueError(f"this token is scoped to {self._scope}, not {', '.join(scopes)}")
-
-    def get_token(self, *scopes: str, **_kwargs: Any) -> Any:
-        from azure.core.credentials import AccessToken
-
-        self._check(scopes)
-        return AccessToken(self._token, self._expires_on)
-
-    def get_token_info(self, *scopes: str, **_kwargs: Any) -> Any:
-        """The newer protocol; some SDK versions call this instead."""
-        from azure.core.credentials import AccessTokenInfo
-
-        self._check(scopes)
-        return AccessTokenInfo(self._token, self._expires_on)
+    return keyvault.resolve_optional(
+        name, key_vault_uri=settings().key_vault_uri, credential=credential
+    )
 
 
 @lru_cache(maxsize=1)
-def credential():
-    """The credential for Key Vault and the database blob.
-
-    Three cases, in priority order:
-
-    1. A pre-fetched Key Vault token from the environment — the containerised
-       local loop, where there is no `az` to fall back to.
-    2. The user-assigned identity, named explicitly. In Azure this must be
-       explicit: `DefaultAzureCredential` would find the same identity
-       eventually, but a container app with more than one identity attached
-       picks unpredictably, and the failure looks like a permissions problem
-       rather than a wrong-identity one.
-    3. `DefaultAzureCredential`, which picks up a developer's `az login`.
-    """
+def credential() -> Any:
+    """The credential for Key Vault and the database blob (`appkit.keyvault.make_credential`)."""
     cfg = settings()
-
-    if cfg.azure_keyvault_token:
-        return StaticTokenCredential(cfg.azure_keyvault_token)
-
-    if cfg.azure_client_id:
-        from azure.identity import ManagedIdentityCredential
-
-        return ManagedIdentityCredential(client_id=cfg.azure_client_id)
-
-    from azure.identity import DefaultAzureCredential
-
-    return DefaultAzureCredential()
+    return keyvault.make_credential(
+        keyvault_token=cfg.azure_keyvault_token, client_id=cfg.azure_client_id
+    )

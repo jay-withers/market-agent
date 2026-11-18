@@ -38,6 +38,18 @@ wheels = [
 ]
 
 [[package]]
+name = "appkit"
+version = "0.0.0"
+source = { git = "https://github.com/jay-withers/appkit?tag=v0.2.0#582f18298f88b431aee98a7e5a3482cdc11c016e" }
+
+[package.optional-dependencies]
+azure = [
+    { name = "azure-identity" },
+    { name = "azure-keyvault-secrets" },
+    { name = "python-dotenv" },
+]
+
+[[package]]
 name = "asgiref"
 version = "3.13.0"
 source = { registry = "https://pypi.org/simple" }
@@ -946,8 +958,7 @@ name = "marketagent"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "azure-identity" },
-    { name = "azure-keyvault-secrets" },
+    { name = "appkit", extra = ["azure"] },
     { name = "azure-monitor-opentelemetry" },
     { name = "azure-storage-blob" },
     { name = "duckdb" },
@@ -972,8 +983,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "azure-identity", specifier = ">=1.19" },
-    { name = "azure-keyvault-secrets", specifier = ">=4.9" },
+    { name = "appkit", extras = ["azure"], git = "https://github.com/jay-withers/appkit?tag=v0.2.0" },
     { name = "azure-monitor-opentelemetry", specifier = ">=1.6" },
     { name = "azure-storage-blob", specifier = ">=12.31.1" },
     { name = "duckdb", specifier = ">=2.0.0" },

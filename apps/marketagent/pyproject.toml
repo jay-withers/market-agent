@@ -19,8 +19,11 @@ dependencies = [
   "duckdb>=2.0.0",
   "pytz>=2026.6",
   "azure-storage-blob>=12.31.1",
-  "azure-identity>=1.19",
-  "azure-keyvault-secrets>=4.9",
+  # Secret resolution (env, then .env, then Key Vault) and the Azure
+  # credential, from jay-withers/appkit. `azure` brings azure-identity,
+  # azure-keyvault-secrets and python-dotenv; no web framework. The tag is
+  # in [tool.uv.sources] below.
+  "appkit[azure]",
   "httpx>=0.28",
   "fastapi>=0.115",
   "uvicorn[standard]>=0.34",
@@ -54,6 +57,13 @@ marketagent = "marketagent.cli:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# appkit comes from a git tag (the builder image carries git for it). Set
+# here rather than as `appkit @ git+...` in dependencies: Renovate reads a
+# uv git source's tag and raises the bump with `uv lock`, but skips a
+# PEP 508 direct reference.
+[tool.uv.sources]
+appkit = { git = "https://github.com/jay-withers/appkit", tag = "v0.2.0" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/marketagent"]
