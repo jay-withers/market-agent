@@ -182,8 +182,9 @@ make deploy IMAGE_TAG=vX.Y.Z
   `ignore_changes`, so a `common_env` change lands only through `make deploy`.
 - Images run as uid 10001. Both `uv sync` calls use `--no-editable`. Docker
   compose uses no bind mounts.
-- Keep `marketagent selfcheck` side-effect free and complete. `scripts/smoke.sh`
-  is shared verbatim with five repos.
+- Keep `marketagent selfcheck` side-effect free and complete. `make smoke`
+  fetches `scripts/smoke.sh` from jay-withers/workflows at the commit
+  cd-publish pins, so change it there.
 - Tags are immutable (`vX.Y.Z` and short SHA). After a release, check the
   registry, not the green run.
 

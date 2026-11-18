@@ -87,7 +87,7 @@ jobs:
       id-token: write
       contents: read
       issues: write # the deploy-failed issue
-    uses: jay-withers/workflows/.github/workflows/container-apps-deploy.yml@591303373c157fb12b428f3aa0dd4fc696a73f57 # v1.28.5
+    uses: jay-withers/workflows/.github/workflows/container-apps-deploy.yml@b62ee5b1bb9038ec8b9827ec3c93c818c8d0da5b # v1.30.0
     with:
       version: ${{ inputs.version }}
       verify-images: ghcr.io/${{ github.repository }}/marketagent ghcr.io/${{ github.repository }}/dashboard
