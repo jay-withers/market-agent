@@ -2,15 +2,40 @@
 
 from __future__ import annotations
 
+import os
 import pathlib
 from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from hypothesis import HealthCheck, settings
 
 from marketagent import alpaca_api, db
 from marketagent import settings as settings_module
 from tests.helpers import POTS
+
+# Property tests (the same profiles as finances' and gym-log's). Locally,
+# Hypothesis' default 100 random examples; under CI=true its own derandomized
+# `ci` profile (the same examples every run, so a required check can't fail on
+# one PR's draw, and a blob to reproduce a failure) raised to 1000. No
+# deadline: a shared runner's pauses would read as a flaky failure. The
+# function-scoped-fixture check is off because the fixtures below are autouse,
+# so every @given test would trip it; that is only safe while **a property
+# test takes no fixtures**, since one instance would be shared by its examples.
+settings.register_profile(
+    "dev", deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
+)
+_builtin_ci = settings.get_profile("ci")
+settings.register_profile(
+    "ci",
+    parent=_builtin_ci,
+    max_examples=1000,
+    suppress_health_check=[
+        *_builtin_ci.suppress_health_check,
+        HealthCheck.function_scoped_fixture,
+    ],
+)
+settings.load_profile("ci" if os.environ.get("CI", "").lower() in {"true", "1"} else "dev")
 
 
 @pytest.fixture(autouse=True)
