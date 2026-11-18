@@ -136,7 +136,8 @@ from the Actions tab with it.
 
 **Every deploy is smoke-tested, and a failed one rolls back.** Before deploying,
 the workflow records `make deployed-tag` (the tag on the API now). After it,
-`make smoke` (`scripts/smoke.sh`) checks the API and the dashboard: each is
+`make smoke` (jay-withers/workflows' `scripts/smoke.sh`, fetched at the commit
+cd-publish pins) checks the API and the dashboard: each is
 configured with the new tag, its `/healthz` on the default FQDN reports it as
 `version` (allowing five minutes for a cold start), and `/readyz` answers 200.
 It then starts one run of every job (each pot's agent and sync, the summary and
@@ -618,7 +619,6 @@ scripts/
   check-tf-standards.sh         # enforces the file-layout convention
   tflint-per-env.sh  checkov-per-env.sh
   hadolint.sh                   # wraps hadolint, resolving DOCKER_HOST first
-  smoke.sh                      # make smoke (shared verbatim with the other apps)
   render-icons.py               # the dashboard's app icons
 docs/
   infrastructure.md  application.md  operations.md  # the reasoning behind CLAUDE.md's rules

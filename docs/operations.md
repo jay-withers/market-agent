@@ -372,8 +372,9 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
   test runs `marketagent selfcheck` (`selfcheck.py`) once in every job: keep it
   free of side effects (no order, no LLM, no email), and add a secret to it when
   a job starts reading one, or a release missing it deploys green and fails at
-  its first scheduled run. `scripts/smoke.sh` is shared verbatim with gym-log,
-  finances, career, repo-agent and security-testing. The dashboard's `/healthz`
+  its first scheduled run. `make smoke` fetches `scripts/smoke.sh` from
+  jay-withers/workflows at the commit cd-publish pins `container-apps-deploy.yml`
+  to (one copy for every app repo; change it there). The dashboard's `/healthz`
   and `/readyz` serve `health.json`, which its entrypoint renders with the
   image tag as `version`; the smoke test needs that field. It stays a workflow of its
   own rather than folding into cd-tag because `workflow_dispatch` is the
