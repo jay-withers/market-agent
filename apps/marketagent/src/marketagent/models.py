@@ -7,10 +7,11 @@ floating point cannot represent a penny exactly.
 
 from __future__ import annotations
 
+import math
 from decimal import ROUND_DOWN, Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Four decimal places, matching NUMERIC(18,4). Every amount crossing into the
 # database or into an arithmetic comparison is quantized to this first, so a
@@ -88,6 +89,12 @@ class NewsRelevance(BaseModel):
 # it Decimal instead produced a three-branch `anyOf` in the schema — number,
 # string with a Decimal regex, or null — which is a worse thing to hand a model
 # than a plain number.
+# The largest amount `ai_decisions.recommended_amount_usd` (DECIMAL(18, 4))
+# can hold, rounded down to a power of ten: far above any risk cap, so a real
+# request is never affected, and well inside what `money()` can quantize.
+MAX_SUGGESTED_USD = 1e13
+
+
 class Recommendation(BaseModel):
     """A BUY, SELL or HOLD assessment of one ticker."""
 
@@ -106,6 +113,19 @@ class Recommendation(BaseModel):
     )
     reasoning: str = Field(description="What in the evidence drove this call. Be specific.")
     risks: str = Field(description="The strongest argument against this recommendation.")
+
+    # Maintainer note, not prompt text (a validator adds nothing to the schema):
+    # the amount is a JSON number, and pydantic accepts NaN, infinity and 1e300
+    # as floats. Each raised further on (`money()` in the risk engine and in
+    # save_decision, or DuckDB on a DECIMAL(18, 4) column), which aborted the
+    # whole run and skipped every ticker after it. Treated as no amount here,
+    # once, so every consumer is safe and the engine refuses it as one.
+    @field_validator("suggested_amount_usd")
+    @classmethod
+    def _storable_amount(cls, value: float | None) -> float | None:
+        if value is None or not math.isfinite(value) or abs(value) > MAX_SUGGESTED_USD:
+            return None
+        return value
 
 
 class DailyNarrative(BaseModel):

@@ -11,12 +11,15 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
+from hypothesis import example, given
+from hypothesis import strategies as st
 
 from marketagent.models import (
     PortfolioState,
     Position,
     Recommendation,
     RiskLimits,
+    RiskVerdict,
 )
 from marketagent.risk import evaluate, new_buy_headroom
 
@@ -56,7 +59,7 @@ def state(cash: Decimal = D(420), holdings: dict[str, Decimal] | None = None) ->
 def rec(
     action: str = "BUY",
     ticker: str = "NVDA",
-    amount: Decimal | None = D(50),
+    amount: Decimal | float | None = D(50),
     confidence: float = 0.78,
 ) -> Recommendation:
     return Recommendation(
@@ -515,3 +518,202 @@ def test_new_buy_headroom_agrees_with_evaluate_for_a_held_ticker(held, exposure)
         assert verdict.approved_amount_usd == headroom
     else:
         assert not verdict.approved
+
+
+# ---------------------------------------------------------------------------
+# Properties: whatever the model recommends
+# ---------------------------------------------------------------------------
+#
+# The examples above walk every gate and cap. These say the engine's one
+# promise holds for any recommendation, any portfolio and any limits: an
+# approved trade breaches no limit, and the engine only ever refuses or
+# approves less than was asked.
+
+TICKERS = ("NVDA", "AAPL", "MSFT", "TSLA")
+USD = st.decimals(min_value=0, max_value=10**7, places=2)
+
+# Everything a JSON number from the model can be once pydantic has it,
+# including the values a careless or adversarial output could carry.
+MODEL_AMOUNTS = (
+    st.none()
+    | st.floats(allow_nan=True, allow_infinity=True)
+    | st.floats(min_value=-1e7, max_value=1e7)
+)
+
+
+@st.composite
+def portfolios(draw: st.DrawFn) -> PortfolioState:
+    held = draw(st.lists(st.sampled_from(TICKERS), unique=True, max_size=len(TICKERS)))
+    return PortfolioState(
+        cash_usd=draw(USD),
+        positions=tuple(
+            Position(ticker=t, quantity=D(1), value_usd=draw(USD), avg_cost_usd=D(1)) for t in held
+        ),
+        # The broker's equity figure can disagree with cash + positions.
+        equity_usd=draw(st.none() | USD),
+    )
+
+
+@st.composite
+def risk_limits(draw: st.DrawFn) -> RiskLimits:
+    return RiskLimits(
+        max_position_usd=draw(USD),
+        max_trade_usd=draw(USD),
+        min_trade_usd=draw(USD),
+        max_concentration_pct=draw(st.decimals(min_value=0, max_value=100, places=2)),
+        max_total_exposure_pct=draw(st.decimals(min_value=0, max_value=100, places=2)),
+        max_daily_trades=draw(st.integers(min_value=0, max_value=20)),
+        min_confidence=draw(st.floats(min_value=0, max_value=1)),
+        allowed_tickers=frozenset(draw(st.lists(st.sampled_from(TICKERS), max_size=3))),
+    )
+
+
+@st.composite
+def recommendations(draw: st.DrawFn) -> Recommendation:
+    return Recommendation(
+        ticker=draw(st.sampled_from(TICKERS)),
+        action=draw(st.sampled_from(["BUY", "SELL", "HOLD"])),
+        confidence=draw(st.floats(min_value=0, max_value=1)),
+        suggested_amount_usd=draw(MODEL_AMOUNTS),
+        reasoning="",
+        risks="",
+    )
+
+
+def _exact_pct(total: Decimal, pct: Decimal) -> Decimal:
+    return total * pct / 100
+
+
+def assert_within_limits(
+    verdict: RiskVerdict,
+    r: Recommendation,
+    s: PortfolioState,
+    lim: RiskLimits,
+    trades_today: int,
+) -> None:
+    """The engine's promise, checked from the limits rather than its own code:
+    a refusal permits nothing, and an approval breaches no gate or cap."""
+    if not verdict.approved:
+        assert verdict.approved_amount_usd is None
+        return
+
+    amount = verdict.approved_amount_usd
+    assert amount is not None
+    held = s.position_value(r.ticker)
+
+    # Every gate.
+    assert r.action != "HOLD"
+    assert r.ticker in lim.allowed_tickers
+    assert r.confidence >= lim.min_confidence
+    assert trades_today < lim.max_daily_trades
+    # Never more than asked, never less than worth making, never over one trade.
+    assert r.suggested_amount_usd is not None
+    assert D(0) < amount <= D(str(r.suggested_amount_usd))
+    assert lim.min_trade_usd <= amount <= lim.max_trade_usd
+
+    if r.action == "SELL":
+        assert amount <= held
+    else:
+        total = s.total_value_usd
+        assert amount <= s.cash_usd
+        assert held + amount <= lim.max_position_usd
+        assert held + amount <= _exact_pct(total, lim.max_concentration_pct)
+        assert s.invested_usd + amount <= _exact_pct(total, lim.max_total_exposure_pct)
+
+
+# Found by probing what the model's JSON can hold: each raised from money()
+# and aborted the whole run. Recommendation now parses it as no amount.
+@example(
+    r=Recommendation(
+        ticker="NVDA",
+        action="BUY",
+        confidence=1.0,
+        suggested_amount_usd=float("nan"),
+        reasoning="",
+        risks="",
+    ),
+    s=PortfolioState(cash_usd=D(1000)),
+    lim=limits(),
+    trades_today=0,
+)
+@given(recommendations(), portfolios(), risk_limits(), st.integers(min_value=0, max_value=25))
+def test_an_approved_trade_breaches_no_limit(
+    r: Recommendation, s: PortfolioState, lim: RiskLimits, trades_today: int
+):
+    verdict = evaluate(r, s, lim, trades_today)
+    assert_within_limits(verdict, r, s, lim, trades_today)
+
+
+@given(recommendations(), portfolios(), risk_limits(), st.integers(min_value=0, max_value=25))
+def test_the_engine_is_a_pure_function(
+    r: Recommendation, s: PortfolioState, lim: RiskLimits, trades_today: int
+):
+    """Same inputs, same verdict: what makes an ai_decisions row replayable."""
+    assert evaluate(r, s, lim, trades_today) == evaluate(r, s, lim, trades_today)
+
+
+@given(
+    portfolios(), risk_limits(), st.integers(min_value=0, max_value=25), st.sampled_from(TICKERS)
+)
+def test_the_headroom_shown_to_the_model_is_exactly_what_a_buy_gets(
+    s: PortfolioState, lim: RiskLimits, trades_today: int, ticker: str
+):
+    """`new_buy_headroom` and `evaluate` stay in step: ask for the headroom (or
+    more) and that is what is approved, whenever it is a tradeable size."""
+    held = s.position_value(ticker)
+    headroom = new_buy_headroom(s, lim, trades_today, held)
+    ask = Recommendation(
+        ticker=ticker,
+        action="BUY",
+        confidence=1.0,
+        suggested_amount_usd=float(headroom) + 1000,
+        reasoning="",
+        risks="",
+    )
+    verdict = evaluate(ask, s, lim, trades_today)
+    if ticker in lim.allowed_tickers and headroom >= lim.min_trade_usd and headroom > 0:
+        assert verdict.approved
+        assert verdict.approved_amount_usd == headroom
+    else:
+        assert not verdict.approved
+
+
+@pytest.mark.parametrize("amount", [float("nan"), float("inf"), float("-inf"), 1e300, 1e14])
+@pytest.mark.parametrize("action", ["BUY", "SELL"])
+def test_an_amount_the_engine_cannot_size_is_refused_not_raised(amount: float, action: str):
+    """NaN, infinity and 1e300 all parse from the model's JSON; each used to
+    raise and end the run, skipping every ticker after it."""
+    assert rec(action=action, amount=amount).suggested_amount_usd is None
+    verdict = evaluate(rec(action=action, amount=amount), state(), limits(), trades_today=0)
+    assert not verdict.approved
+    assert verdict.binding_constraint == "no_amount_recommended"
+
+
+@given(
+    portfolios(),
+    risk_limits(),
+    st.sampled_from(TICKERS),
+    st.sampled_from(["BUY", "SELL"]),
+    MODEL_AMOUNTS,
+)
+def test_past_every_gate_any_amount_is_refused_or_within_every_limit(
+    s: PortfolioState, lim: RiskLimits, ticker: str, action: str, amount: float | None
+):
+    """The same promise, starting from a recommendation every gate lets through,
+    so the amount is what's being tested. A random draw past all the gates at
+    once is rare, which is how NaN got past the property above."""
+    lim = lim.model_copy(
+        update={
+            "allowed_tickers": lim.allowed_tickers | {ticker},
+            "max_daily_trades": max(lim.max_daily_trades, 1),
+        }
+    )
+    r = Recommendation(
+        ticker=ticker,
+        action=action,
+        confidence=1.0,
+        suggested_amount_usd=amount,
+        reasoning="",
+        risks="",
+    )
+    assert_within_limits(evaluate(r, s, lim, trades_today=0), r, s, lim, trades_today=0)

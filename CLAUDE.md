@@ -130,6 +130,8 @@ make deploy IMAGE_TAG=vX.Y.Z
   are the LLM's `suggested_amount_usd` and `queries.py`'s display values.
 - `risk.py` is pure: no I/O, no clock, no randomness. Gates come before caps.
   Headroom is clamped at zero.
+- **An unusable model amount parses as none** (`Recommendation`'s validator), and
+  `test_risk.py`'s property tests must keep passing.
 - **An order POST is never retried.** `client_order_id` is deterministic per
   decision.
 - Risk limits change only when a person edits `risklimits.py`. Nothing applies

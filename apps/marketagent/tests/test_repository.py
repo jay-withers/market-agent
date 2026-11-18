@@ -1461,3 +1461,18 @@ def test_saving_the_refetched_history_with_the_fresh_bars_clears_the_spike(conn)
     repo.save_prices(conn, history + fresh)
 
     assert repo.restated_tickers(conn, fresh) == {}
+
+
+@pytest.mark.parametrize("amount", [float("nan"), float("inf"), 1e300, 1e14])
+def test_a_decision_with_an_unusable_amount_still_saves(conn, amount: float):
+    """Each used to raise in money() or on the DECIMAL(18, 4) column, aborting
+    the run after the risk engine had already refused it."""
+    pid = repo.portfolio_id(conn, PORTFOLIO)
+    run_id = repo.open_run(conn, pid, "manual", dry_run=True, image_tag=None)
+    bad = _recommendation(amount=amount)
+    refused = _verdict(approved=False, amount=None)
+    decision_id = _decision(conn, pid, run_id, rec=bad, verdict=refused)
+    stored = conn.execute(
+        "SELECT recommended_amount_usd FROM ai_decisions WHERE id = %s", (decision_id,)
+    ).fetchone()
+    assert stored == (None,)

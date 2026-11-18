@@ -42,6 +42,24 @@ landed rather than declared up front, and new ones still are.
   for a 100% ceiling and for a self-inconsistent state, not because it is
   expected to bind. A test asserts the domination so nobody "fixes" the
   apparent redundancy.
+- **An amount the model can't mean is no amount.** `suggested_amount_usd` is a
+  JSON number, and pydantic accepts NaN, infinity and 1e300 as floats. Each
+  used to raise further on (`money()` in the engine and in `save_decision`, or
+  DuckDB on the `DECIMAL(18, 4)` column), aborting the whole run and skipping
+  every ticker after it. `Recommendation` now parses a non-finite amount, or
+  one beyond what that column holds (`MAX_SUGGESTED_USD`, 1e13), as `None`, so
+  the engine refuses it at `no_amount_recommended` and the row stores `NULL`.
+  Anything the column can hold still reaches the caps and is clamped.
+- **Property tests hold the engine to its promise.** `test_risk.py`'s Hypothesis
+  properties check that, for any recommendation, portfolio and limits, an
+  approval breaches no gate or cap (worked out from the limits, not the
+  engine's own arithmetic), the verdict is deterministic, and
+  `new_buy_headroom` is exactly what a BUY for that much is approved. One
+  property starts past every gate, because a random draw rarely satisfies all
+  of them at once; that is how NaN got past the first. Profiles are in
+  `conftest.py`: 100 random examples locally, Hypothesis' derandomized `ci`
+  profile raised to 1000 under `CI=true`. A property test takes no fixtures,
+  since the function-scoped-fixture health check is off for the autouse ones.
 - **Headroom is clamped at zero.** A price rise alone can push a position past
   its cap without any trade, and a negative cap would otherwise read as the
   tightest one and be reported as an approved amount.
