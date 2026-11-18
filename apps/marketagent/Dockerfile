@@ -14,7 +14,7 @@
 # copies the whole virtualenv, and a venv is bound to the exact minor version
 # that created it. See jay-withers/gym-log's Dockerfile for the outage that
 # taught this.
-FROM ghcr.io/jay-withers/dev-containers/python-app-builder:v0.22.3@sha256:4c6c5b4c4c4f490e6f0e14251ce5d3e91f7c44f64584fc11af97584c894d8e85 AS builder
+FROM ghcr.io/jay-withers/dev-containers/python-app-builder:v0.22.4@sha256:16b908e92ef5189327e9479677b80c8a09ab764bc5c42a59f0ead51b70e5b846 AS builder
 
 # python-app already sets this; restated because the relative COPYs below
 # depend on it, and hadolint cannot see a WORKDIR set by the parent image.
