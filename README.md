@@ -56,7 +56,7 @@ its own.
 
 | Module | What it does |
 | --- | --- |
-| `settings.py` | Configuration, and secrets from an env var first then Key Vault |
+| `settings.py` | Configuration, and secrets from an env var, then `.env`, then Key Vault (appkit's `keyvault`) |
 | `db.py` | The DuckDB file in blob storage: a lease per write, an ETag-checked copy for reads |
 | `models.py` | Domain models, risk configuration, and the LLM's output types |
 | `risk.py` | The deterministic risk engine — a pure function |
@@ -562,7 +562,7 @@ run by a test.
 apps/
   marketagent/                  # one Python package, five entrypoints, one image
     src/marketagent/
-      settings.py               # config; secrets from env, then Key Vault
+      settings.py               # config; secrets from env, .env, then Key Vault
       db.py                     # DuckDB file in blob: lease per write, cached reads
       schema/                   # numbered, idempotent; applied by the first writer
       models.py                 # domain, risk config, the LLM's output types

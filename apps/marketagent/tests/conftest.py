@@ -71,6 +71,9 @@ def fake_secrets(monkeypatch):
     # Same reasoning: a developer with this set in their own environment would
     # otherwise have the suite configure a real exporter and ship spans.
     monkeypatch.delenv("APPLICATIONINSIGHTS_CONNECTION_STRING", raising=False)
+    # appkit.keyvault reads `.env` between the environment and the vault, so a
+    # developer's own `.env` would otherwise supply a secret a test unset.
+    monkeypatch.setattr("appkit.keyvault.dotenv", dict)
 
     settings_module.settings.cache_clear()
     settings_module.secret.cache_clear()

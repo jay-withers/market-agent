@@ -117,7 +117,8 @@ CLAUDE.md confirms the old auto-pause connection-pool trap died with Azure SQL.
 ## Secrets
 
 `settings.py` resolves each secret from an env var first (underscored name), then
-falls back to Key Vault by its hyphenated name, cached:
+`.env`, then falls back to Key Vault by its hyphenated name, cached. Since
+2026-11 the resolution is jay-withers/appkit's `keyvault`; `settings.py` wraps it:
 
 ```python
 secret("ANTHROPIC-API-KEY")   # -> $ANTHROPIC_API_KEY, else Key Vault
