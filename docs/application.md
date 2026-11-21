@@ -442,7 +442,7 @@ process cannot bind below 1024.
     until this was added, and cost a working session to diagnose because
     every other symptom looked like a stale-secret problem instead.
   - **nginx compares the cookie verbatim — there is no signed session**, which
-    is where this differs from `gym-log`'s passcode gate. gym-log can HMAC an
+    is where this differs from `health`'s passcode gate. health can HMAC an
     issue time into a cookie because it is a Python app; this image is static
     files and nginx, with nothing to do the signing. So the cookie *is* the
     passcode, which is the same exposure Basic Auth had — that credential also
@@ -692,7 +692,7 @@ so this process cannot place a trade or alter a decision however it is called �
 which is most of why it is comfortable being publicly reachable. `/api/*` is
 guarded by a shared bearer (`API_REQUIRE_TOKEN`, off by default in application
 code but on in Terraform for this deployment — see below). Entra sign-in
-(Container Apps EasyAuth) is ruled out estate-wide: it was tried on gym-log and
+(Container Apps EasyAuth) is ruled out estate-wide: it was tried on health and
 reverted on 2026-10-31, because the apps must work for people with no
 Microsoft account. Don't propose it again.
 

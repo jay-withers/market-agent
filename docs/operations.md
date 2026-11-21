@@ -197,7 +197,7 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
 - **ci-terraform**: `validate` (`init -backend=false` + `validate`, no
   credentials) from the shared `terraform.yml`, reporting `terraform / Terraform`,
   and a dev `plan` from the shared `terraform-deploy.yml`, which comments the
-  plan on the PR. Same shape as gym-log and the other app repos.
+  plan on the PR. Same shape as health and the other app repos.
 
   - **The plan runs in the `dev` GitHub environment**, as
     `uai-market-agent-deploy-dev` (github-repos' `state_consumers`), which holds
@@ -283,7 +283,7 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
   fits its viewport. **The second workflow here that is not a thin caller of
   `jay-withers/workflows`**, after ci-terraform's `plan` job — there is no
   `node.yml` there to call, and market-agent is the only repo in the estate
-  with a SPA (gym-log is server-rendered Jinja2 with no build step). A shared
+  with a SPA (health is server-rendered Jinja2 with no build step). A shared
   workflow with one consumer is a guess at what the second would need; if a
   second frontend appears, this should move there wholesale rather than be
   copied.
