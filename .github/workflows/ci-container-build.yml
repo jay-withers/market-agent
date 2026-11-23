@@ -69,7 +69,7 @@ jobs:
       contents: read
       security-events: write # Trivy findings to code scanning
       issues: write # build-failed issue, outside pull requests
-    uses: jay-withers/workflows/.github/workflows/docker.yml@591303373c157fb12b428f3aa0dd4fc696a73f57 # v1.28.5
+    uses: jay-withers/workflows/.github/workflows/docker.yml@f748462468ce1fc5b385413fba07e41afc28c1db # v1.32.2
     with:
       images: |
         [{"name": "marketagent", "context": "apps/marketagent"},

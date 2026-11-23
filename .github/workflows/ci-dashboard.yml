@@ -37,7 +37,7 @@ jobs:
       # Node comes from the repo's mise.toml, the same pin as local work and
       # ci-pre-commit, so Renovate's mise manager moves them all at once. Only
       # node is installed: this job needs nothing else in that file.
-      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+      - uses: jdx/mise-action@90f833d396d0cc3674b631d2d225e306476c303a # v5.2.10
         with:
           working_directory: ${{ github.workspace }}
           install_args: node
