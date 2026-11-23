@@ -60,7 +60,7 @@ jobs:
       id-token: write # provenance and SBOM attestations
       attestations: write
       security-events: write # Trivy findings to code scanning
-    uses: jay-withers/workflows/.github/workflows/docker.yml@591303373c157fb12b428f3aa0dd4fc696a73f57 # v1.28.5
+    uses: jay-withers/workflows/.github/workflows/docker.yml@f748462468ce1fc5b385413fba07e41afc28c1db # v1.32.2
     with:
       images: |
         [{"name": "marketagent", "context": "apps/marketagent"},
@@ -87,7 +87,7 @@ jobs:
       id-token: write
       contents: read
       issues: write # the deploy-failed issue
-    uses: jay-withers/workflows/.github/workflows/container-apps-deploy.yml@b62ee5b1bb9038ec8b9827ec3c93c818c8d0da5b # v1.30.0
+    uses: jay-withers/workflows/.github/workflows/container-apps-deploy.yml@f748462468ce1fc5b385413fba07e41afc28c1db # v1.32.2
     with:
       version: ${{ inputs.version }}
       verify-images: ghcr.io/${{ github.repository }}/marketagent ghcr.io/${{ github.repository }}/dashboard
