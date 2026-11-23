@@ -40,7 +40,7 @@ wheels = [
 [[package]]
 name = "appkit"
 version = "0.0.0"
-source = { git = "https://github.com/jay-withers/appkit?tag=v0.2.0#582f18298f88b431aee98a7e5a3482cdc11c016e" }
+source = { git = "https://github.com/jay-withers/appkit?tag=v0.8.3#808f2d765412d2c02ce82b11739428b0ba033190" }
 
 [package.optional-dependencies]
 azure = [
@@ -987,7 +987,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "appkit", extras = ["azure"], git = "https://github.com/jay-withers/appkit?tag=v0.2.0" },
+    { name = "appkit", extras = ["azure"], git = "https://github.com/jay-withers/appkit?tag=v0.8.3" },
     { name = "azure-monitor-opentelemetry", specifier = ">=1.6" },
     { name = "azure-storage-blob", specifier = ">=12.31.1" },
     { name = "duckdb", specifier = ">=2.0.0" },
