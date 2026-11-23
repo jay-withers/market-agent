@@ -63,7 +63,7 @@ build-backend = "hatchling.build"
 # uv git source's tag and raises the bump with `uv lock`, but skips a
 # PEP 508 direct reference.
 [tool.uv.sources]
-appkit = { git = "https://github.com/jay-withers/appkit", tag = "v0.2.0" }
+appkit = { git = "https://github.com/jay-withers/appkit", tag = "v0.8.3" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/marketagent"]
