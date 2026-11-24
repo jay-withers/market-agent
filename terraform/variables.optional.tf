@@ -64,7 +64,7 @@ variable "image_registry" {
 variable "marketagent_image_tag" {
   description = "Immutable tag of the marketagent image — the API and all three jobs — used only to seed the first revision on create. `make deploy` (az cli) owns it on every environment after that; see lifecycle.ignore_changes on azurerm_container_app.api and the three azurerm_container_app_job resources. Must not be `latest`: Container Apps creates a revision only when the template changes, so re-pushing a moving tag deploys nothing at all and reports success."
   type        = string
-  default     = "v0.24.2"
+  default     = "v1.5.19"
 
   validation {
     condition     = !contains(["latest", "main", "unset"], var.marketagent_image_tag)
@@ -91,6 +91,13 @@ variable "dashboard_custom_domain_name" {
 
 variable "agent_dry_run" {
   description = "Simulate trades without submitting orders to Alpaca. Set false to submit to the paper endpoint. Seeds the agent job on creation; existing jobs ignore environment changes, so also update DRY_RUN with az containerapp job update."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "paused" {
+  description = "Stop every scheduled job (agent, sync, daily summary, weekly review) from firing by giving it a manual trigger instead of its cron. The database, Key Vault and the apps are kept, and the jobs can still be started by hand. Changing it replaces the jobs, which resets their image to marketagent_image_tag and their env to Terraform's values."
   type        = bool
   default     = false
   nullable    = false

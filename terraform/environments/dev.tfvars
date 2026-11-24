@@ -8,3 +8,8 @@ shared_platform = {
 }
 
 dashboard_custom_domain_name = "marketagent.jaywithers.uk"
+
+# Pause requested 2026-11-24: once applied, no job fires on its schedule.
+# Set false (or delete the line) to resume. Both directions replace the jobs
+# with marketagent_image_tag; see docs/infrastructure.md#pausing.
+paused = true

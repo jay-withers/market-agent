@@ -2,6 +2,14 @@
 # hour with British Summer Time. schedule_trigger_config is ForceNew: changing a
 # schedule replaces the job rather than updating it.
 #
+# `var.paused` swaps every job's schedule trigger for a manual one, so nothing
+# fires on its own and no model, broker or mail call is made, while the
+# database blob, Key Vault and the apps stay as they are. A paused job can still
+# be started by hand (`az containerapp job start`). Like a schedule change,
+# pausing or resuming replaces the jobs: the new ones take the image from
+# `var.marketagent_image_tag` and their env from the locals, so anything set
+# since with az (a newer `make deploy`, a DRY_RUN override) is reset.
+#
 # One agent job and one sync job per pot, from local.pots: each pot trades its
 # own Alpaca paper account, so the unit of scheduling is one pot. The pots all
 # start at the same time and run concurrently — they share nothing but the
@@ -52,10 +60,21 @@ resource "azurerm_container_app_job" "agent" {
     identity_ids = [azurerm_user_assigned_identity.this.id]
   }
 
-  schedule_trigger_config {
-    cron_expression          = var.agent_cron_expression
-    parallelism              = 1
-    replica_completion_count = 1
+  dynamic "schedule_trigger_config" {
+    for_each = var.paused ? [] : [var.agent_cron_expression]
+    content {
+      cron_expression          = schedule_trigger_config.value
+      parallelism              = 1
+      replica_completion_count = 1
+    }
+  }
+
+  dynamic "manual_trigger_config" {
+    for_each = var.paused ? [1] : []
+    content {
+      parallelism              = 1
+      replica_completion_count = 1
+    }
   }
 
   template {
@@ -66,9 +85,10 @@ resource "azurerm_container_app_job" "agent" {
       memory = local.container_memory
 
       # `schedule`, not the CLI's `manual` default, so `agent_runs.trigger`
-      # distinguishes a cron firing from someone running it by hand.
+      # distinguishes a cron firing from someone running it by hand. A paused
+      # job only ever runs by hand, so it says so.
       command = ["marketagent"]
-      args    = ["agent", "--trigger", "schedule", "--portfolio", each.key]
+      args    = ["agent", "--trigger", var.paused ? "manual" : "schedule", "--portfolio", each.key]
 
       dynamic "env" {
         for_each = local.agent_env[each.key]
@@ -142,10 +162,21 @@ resource "azurerm_container_app_job" "daily_summary" {
     identity_ids = [azurerm_user_assigned_identity.this.id]
   }
 
-  schedule_trigger_config {
-    cron_expression          = var.daily_summary_cron_expression
-    parallelism              = 1
-    replica_completion_count = 1
+  dynamic "schedule_trigger_config" {
+    for_each = var.paused ? [] : [var.daily_summary_cron_expression]
+    content {
+      cron_expression          = schedule_trigger_config.value
+      parallelism              = 1
+      replica_completion_count = 1
+    }
+  }
+
+  dynamic "manual_trigger_config" {
+    for_each = var.paused ? [1] : []
+    content {
+      parallelism              = 1
+      replica_completion_count = 1
+    }
   }
 
   template {
@@ -204,10 +235,21 @@ resource "azurerm_container_app_job" "weekly_review" {
     identity_ids = [azurerm_user_assigned_identity.this.id]
   }
 
-  schedule_trigger_config {
-    cron_expression          = var.weekly_review_cron_expression
-    parallelism              = 1
-    replica_completion_count = 1
+  dynamic "schedule_trigger_config" {
+    for_each = var.paused ? [] : [var.weekly_review_cron_expression]
+    content {
+      cron_expression          = schedule_trigger_config.value
+      parallelism              = 1
+      replica_completion_count = 1
+    }
+  }
+
+  dynamic "manual_trigger_config" {
+    for_each = var.paused ? [1] : []
+    content {
+      parallelism              = 1
+      replica_completion_count = 1
+    }
   }
 
   template {
@@ -264,10 +306,21 @@ resource "azurerm_container_app_job" "sync" {
     identity_ids = [azurerm_user_assigned_identity.this.id]
   }
 
-  schedule_trigger_config {
-    cron_expression          = var.broker_sync_cron_expression
-    parallelism              = 1
-    replica_completion_count = 1
+  dynamic "schedule_trigger_config" {
+    for_each = var.paused ? [] : [var.broker_sync_cron_expression]
+    content {
+      cron_expression          = schedule_trigger_config.value
+      parallelism              = 1
+      replica_completion_count = 1
+    }
+  }
+
+  dynamic "manual_trigger_config" {
+    for_each = var.paused ? [1] : []
+    content {
+      parallelism              = 1
+      replica_completion_count = 1
+    }
   }
 
   template {
