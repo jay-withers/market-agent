@@ -426,6 +426,25 @@ so the wall-clock time shifts with British Summer Time. `schedule_trigger_config
 forces replacement, so a schedule change shows as destroy/create; harmless, since
 jobs hold no state.
 
+### Pausing
+
+`paused = true` (in `environments/<env>.tfvars`) swaps every job's
+`schedule_trigger_config` for a `manual_trigger_config`: the agent, sync,
+summary and weekly jobs stop firing, so no model, Alpaca or mail call is made,
+while the apps, Key Vault and the database blob stay as they are. A paused job
+can still be started by hand with `az containerapp job start`, and the agent
+records that run as `trigger = manual`.
+
+Pausing and resuming both **replace the jobs**. The new ones take their image
+from `marketagent_image_tag` and their env from Terraform's locals, not from
+the last `make deploy` or any `az containerapp job update`. Before applying
+either, check that `marketagent_image_tag`'s default is the tag dev runs (it is
+`v1.5.19`, deployed 2026-11-23), and after resuming run
+`make deploy IMAGE_TAG=<tag>` if a newer release should go out.
+
+`environments/dev.tfvars` sets `paused = true` from 2026-11-24. The jobs keep
+firing until that plan is applied with `cd-terraform`.
+
 **The agent runs at 10:30 UTC to dodge DeepSeek's peak window.** Peak is
 01:00-04:00 and 06:00-10:00 UTC, Monday to Friday; every other hour is half
 price. It was 06:00, squarely in peak; 10:30 rather than 10:00 leaves margin so
