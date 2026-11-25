@@ -30,8 +30,10 @@ jobs:
     # pytest" after a successful-looking install — and only in CI, because
     # locally `make install` has already put it in the venv.
     #
-    # python-version matches the python:3.14 base in apps/marketagent/Dockerfile,
-    # so a pass here is a pass on the interpreter Container Apps runs.
+    # The interpreter is mise.toml's python (python.yml reads it from mise;
+    # python-version only applies without mise), and ci-container-build
+    # checks it is the image's, so a pass here is a pass on the interpreter
+    # that ships.
     #
     # The reusable workflow runs unfiltered by path, which is deliberate: the
     # suite takes seconds, and a required check skipped by a path filter never
@@ -39,7 +41,6 @@ jobs:
     uses: jay-withers/workflows/.github/workflows/python.yml@93bff29fb7e15a3669a1f120ab0c3a2940a413d6 # v1.34.0
     with:
       working-directory: apps/marketagent
-      python-version: "3.14"
       extras: dev
       coverage: marketagent
       # Both floors fail the check: the total (coverage-min), so the package
