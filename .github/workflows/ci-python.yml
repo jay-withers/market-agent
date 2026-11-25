@@ -1,6 +1,6 @@
 name: ci-python
 
-# Runs the Python test suite, mypy and the diff-coverage gate on a pull request.
+# Runs the Python test suite, mypy, ruff and both coverage floors on a pull request.
 #
 # Until this existed, nothing in CI ran pytest at all. ci-pre-commit lints the
 # code with ruff and ci-container-build proves the images compile, but neither
@@ -21,10 +21,6 @@ on:
 
 permissions:
   contents: read
-  # For the coverage comment below. The reusable workflow declares no
-  # permissions of its own precisely so this is reachable — a called workflow
-  # can never hold more than its caller grants.
-  pull-requests: write
 
 jobs:
   test:
@@ -40,29 +36,20 @@ jobs:
     # The reusable workflow runs unfiltered by path, which is deliberate: the
     # suite takes seconds, and a required check skipped by a path filter never
     # reports, blocking a pull request rather than passing it.
-    uses: jay-withers/workflows/.github/workflows/python.yml@f748462468ce1fc5b385413fba07e41afc28c1db # v1.32.2
+    uses: jay-withers/workflows/.github/workflows/python.yml@93bff29fb7e15a3669a1f120ab0c3a2940a413d6 # v1.34.0
     with:
       working-directory: apps/marketagent
       python-version: "3.14"
       extras: dev
-      # The total is reported, never gated. The database is embedded DuckDB, so
-      # repository.py's and queries.py's SQL runs in every CI run; what stays
-      # lower is the network-facing code (Alpaca, DeepSeek, the blob lease),
-      # where a --cov-fail-under would be met by mocking the client, which
-      # asserts the mock rather than the behaviour.
-      #
-      # The corollary is that it has to be *seen* instead, which is what the
-      # comment is for: a number nobody is shown and nothing enforces is not a
-      # signal. The job summary carries it too.
-      #
-      # pytest-cov is not in the dev extra and does not need to be — the
-      # reusable workflow injects it with `uv run --with`, an ephemeral overlay
-      # that costs this repo no dependency and no lockfile churn, and that does
-      # not invalidate the --locked run.
       coverage: marketagent
-      coverage-pr-comment: true
-      # diff-coverage gates only the lines a PR changes, where the cheap way to
-      # pass is to test the new code. A test that only asserts a mock still
-      # counts, so review the tests too.
-      diff-coverage: "80"
+      # Both floors fail the check: the total (coverage-min), so the package
+      # can't slip, and the lines a PR changes (diff-coverage), so new code
+      # comes with its tests. A test that only asserts a mock still counts,
+      # so review the tests too. The table is in the job summary; there is
+      # no PR comment.
+      coverage-min: "90"
+      diff-coverage: "90"
       typecheck: mypy
+      # ruff check and ruff format --check, from the locked dev extra, so CI
+      # runs the ruff `make lint` does.
+      lint: true
