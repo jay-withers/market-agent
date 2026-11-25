@@ -1,4 +1,4 @@
-"""Tests for the daily summary's facts table.
+"""Tests for the daily summary's facts table, and its reconciliation of fills.
 
 The governing rule is that **every figure the reader sees comes from the
 database**. The model writes commentary and is shown the numbers as a table it
@@ -16,16 +16,23 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 
+import pytest
+
+from marketagent import db
+from marketagent import repository as repo
 from marketagent.benchmarks import CASH_SYMBOL, BenchmarkPoint
+from marketagent.broker.base import OrderResult
 from marketagent.jobs.summary import (
     _account_run_alert,
     _facts_table,
     _prompt,
+    _reconcile,
     _run_alert,
     _run_section,
     _spend_section,
 )
 from marketagent.models import PortfolioState, Position
+from tests.helpers import POTS as LIVE_POTS
 
 D = Decimal
 TODAY = date(2026, 9, 3)
@@ -450,3 +457,126 @@ def test_the_run_section_reaches_the_model():
     prompt = _prompt(_table(runs=[]), accounts)
 
     assert "No agent run is recorded for today." in prompt
+
+
+# ---------------------------------------------------------------------------
+# _reconcile, against a real database
+# ---------------------------------------------------------------------------
+#
+# Where a resting order becomes a fill. Run against a real DuckDB file (the
+# module's own `database()`, pointed at a scratch one), because what matters is
+# what the trades table holds afterwards. The broker is a stand-in that answers
+# for some orders and not others.
+
+
+FILLED_AT = datetime(2026, 9, 3, 14, 31)
+
+
+class _Broker:
+    """Answers for the orders it knows; None for the rest, as Alpaca's 404 does."""
+
+    def __init__(self, outcomes: dict[str, OrderResult]) -> None:
+        self.outcomes = outcomes
+        self.asked: list[str] = []
+
+    def order(self, client_order_id: str) -> OrderResult | None:
+        self.asked.append(client_order_id)
+        return self.outcomes.get(client_order_id)
+
+
+@pytest.fixture
+def scratch_db(tmp_path, monkeypatch) -> db.Database:
+    database = db.Database(tmp_path / "summary.duckdb")
+    monkeypatch.setattr(db, "_database", database)
+    return database
+
+
+def _trade(conn, pid: int, client_order_id: str, *, status="submitted", dry_run=False) -> int:
+    return repo.save_trade(
+        conn,
+        pid,
+        decision_id=1,
+        ticker="NVDA",
+        side="BUY",
+        notional_usd=D("25.00"),
+        status=status,
+        dry_run=dry_run,
+        client_order_id=client_order_id,
+        broker_order_id=None,
+        quantity=None,
+        price_usd=None,
+        submitted_at=datetime(2026, 9, 3, 10, 30),
+        filled_at=None,
+    )
+
+
+def _status(database: db.Database, trade_id: int) -> tuple:
+    with database.connection() as conn:
+        return conn.execute(
+            "SELECT status, quantity, price_usd, filled_at FROM trades WHERE id = %s",
+            (trade_id,),
+        ).fetchone()
+
+
+def test_reconcile_applies_each_outcome_and_counts_only_real_fills(scratch_db):
+    with scratch_db.connection() as conn:
+        pid = repo.portfolio_id(conn, LIVE_POTS[0])
+        filled = _trade(conn, pid, "ia-filled")
+        partial = _trade(conn, pid, "ia-partial", status="partially_filled")
+        pending = _trade(conn, pid, "ia-pending", status="pending")
+        cancelled = _trade(conn, pid, "ia-cancelled")
+        unknown = _trade(conn, pid, "ia-unknown")
+        dry = _trade(conn, pid, "ia-dry", dry_run=True)
+        done = _trade(conn, pid, "ia-done", status="filled")
+
+    broker = _Broker(
+        {
+            "ia-filled": OrderResult(
+                status="filled",
+                quantity=D("0.141234"),
+                filled_avg_price_usd=D("177.0100"),
+                filled_at=FILLED_AT,
+            ),
+            # A partial fill completing later in the day.
+            "ia-partial": OrderResult(
+                status="filled",
+                quantity=D("0.5"),
+                filled_avg_price_usd=D("50.0000"),
+                filled_at=FILLED_AT,
+            ),
+            # "Filled" with no quantity or price yet: applied, not counted,
+            # so the email never reports a fill it cannot price.
+            "ia-pending": OrderResult(status="filled"),
+            # A status change with no fill is applied, and not counted.
+            "ia-cancelled": OrderResult(status="cancelled"),
+        }
+    )
+    assert _reconcile(pid, broker) == 2  # type: ignore[arg-type]  # a fake
+
+    # A dry run and an already-filled trade are never asked about.
+    assert sorted(broker.asked) == [
+        "ia-cancelled",
+        "ia-filled",
+        "ia-partial",
+        "ia-pending",
+        "ia-unknown",
+    ]
+    status, quantity, price, filled_at = _status(scratch_db, filled)
+    assert (status, quantity, price) == ("filled", D("0.141234"), D("177.0100"))
+    assert filled_at.replace(tzinfo=None) == FILLED_AT
+    assert _status(scratch_db, partial)[:3] == ("filled", D("0.5"), D("50.0000"))
+    assert _status(scratch_db, pending)[:3] == ("filled", None, None)
+    assert _status(scratch_db, cancelled)[0] == "cancelled"
+    # The broker had no record: left as it was, for tomorrow's run to retry.
+    assert _status(scratch_db, unknown)[0] == "submitted"
+    assert _status(scratch_db, dry)[0] == "submitted"
+    assert _status(scratch_db, done)[0] == "filled"
+
+
+def test_reconcile_treats_a_broker_with_no_order_lookup_as_knowing_nothing(scratch_db):
+    """The dry-run broker has no `order`: nothing is changed, nothing raised."""
+    with scratch_db.connection() as conn:
+        pid = repo.portfolio_id(conn, LIVE_POTS[0])
+        trade = _trade(conn, pid, "ia-1")
+    assert _reconcile(pid, object()) == 0  # type: ignore[arg-type]  # no order()
+    assert _status(scratch_db, trade)[0] == "submitted"
