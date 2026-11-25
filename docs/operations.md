@@ -238,8 +238,8 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
   successful-looking install — and only in CI, because locally `make install`
   (`uv sync --extra dev`) has already put pytest in the venv. `make test`
   carried the same hole and hid it, so it now passes the extra too and works on
-  a fresh clone. `python-version` is pinned to 3.14 to match the image's base,
-  and the reusable workflow runs `uv run --locked`, so a `pyproject.toml`
+  a fresh clone. The interpreter is `mise.toml`'s Python, which
+  `ci-container-build` checks is the `marketagent` image's, and the reusable workflow runs `uv run --locked`, so a `pyproject.toml`
   edited without its lockfile fails here rather than on someone's machine.
   It is deliberately **not** path filtered: the suite takes seconds, and a
   required check skipped by a path filter never reports, which blocks a PR
