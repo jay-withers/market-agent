@@ -250,35 +250,31 @@ namespaced `<caller job id> / <reusable job name>` rather than the bare job id
   the `dev` extra's pinned version and `[tool.mypy]` in `pyproject.toml`, so
   it's the same check as `make typecheck`.
 
-  **Total coverage is reported and never gated; the PR's own lines are.**
-  `diff-coverage: "80"` fails `test / Test` when under 80% of the lines a PR
-  changes in `marketagent` are run by a test. `coverage: marketagent` and
-  `coverage-pr-comment: true` are inputs on the shared workflow, which puts the
-  table in the job summary and in one self-updating PR comment. It lives there
-  rather than in this repo because coverage reporting is generic Python CI
-  mechanics — an earlier version rode on the `command` input here, which worked
-  but meant anyone later wanting `command: pytest -x` would silently lose
-  coverage. **`pytest-cov` is deliberately not in the `dev` extra**: the
-  workflow injects it with `uv run --with`, an ephemeral overlay that needs no
+  **Both the total and the PR's own lines are gated at 90%.**
+  `coverage-min: "90"` fails `test / Test` when total coverage of
+  `marketagent` is under 90%, on every run, main included, and
+  `diff-coverage: "90"` fails it when under 90% of the lines a PR changes are
+  run by a test. `coverage: marketagent` names the package. The table is in
+  the job summary; there is no PR comment, so the caller needs no
+  `pull-requests: write`. Coverage reporting lives in the shared workflow
+  rather than here because it is generic Python CI mechanics. An earlier
+  version rode on the `command` input here, which worked but meant anyone
+  later wanting `command: pytest -x` would silently lose coverage.
+  **`pytest-cov` is deliberately not in the `dev` extra**: the workflow
+  injects it with `uv run --with`, an ephemeral overlay that needs no
   dependency and no lockfile churn here and does not invalidate `--locked`.
-  Adding it back to `pyproject.toml` would be a no-op that has to be maintained.
+  Adding it back to `pyproject.toml` would be a no-op that has to be
+  maintained.
 
-  The caller grants `pull-requests: write` for the comment, and that is load
-  bearing: a called workflow can never hold more than its caller, so the shared
-  workflow declares no permissions of its own. It did at first, and the comment
-  would have 403'd on every run.
-
-  There is no `--cov-fail-under` on purpose, because the figure was bimodal
-  rather than uniform: the pure modules are at 100% (`risk.py`,
-  `models.py`, `benchmarks.py`, `fx.py`, `mailer.py`, `risklimits.py`) and
-  everything behind the database connection was far lower when CI had no
-  database — `repository.py` at 27%, `queries.py` at 37%, `jobs/agent.py`'s
-  loop at 32%. DuckDB being embedded closed most of that. A threshold over the mixture would be
-  met by mocking the connection and the Entra token path, which asserts the
-  mock rather than the behaviour. **83% overall at 367 tests** is the figure to
-  compare against; treat a drop as something to read, not as a build failure.
-  Coverage that nothing enforces has to be visible instead, which is the whole
-  reason it is surfaced twice rather than left in the log.
+  The total was ungated for a long time because the figure was bimodal: the
+  pure modules sat at 100% and everything behind the database connection far
+  lower while CI had no database. DuckDB being embedded closed most of that,
+  and the blob lease got its own tests (`tests/test_db.py`), which took the
+  total to 92% and made a 90% floor meetable without mocking the connection.
+  A floor can still be met by a test that only asserts a mock, so review the
+  tests a PR adds, not just the number.
+  `ruff check` and `ruff format --check` also run in `test / Test`
+  (`lint: true`), from the locked dev extra.
 - **ci-dashboard**: renders the built SPA in headless Chromium and asserts it
   fits its viewport. **The second workflow here that is not a thin caller of
   `jay-withers/workflows`**, after ci-terraform's `plan` job — there is no

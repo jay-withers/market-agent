@@ -199,9 +199,9 @@ plans on merge and applies only when run by hand.
 
 `test / Test` also runs mypy over `apps/marketagent/src/` and `tests/`
 (`[tool.mypy]` in `pyproject.toml`, so `make typecheck` is the same check) and
-gates diff coverage: at least 80% of the lines a PR changes in `marketagent`
-must be run by a test. Total coverage is reported, never gated. Don't meet the
-diff gate with a test that only asserts a mock; test the behaviour.
+ruff, and gates coverage: total coverage of `marketagent` must be at least
+90%, and so must the lines a PR changes. Don't meet either floor with a test
+that only asserts a mock; test the behaviour.
 
 ## Commit messages
 

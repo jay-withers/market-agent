@@ -553,9 +553,9 @@ This repository is managed centrally by
 [jay-withers/github-repos](https://github.com/jay-withers/github-repos)'s
 Terraform root module. The required checks are `pre-commit / Pre-commit`,
 `test / Test`, `terraform / Terraform`, `terraform-plan`, `Layout` (ci-dashboard's
-Playwright layout suite) and `container-build`. `test / Test` includes mypy and
-diff coverage: at least 80% of the lines a PR changes in `marketagent` must be
-run by a test.
+Playwright layout suite) and `container-build`. `test / Test` includes mypy, ruff and
+two coverage floors: total coverage of `marketagent`, and the lines a PR
+changes, must each be at least 90%.
 
 ## Structure
 
@@ -626,7 +626,7 @@ docs/
   shared-platform-migration.md
 .github/workflows/
   ci-pre-commit.yml             # lints all files on PRs to main
-  ci-python.yml                 # pytest, mypy, diff coverage (test / Test)
+  ci-python.yml                 # pytest, mypy, ruff, coverage floors (test / Test)
   ci-dashboard.yml              # the dashboard's Playwright layout suite (Layout)
   ci-codeql.yml                 # CodeQL over the workflows
   ci-terraform.yml              # terraform validate + dev plan (commented on the PR)
